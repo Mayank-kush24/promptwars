@@ -1,0 +1,76 @@
+{% extends "layouts/base_app.html" %}
+{% block title %}PromptWars — Admin{% endblock %}
+{% block content %}
+<div class="flex flex-col gap-sm">
+  <h1 class="font-display text-headline-lg text-primary">Data Ops</h1>
+  <p class="font-body-lg text-body-lg text-on-surface-variant">Run imports, inspect engine status, and review the latest job.</p>
+</div>
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-lg">
+  <div class="glass-panel p-lg rounded-xl">
+    <div class="flex items-center justify-between mb-md">
+      <h2 class="font-headline-md text-headline-md text-primary">Engine health</h2>
+      {% if health and health.ok %}
+        <span class="px-3 py-1 bg-emerald-500/10 text-emerald-700 font-label-sm text-label-sm rounded-full border-l-2 border-emerald-500">OK</span>
+      {% else %}
+        <span class="px-3 py-1 bg-error-container/40 text-error font-label-sm text-label-sm rounded-full border-l-2 border-error">DOWN</span>
+      {% endif %}
+    </div>
+    <pre class="bg-surface-container-lowest border border-outline-variant/40 rounded-lg p-md overflow-auto text-sm font-mono text-on-surface">{{ health|tojson(indent=2) }}</pre>
+  </div>
+
+  <div class="glass-panel p-lg rounded-xl">
+    <h2 class="font-headline-md text-headline-md text-primary mb-md">Latest import job</h2>
+    {% if not latestJob %}
+      <p class="font-body-md text-body-md text-on-surface-variant">No import jobs yet.</p>
+    {% else %}
+      <pre class="bg-surface-container-lowest border border-outline-variant/40 rounded-lg p-md overflow-auto text-sm font-mono text-on-surface">{{ latestJob|tojson(indent=2) }}</pre>
+    {% endif %}
+  </div>
+</div>
+
+<div class="glass-panel-elevated p-lg rounded-xl">
+  <div class="flex flex-col gap-sm mb-md">
+    <h2 class="font-headline-md text-headline-md text-primary">In-person CSV import</h2>
+    <p class="font-body-md text-body-md text-on-surface-variant">
+      Required columns: <code class="px-1 rounded bg-surface-container-low text-primary">user_id</code>,
+      <code class="px-1 rounded bg-surface-container-low text-primary">city_id</code>. Optional:
+      <code class="px-1 rounded bg-surface-container-low text-primary">display_name</code>,
+      <code class="px-1 rounded bg-surface-container-low text-primary">rsvped_at</code> /
+      <code class="px-1 rounded bg-surface-container-low text-primary">submitted_at</code>.
+    </p>
+  </div>
+  <form action="{{ url_for('admin_import_in_person') }}" method="post" enctype="multipart/form-data" class="grid grid-cols-1 md:grid-cols-3 gap-md">
+    <label class="flex flex-col gap-xs">
+      <span class="font-label-md text-label-md text-secondary">In-person event id</span>
+      <input name="event_id" type="number" value="1" min="1" required
+             class="px-3 py-2 rounded-lg border border-outline-variant bg-white/70 focus:outline-none focus:ring-2 focus:ring-primary/40" />
+    </label>
+    <label class="flex flex-col gap-xs">
+      <span class="font-label-md text-label-md text-secondary">RSVPs CSV</span>
+      <input name="rsvps" type="file" accept=".csv,text/csv" required
+             class="text-sm file:mr-3 file:px-3 file:py-2 file:rounded-lg file:border-0 file:bg-primary file:text-white file:cursor-pointer hover:file:bg-on-primary-fixed-variant" />
+    </label>
+    <label class="flex flex-col gap-xs">
+      <span class="font-label-md text-label-md text-secondary">Submissions CSV</span>
+      <input name="submissions" type="file" accept=".csv,text/csv" required
+             class="text-sm file:mr-3 file:px-3 file:py-2 file:rounded-lg file:border-0 file:bg-primary file:text-white file:cursor-pointer hover:file:bg-on-primary-fixed-variant" />
+    </label>
+    <div class="md:col-span-3 flex justify-end">
+      <button type="submit" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-label-md text-label-md hover:bg-on-primary-fixed-variant transition-colors">
+        Run import
+      </button>
+    </div>
+  </form>
+</div>
+
+{% if adminAuthEnabled %}
+  <div class="flex justify-end">
+    <form action="{{ url_for('admin_logout') }}" method="post">
+      <button type="submit" class="px-3 py-2 rounded-lg border border-outline-variant text-on-surface-variant hover:bg-white/40 font-label-md text-label-md transition-colors">
+        Log out
+      </button>
+    </form>
+  </div>
+{% endif %}
+{% endblock %}

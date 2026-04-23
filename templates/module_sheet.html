@@ -1,0 +1,17 @@
+{% extends "layouts/base_app.html" %}
+{% block title %}{{ title }} — PromptWars{% endblock %}
+{% block content %}
+<div class="flex flex-col gap-sm">
+  <h1 class="font-display text-headline-lg text-slate-900 leading-tight">{{ title }}</h1>
+  <p class="font-body-md text-slate-600 max-w-2xl">{{ description }}</p>
+  {% if show_admin_link %}
+    <div class="mt-lg">
+      <a href="{{ url_for('admin_page') }}"
+         class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-800 shadow-sm hover:bg-slate-50 no-underline">
+        <span class="material-symbols-outlined text-[20px] text-violet-600">upload_file</span>
+        Open Data Ops (imports &amp; health)
+      </a>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

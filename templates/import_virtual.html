@@ -1,0 +1,102 @@
+{% extends "layouts/base_app.html" %}
+{% block title %}PromptWars — Virtual · Import{% endblock %}
+{% block content %}
+<div class="flex flex-col gap-sm">
+  <h1 class="font-display text-headline-lg text-slate-900">Virtual · Import</h1>
+  <p class="font-body-md text-slate-600 max-w-3xl">
+    Import marketing registrations into <code class="rounded bg-slate-100 px-1 text-sm">virtual_main_data_center_registrations</code> (Vision export, same column layout as in-person Main Data Center). Challenge credits still use the JSON API below.
+  </p>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-lg">
+  <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
+    <h2 class="font-display text-headline-md text-slate-900 mb-sm">Virtual Main Data Center</h2>
+    <p class="text-sm text-slate-600 mb-md">
+      Upload a <strong>.csv</strong>, <strong>.xlsx</strong>, or <strong>.xls</strong> export. Rows are upserted by email for the default virtual event (<strong>{{ virtual_event_id }}</strong>).
+    </p>
+    <form id="vmdc-import-form" action="{{ url_for('admin_import_virtual_main_data_center') }}" method="post" enctype="multipart/form-data" class="flex flex-col gap-md">
+      <label class="flex flex-col gap-xs">
+        <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Registration file</span>
+        <input name="virtual_main_data_center" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required
+               class="text-sm file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-violet-600 file:text-white file:font-semibold file:text-sm" />
+      </label>
+      <div class="flex flex-wrap gap-2">
+        <button type="submit" class="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">Import Virtual Main Data Center</button>
+        <a href="{{ url_for('virtual_page') }}" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">Cancel</a>
+      </div>
+    </form>
+    <p id="vmdc-import-status" class="text-sm text-slate-600 mt-md hidden" aria-live="polite"></p>
+  </div>
+
+  <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
+    <h2 class="font-display text-headline-md text-slate-900 mb-sm">Credit grant API</h2>
+    <p class="text-sm text-slate-600 mb-md">Default challenge id: <strong>{{ challenge_id }}</strong> · virtual event <strong>{{ virtual_event_id }}</strong>.</p>
+    <pre class="text-xs leading-relaxed bg-slate-900 text-slate-100 rounded-lg p-md overflow-x-auto">POST /api/credits/grant
+Content-Type: application/json
+
+{
+  "participant_id": 1,
+  "delta": 10,
+  "reason": "bonus",
+  "challenge_id": {{ challenge_id }},
+  "idempotency_key": "optional-unique-key"
+}</pre>
+    <p class="text-xs text-slate-500 mt-md">Requires admin session when <code>ADMIN_PASSWORD</code> is set.</p>
+  </div>
+</div>
+
+<div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm flex flex-col gap-md mt-lg">
+  <h2 class="font-display text-headline-md text-slate-900">Data Ops</h2>
+  <p class="text-sm text-slate-600">Full engine health, import jobs, and in-person CSV pipeline live in Data Ops.</p>
+  <a href="{{ url_for('admin_page') }}"
+     class="inline-flex items-center gap-2 self-start rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50 no-underline">
+    <span class="material-symbols-outlined text-[20px] text-violet-600">open_in_new</span>
+    Open Data Ops
+  </a>
+</div>
+
+{% if adminAuthEnabled %}
+  <div class="flex justify-end">
+    <form action="{{ url_for('admin_logout') }}" method="post">
+      <button type="submit" class="px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50">
+        Log out
+      </button>
+    </form>
+  </div>
+{% endif %}
+
+<script>
+(function () {
+  var form = document.getElementById("vmdc-import-form");
+  var statusEl = document.getElementById("vmdc-import-status");
+  if (!form || !statusEl) return;
+  var apiUrl = {{ url_for("api_import_virtual_main_data_center")|tojson }};
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var fd = new FormData(form);
+    statusEl.classList.remove("hidden");
+    statusEl.textContent = "Uploading…";
+    fetch(apiUrl, { method: "POST", body: fd, credentials: "same-origin" })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+      .then(function (res) {
+        if (!res.ok) {
+          statusEl.textContent = (res.body && res.body.error) ? res.body.error : "Import failed.";
+          return;
+        }
+        var p = res.body || {};
+        statusEl.textContent =
+          "Done — created " +
+          (p.rows_created || 0) +
+          ", updated " +
+          (p.rows_updated || 0) +
+          ", written " +
+          (p.rows_written || 0) +
+          ".";
+      })
+      .catch(function () {
+        statusEl.textContent = "Network error.";
+      });
+  });
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,240 @@
+{# Top bar — H2S × Google for Developers style #}
+<style>
+  .pw-module-tabs[data-active-module="in_person"] .pw-module-tabs-indicator {
+    background: linear-gradient(90deg, #84cc16 0%, #facc15 100%);
+    box-shadow: 0 6px 18px -8px rgba(132, 204, 22, 0.55);
+    border-color: transparent;
+  }
+  .pw-module-tabs[data-active-module="virtual"] .pw-module-tabs-indicator {
+    background: linear-gradient(90deg, #f0abfc 0%, #c4b5fd 50%, #7dd3fc 100%);
+    box-shadow: 0 6px 22px -8px rgba(167, 139, 250, 0.6);
+    border-color: transparent;
+  }
+</style>
+<header class="fixed top-0 left-0 right-0 z-50 bg-white border-b border-slate-200 h-16 flex items-center justify-between px-3 sm:px-4 md:px-5 relative">
+  {# Left cluster: intrinsic width only — avoid flex-1 + wide max-w, which stretched the bar and threw off balance. #}
+  <div class="flex shrink-0 items-center gap-2 md:gap-3 min-w-0 relative z-10">
+    <button type="button"
+            class="pw-sidebar-toggle hidden md:inline-flex items-center justify-center rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50 touch-manipulation"
+            aria-expanded="true"
+            aria-label="Collapse navigation">
+      <span class="material-symbols-outlined pw-sidebar-toggle-icon text-[22px]">chevron_left</span>
+    </button>
+    <a href="{{ url_for('main_dashboard') }}" class="flex items-center gap-3 no-underline shrink-0" aria-label="Home">
+      <span class="inline-flex items-center justify-center h-8 w-8 rounded-md bg-gradient-to-br from-indigo-500 to-violet-600 text-white font-black text-sm tracking-tight shadow-sm">H2S</span>
+      <span class="hidden sm:flex items-baseline gap-1.5">
+        <span class="font-display text-[20px] font-medium leading-none">
+          <span class="text-[#4285F4]">G</span><span class="text-[#EA4335]">o</span><span class="text-[#FBBC05]">o</span><span class="text-[#4285F4]">g</span><span class="text-[#34A853]">l</span><span class="text-[#EA4335]">e</span>
+        </span>
+        <span class="text-slate-600 font-normal text-[18px] leading-none">for Developers</span>
+      </span>
+    </a>
+  </div>
+
+  {# Desktop: module switcher centered in the header (viewport center), fixed 44px tall #}
+  <div id="pw-header-module" class="pointer-events-none hidden md:block absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-20">
+    <div class="pw-module-tabs pointer-events-auto relative inline-flex h-[44px] items-center gap-0.5 rounded-full border border-slate-200 bg-slate-100 p-1 shadow-inner box-border"
+         role="tablist" aria-label="Module" data-active-module="{{ pw_module }}">
+      <span class="pw-module-tabs-indicator pointer-events-none absolute top-1 bottom-1 left-0 rounded-full bg-white shadow-sm ring-1 ring-slate-200/60 transition-[transform,width] duration-300 ease-out opacity-0"
+            aria-hidden="true"></span>
+      {% for m in pw_modules %}
+        {% set _short = ('Overview' if m.id == 'overview' else ('In-person' if m.id == 'in_person' else ('Virtual' if m.id == 'virtual' else m.label))) %}
+        {% set _active_text = 'text-slate-900' if m.id == 'overview' else 'text-white' %}
+        <a href="{{ m.href }}"
+           role="tab"
+           aria-selected="{{ 'true' if pw_module == m.id else 'false' }}"
+           data-module-id="{{ m.id }}"
+           title="{{ m.label }}"
+           class="pw-module-tab relative z-[1] inline-flex h-full min-h-0 items-center justify-center rounded-full px-3 lg:px-4 text-xs font-semibold whitespace-nowrap no-underline transition-colors duration-200 {% if pw_module == m.id %}is-active {{ _active_text }}{% else %}text-slate-500 hover:text-slate-800{% endif %}">{{ _short }}</a>
+      {% endfor %}
+    </div>
+  </div>
+
+  {# Center marketing links: opt-in only via `nav_marketing=[...]`; default is none on all pages. #}
+  {% set _marketing = nav_marketing|default([]) %}
+  {% if _marketing %}
+  <nav class="hidden lg:flex items-center gap-7 text-[14px] font-medium text-slate-600" aria-label="Marketing">
+    {% for item in _marketing %}
+      <a href="{{ item.href }}" class="hover:text-slate-900 transition-colors no-underline">{{ item.label }}</a>
+    {% endfor %}
+  </nav>
+  {% endif %}
+
+  <div class="flex items-center gap-2 md:gap-3 relative z-10 shrink-0">
+    {% if nav_cta %}
+      <a href="{{ nav_cta.href }}"
+         class="hidden md:inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold text-white shadow-sm transition-colors no-underline
+                {{ nav_cta.classes|default('bg-emerald-500 hover:bg-emerald-600') }}">
+        {% if nav_cta.icon %}<span class="material-symbols-outlined text-[18px]">{{ nav_cta.icon }}</span>{% endif %}
+        {{ nav_cta.label }}
+      </a>
+    {% endif %}
+    <button id="pw-mobile-toggle" type="button"
+            class="md:hidden text-slate-700 hover:bg-slate-100 transition-colors p-2 rounded-full touch-manipulation"
+            aria-label="Open navigation menu"
+            aria-controls="pw-mobile-nav"
+            aria-expanded="false">
+      <span class="material-symbols-outlined pw-mobile-toggle-icon text-[24px]">menu</span>
+    </button>
+  </div>
+</header>
+
+{# Mobile: dim backdrop + slide-in drawer (same destinations as desktop sidebar) #}
+<button type="button"
+        id="pw-mobile-backdrop"
+        class="md:hidden fixed inset-x-0 bottom-0 top-16 z-[35] bg-slate-900/40"
+        aria-label="Close navigation menu"
+        tabindex="-1"></button>
+
+<nav id="pw-mobile-nav"
+     class="md:hidden fixed top-16 left-0 bottom-0 z-[40] flex w-[min(20rem,90vw)] max-w-[340px] flex-col border-r border-slate-200 bg-white shadow-xl overflow-y-auto"
+     aria-label="Mobile navigation">
+  <div class="border-b border-slate-100 p-3">
+    <p class="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Module</p>
+    <div class="pw-module-tabs pw-module-tabs--mobile relative grid h-[44px] grid-cols-3 items-center gap-1 rounded-full border border-slate-200 bg-slate-100 p-1 shadow-inner box-border"
+         role="tablist" aria-label="Module" data-active-module="{{ pw_module }}">
+      <span class="pw-module-tabs-indicator pointer-events-none absolute top-1 bottom-1 left-0 rounded-full bg-white shadow-sm ring-1 ring-slate-200/60 transition-[transform,width] duration-300 ease-out opacity-0"
+            aria-hidden="true"></span>
+      {% for m in pw_modules %}
+        {% set _short = ('Overview' if m.id == 'overview' else ('In-person' if m.id == 'in_person' else ('Virtual' if m.id == 'virtual' else m.label))) %}
+        {% set _active_text = 'text-slate-900' if m.id == 'overview' else 'text-white' %}
+        <a href="{{ m.href }}"
+           role="tab"
+           aria-selected="{{ 'true' if pw_module == m.id else 'false' }}"
+           data-module-id="{{ m.id }}"
+           title="{{ m.label }}"
+           class="pw-module-tab relative z-[1] inline-flex items-center justify-center rounded-full px-2 py-1.5 text-[13px] font-semibold no-underline text-center transition-colors duration-200 {% if pw_module == m.id %}is-active {{ _active_text }}{% else %}text-slate-500 hover:text-slate-800{% endif %}">{{ _short }}</a>
+      {% endfor %}
+    </div>
+  </div>
+  <ul class="flex flex-col gap-1 p-3">
+    {% for item in pw_subnav %}
+      <li>
+        <a href="{{ item.href }}"
+           class="flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium no-underline {% if item.active %}bg-[var(--pw-accent-soft)] text-[var(--pw-accent-strong)]{% else %}text-slate-700 hover:bg-slate-50{% endif %}">
+          <span class="material-symbols-outlined text-[22px] shrink-0 {% if item.active %}text-[var(--pw-accent-icon)]{% endif %}">{{ item.icon }}</span>
+          <span>{{ item.label }}</span>
+        </a>
+      </li>
+    {% endfor %}
+  </ul>
+</nav>
+
+<script>
+(function () {
+  function initPwShell() {
+    /* ---- Mobile drawer ---- */
+    var mBtn = document.getElementById("pw-mobile-toggle");
+    var mNav = document.getElementById("pw-mobile-nav");
+    var mBackdrop = document.getElementById("pw-mobile-backdrop");
+    if (mBtn && mNav) {
+      function setMobileOpen(open) {
+        document.body.classList.toggle("pw-mobile-nav-open", open);
+        mBtn.setAttribute("aria-expanded", open ? "true" : "false");
+        mBtn.setAttribute("aria-label", open ? "Close navigation menu" : "Open navigation menu");
+        var mic = mBtn.querySelector(".pw-mobile-toggle-icon");
+        if (mic) mic.textContent = open ? "close" : "menu";
+        document.body.style.overflow = open ? "hidden" : "";
+      }
+      mBtn.addEventListener("click", function () {
+        setMobileOpen(!document.body.classList.contains("pw-mobile-nav-open"));
+      });
+      if (mBackdrop) {
+        mBackdrop.addEventListener("click", function () { setMobileOpen(false); });
+      }
+      mNav.querySelectorAll("a").forEach(function (a) {
+        a.addEventListener("click", function () { setMobileOpen(false); });
+      });
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") setMobileOpen(false);
+      });
+      window.matchMedia("(min-width: 768px)").addEventListener("change", function (e) {
+        if (e.matches) setMobileOpen(false);
+      });
+    }
+
+    /* ---- Desktop sidebar collapse (runs after sidebar DOM exists) ---- */
+    var KEY = "pw_sidebar_collapsed";
+    function isCollapsed() {
+      return document.documentElement.getAttribute("data-pw-sidebar") === "collapsed";
+    }
+    function setCollapsed(collapsed) {
+      if (collapsed) {
+        document.documentElement.setAttribute("data-pw-sidebar", "collapsed");
+        try { localStorage.setItem(KEY, "1"); } catch (_e) {}
+      } else {
+        document.documentElement.removeAttribute("data-pw-sidebar");
+        try { localStorage.removeItem(KEY); } catch (_e) {}
+      }
+      syncSidebarToggleUi();
+    }
+    function syncSidebarToggleUi() {
+      var c = isCollapsed();
+      document.querySelectorAll(".pw-sidebar-toggle").forEach(function (btn) {
+        btn.setAttribute("aria-expanded", c ? "false" : "true");
+        btn.setAttribute("aria-label", c ? "Expand navigation" : "Collapse navigation");
+        var icon = btn.querySelector(".pw-sidebar-toggle-icon");
+        if (icon) icon.textContent = c ? "chevron_right" : "chevron_left";
+        var lbl = btn.querySelector(".pw-sidebar-toggle-text");
+        if (lbl) lbl.textContent = c ? "Expand" : "Collapse";
+      });
+    }
+    document.querySelectorAll(".pw-sidebar-toggle").forEach(function (btn) {
+      btn.addEventListener("click", function () { setCollapsed(!isCollapsed()); });
+    });
+    syncSidebarToggleUi();
+
+    /* ---- Module tab switcher: sliding pill indicator ----
+       Indicator only ever sits on the active tab (no hover movement).
+       On click we slide it to the clicked tab while the next page loads. */
+    document.querySelectorAll(".pw-module-tabs").forEach(function (group) {
+      var indicator = group.querySelector(".pw-module-tabs-indicator");
+      var tabs = Array.prototype.slice.call(group.querySelectorAll(".pw-module-tab"));
+      if (!indicator || !tabs.length) return;
+
+      function moveTo(el, animate) {
+        if (!el) return;
+        var groupRect = group.getBoundingClientRect();
+        var rect = el.getBoundingClientRect();
+        var x = rect.left - groupRect.left;
+        var w = rect.width;
+        if (!w) return;
+        if (!animate) {
+          var prev = indicator.style.transition;
+          indicator.style.transition = "none";
+          indicator.style.transform = "translateX(" + x + "px)";
+          indicator.style.width = w + "px";
+          indicator.style.opacity = "1";
+          void indicator.offsetWidth;
+          indicator.style.transition = prev || "";
+        } else {
+          indicator.style.transform = "translateX(" + x + "px)";
+          indicator.style.width = w + "px";
+          indicator.style.opacity = "1";
+        }
+      }
+
+      function placeOnActive(animate) {
+        moveTo(group.querySelector(".pw-module-tab.is-active") || tabs[0], animate);
+      }
+
+      placeOnActive(false);
+      requestAnimationFrame(function () { placeOnActive(false); });
+
+      tabs.forEach(function (tab) {
+        tab.addEventListener("click", function () {
+          var modId = tab.getAttribute("data-module-id");
+          if (modId) group.setAttribute("data-active-module", modId);
+          moveTo(tab, true);
+        });
+      });
+      window.addEventListener("resize", function () { placeOnActive(false); });
+    });
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initPwShell);
+  } else {
+    initPwShell();
+  }
+})();
+</script>

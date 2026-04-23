@@ -1,0 +1,243 @@
+{% extends "layouts/base_app.html" %}
+{% block title %}PromptWars — In-person{% endblock %}
+{% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js" defer></script>
+<style>
+  .pw-stage {
+    background:
+      radial-gradient(ellipse 70% 35% at 50% -5%, rgba(34, 197, 94, 0.20), transparent 65%),
+      #050505;
+    position: relative;
+    overflow: hidden;
+  }
+  /* Tunnel binary backdrop — three planes (left wall, back wall, right wall) */
+  .pw-binary-back {
+    position: absolute; inset: 0;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='28'><text x='0' y='20' font-family='Courier New, monospace' font-size='14' font-weight='700' fill='%2334d399' fill-opacity='0.9'>1010 0110 1100 1001 0101</text></svg>");
+    background-repeat: repeat;
+    opacity: 0.18;
+    pointer-events: none;
+  }
+  .pw-binary-floor {
+    position: absolute; inset: 60% 0 0 0;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='420' height='28'><text x='0' y='20' font-family='Courier New, monospace' font-size='14' font-weight='700' fill='%2334d399' fill-opacity='0.85'>1010 0110 1100 1001 0101 0011 1110 0010 0111 1011</text></svg>");
+    background-repeat: repeat;
+    transform: perspective(700px) rotateX(60deg);
+    transform-origin: center top;
+    opacity: 0.45;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0%, rgba(0,0,0,0.9) 30%, black 100%);
+            mask-image: linear-gradient(to bottom, transparent 0%, rgba(0,0,0,0.9) 30%, black 100%);
+    pointer-events: none;
+  }
+  /* The cone of green light coming from top-center */
+  .pw-cone {
+    position: absolute; inset: 0;
+    background: linear-gradient(to bottom,
+      rgba(74, 222, 128, 0.55) 0%,
+      rgba(34, 197, 94, 0.28) 35%,
+      rgba(22, 163, 74, 0.10) 70%,
+      transparent 100%);
+    clip-path: polygon(47% 0, 53% 0, 92% 100%, 8% 100%);
+    filter: blur(14px);
+    pointer-events: none;
+  }
+  /* Lamp / source */
+  .pw-lamp {
+    position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+    width: 110px; height: 12px;
+    background: linear-gradient(to bottom, #ffffff, #d1fae5);
+    border-radius: 0 0 999px 999px;
+    box-shadow: 0 0 50px 12px rgba(187, 247, 208, 0.85), 0 0 120px 30px rgba(34, 197, 94, 0.35);
+    z-index: 5;
+  }
+  /* CTA pill — green → amber */
+  .pw-cta-pill {
+    background: linear-gradient(90deg, #22c55e 0%, #84cc16 55%, #facc15 100%);
+    color: #0a0a0a;
+    box-shadow: 0 12px 30px -10px rgba(132, 204, 22, 0.55);
+  }
+</style>
+{% endblock %}
+
+{% block hero %}
+<section id="hero" class="pw-sidebar-offset pl-0 md:pl-[var(--pw-sidebar-current)]">
+  <div class="mx-margin rounded-3xl overflow-hidden relative pw-stage mt-0 border border-slate-200">
+    <div class="pw-binary-back"></div>
+    <div class="pw-binary-floor"></div>
+    <div class="pw-cone"></div>
+    <div class="pw-lamp" aria-hidden="true"></div>
+
+    <div class="relative z-10 px-margin py-[80px] flex flex-col items-center text-center min-h-[460px] justify-center">
+      <p class="font-display text-emerald-300 text-lg md:text-xl tracking-wide mb-2">In-person</p>
+      <h1 class="font-display text-white font-black tracking-tight leading-[0.95] text-[64px] md:text-[112px] drop-shadow-[0_0_30px_rgba(187,247,208,0.25)]">
+        PromptWars
+      </h1>
+
+      <a href="{{ url_for('admin_page') }}"
+         class="pw-cta-pill mt-8 inline-flex items-center gap-2 px-7 py-3 rounded-full font-display font-bold text-base md:text-lg no-underline hover:brightness-110 transition">
+        <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M12 1.5l1.8 5.4 5.7.2-4.6 3.4 1.7 5.5L12 12.6 7.4 16l1.7-5.5L4.5 7.1l5.7-.2L12 1.5z"/>
+        </svg>
+        Build, pitch &amp; win in one day
+      </a>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block content %}
+<section id="main-data-center" class="flex flex-col gap-sm">
+  <h2 class="font-display text-headline-lg text-slate-900 leading-tight">Main Data Center</h2>
+  <p class="font-body-md text-on-surface-variant">
+    Vision export analytics (one row per email). Registration times use <strong>IST</strong> for day/hour charts.
+  </p>
+  <p id="mdcTzNote" class="text-xs text-slate-500"></p>
+</section>
+
+{% if data_center.error %}
+  <div class="bg-white rounded-2xl border border-amber-200 text-amber-900 p-md text-sm">
+    Main Data Center stats unavailable: {{ data_center.error }}
+    <span class="block mt-1 text-xs text-amber-800">If you just added this feature, apply <code class="rounded bg-amber-100 px-1">database/init.sql</code> so the table exists.</span>
+  </div>
+{% else %}
+  {# Snapshot pills #}
+  <div class="flex flex-wrap gap-2 md:gap-3">
+    <div class="inline-flex items-center gap-2 rounded-full border border-lime-200 bg-white px-4 py-2 shadow-sm">
+      <span class="material-symbols-outlined text-lime-600 text-[20px]">groups</span>
+      <div>
+        <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total registrations</p>
+        <p class="font-display text-lg text-slate-900 tabular-nums leading-tight">{{ "{:,}".format(data_center.total_registrations or 0) }}</p>
+      </div>
+    </div>
+    <div class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 shadow-sm">
+      <span class="material-symbols-outlined text-amber-500 text-[20px]">pin_drop</span>
+      <div>
+        <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Top city</p>
+        <p class="font-display text-lg text-slate-900 leading-tight max-w-[180px] truncate" title="{{ data_center.pill_top_city or '—' }}">{{ data_center.pill_top_city or "—" }}</p>
+        {% if data_center.pill_top_city_count %}<p class="text-[11px] text-slate-500 tabular-nums">{{ "{:,}".format(data_center.pill_top_city_count) }} in top bucket</p>{% endif %}
+      </div>
+    </div>
+    <div class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 shadow-sm">
+      <span class="material-symbols-outlined text-emerald-600 text-[20px]">map</span>
+      <div>
+        <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Top state</p>
+        <p class="font-display text-lg text-slate-900 leading-tight max-w-[180px] truncate" title="{{ data_center.pill_top_state or '—' }}">{{ data_center.pill_top_state or "—" }}</p>
+        {% if data_center.pill_top_state_count %}<p class="text-[11px] text-slate-500 tabular-nums">{{ "{:,}".format(data_center.pill_top_state_count) }} in top bucket</p>{% endif %}
+      </div>
+    </div>
+    <div class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 shadow-sm">
+      <span class="material-symbols-outlined text-yellow-500 text-[20px]">cake</span>
+      <div>
+        <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Average age</p>
+        <p class="font-display text-lg text-slate-900 tabular-nums leading-tight">
+          {% if data_center.average_age is not none %}{{ data_center.average_age }} yrs{% else %}—{% endif %}
+        </p>
+        {% if data_center.with_dob_count %}<p class="text-[11px] text-slate-500">{{ "{:,}".format(data_center.with_dob_count) }} with DOB</p>{% endif %}
+      </div>
+    </div>
+    <div class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 shadow-sm">
+      <span class="material-symbols-outlined text-lime-700 text-[20px]">trending_up</span>
+      <div>
+        <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Last 7 days</p>
+        <p class="font-display text-lg text-slate-900 tabular-nums leading-tight">{{ "{:,}".format(data_center.registrations_last_7_days or 0) }}</p>
+        <p class="text-[11px] text-slate-500">New timestamps</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 xl:grid-cols-2 gap-md">
+    <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
+      <h3 class="font-display text-headline-md text-slate-900 mb-sm">Registration timeline</h3>
+      <p class="text-xs text-slate-500 mb-md">Daily counts from form timestamp (last 120 days, IST date).</p>
+      <div class="relative h-[280px] w-full">
+        <canvas id="mdcTimelineChart"></canvas>
+      </div>
+    </div>
+    <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
+      <h3 class="font-display text-headline-md text-slate-900 mb-sm">Registrations by hour</h3>
+      <p class="text-xs text-slate-500 mb-md">24-hour profile in IST (one bar per hour).</p>
+      <div class="relative h-[280px] w-full">
+        <canvas id="mdcHourlyChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-md">
+    <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm overflow-hidden">
+      <h3 class="font-display text-headline-md text-slate-900 mb-sm">India map (registrations)</h3>
+      <p class="text-xs text-slate-500 mb-md">State heat map: darker fill = more registrations from export <code class="rounded bg-slate-100 px-1">state</code>. Boundaries use the full India outline including J&amp;K and Ladakh. Hover a state for its count.</p>
+      <div id="mdcIndiaMap" class="w-full h-[360px]"></div>
+    </div>
+    <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm overflow-x-auto">
+      <h3 class="font-display text-headline-md text-slate-900 mb-sm">City pivot</h3>
+      <p class="text-xs text-slate-500 mb-md">Attendance city when set, otherwise residence city — sorted by registrations descending.</p>
+      <div class="max-h-[360px] overflow-y-auto">
+        <table class="w-full text-left text-sm min-w-[320px]">
+          <thead class="sticky top-0 bg-white">
+            <tr class="border-b border-slate-200 text-slate-500">
+              <th class="py-2 pr-4 text-[11px] font-semibold uppercase tracking-wider">City</th>
+              <th class="py-2 text-[11px] font-semibold uppercase tracking-wider text-right">Registrations</th>
+            </tr>
+          </thead>
+          <tbody class="text-slate-800">
+            {% for r in data_center.city_pivot or [] %}
+              <tr class="border-b border-slate-100">
+                <td class="py-2 pr-4 font-medium">{{ r.city }}</td>
+                <td class="py-2 tabular-nums text-right">{{ "{:,}".format(r.count) }}</td>
+              </tr>
+            {% else %}
+              <tr><td colspan="2" class="py-lg text-center text-sm text-slate-500">No city data yet.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
+    <h3 class="font-display text-headline-md text-slate-900 mb-sm">Attendance city</h3>
+    <p class="text-xs text-slate-500 mb-md">Horizontal bars for every distinct <code class="rounded bg-slate-100 px-1">attendance_city</code> value (sorted by registrations, high to low).</p>
+    <div class="max-h-[70vh] overflow-y-auto rounded-xl border border-slate-100">
+      <div id="mdcAttendanceCityChartHost" class="relative w-full min-h-[280px]" style="height:320px">
+        <canvas id="mdcAttendanceCityBar"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-md">
+    <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm min-w-0">
+      <h3 class="font-display text-headline-md text-slate-900 mb-sm">UTM source breakdown</h3>
+      <p class="text-xs text-slate-500 mb-md">Share of registrations by <code class="rounded bg-slate-100 px-1">utm_source</code> (doughnut).</p>
+      <div id="mdcUtmChartHost" class="relative h-[280px] w-full max-w-[340px] mx-auto">
+        <canvas id="mdcUtmDonut"></canvas>
+      </div>
+    </div>
+    <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm min-w-0">
+      <h3 class="font-display text-headline-md text-slate-900 mb-sm">Gender mix</h3>
+      <p class="text-xs text-slate-500 mb-md">Share of registrations by gender (doughnut).</p>
+      <div id="mdcGenderChartHost" class="relative h-[280px] w-full max-w-[340px] mx-auto">
+        <canvas id="mdcGenderDonut"></canvas>
+      </div>
+    </div>
+    <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm min-w-0">
+      <h3 class="font-display text-headline-md text-slate-900 mb-sm">Top occupations</h3>
+      <p class="text-xs text-slate-500 mb-md">Share among top occupation buckets (doughnut).</p>
+      <div id="mdcOccupationChartHost" class="relative h-[280px] w-full max-w-[340px] mx-auto">
+        <canvas id="mdcOccupationDonut"></canvas>
+      </div>
+    </div>
+  </div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  window.__PW_MDC__ = {{ data_center | tojson }};
+  window.__PW_ROUTES__ = {
+    mdcUsersUrl: {{ url_for("in_person_users") | tojson }},
+    inPersonUsers: {{ url_for("in_person_users") | tojson }},
+  };
+</script>
+<script src="{{ url_for('static', filename='mdc_dashboard.js') }}" defer></script>
+{% endblock %}

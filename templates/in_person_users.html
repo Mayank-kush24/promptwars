@@ -1,0 +1,443 @@
+{% extends "layouts/base_app.html" %}
+{% block title %}PromptWars — {{ title }}{% endblock %}
+{% block extra_head %}
+<style>
+  .pw-user-overlay { display: none; }
+  .pw-user-overlay.is-open { display: flex; }
+</style>
+{% endblock %}
+{% block content %}
+{% macro page_href(p) -%}
+{{- url_for('in_person_users', page=p, per_page=users.per_page) -}}
+{%- if users.search %}&q={{ users.search | urlencode }}{% endif %}
+{%- if users.attendance_city %}&attendance_city={{ users.attendance_city | urlencode }}{% endif %}
+{%- endmacro %}
+<div class="flex flex-col gap-md">
+  <div class="flex flex-col gap-sm">
+    <h1 class="font-display text-headline-lg text-slate-900 leading-tight">{{ title }}</h1>
+    <p class="font-body-md text-slate-600 max-w-3xl">
+      Main Data Center registrations for your Vision program (same scope as import). Use search to filter by name, email, profile name, or mobile; use attendance city to match the dashboard chart (trimmed <code class="rounded bg-slate-100 px-1">attendance_city</code>).
+    </p>
+  </div>
+
+  {% if users.error %}
+    <div class="rounded-xl border border-amber-200 bg-amber-50 text-amber-900 px-4 py-3 text-sm">
+      Could not load roster: {{ users.error }}
+    </div>
+  {% endif %}
+
+  <form method="get" action="{{ url_for('in_person_users') }}" class="flex flex-col gap-sm">
+    <div class="flex flex-col lg:flex-row gap-sm lg:items-end lg:justify-between">
+      <div class="flex flex-col sm:flex-row gap-sm flex-1 flex-wrap">
+        <label class="flex flex-col gap-xs flex-1 min-w-[200px] max-w-xl">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Search</span>
+          <input type="search" name="q" value="{{ users.search }}"
+                 placeholder="Name, email, mobile…"
+                 class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
+        </label>
+        <label class="flex flex-col gap-xs min-w-[200px] max-w-md">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Attendance city</span>
+          <select name="attendance_city"
+                  class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-400/50 text-sm">
+            <option value="">All cities</option>
+            {% if users.attendance_city and users.attendance_city not in users.attendance_city_options %}
+              <option value="{{ users.attendance_city }}" selected>{{ users.attendance_city }}</option>
+            {% endif %}
+            {% for c in users.attendance_city_options %}
+              <option value="{{ c }}" {% if users.attendance_city == c %}selected{% endif %}>{{ c }}</option>
+            {% endfor %}
+          </select>
+        </label>
+      </div>
+      <div class="flex flex-wrap gap-2 items-center">
+        <input type="hidden" name="per_page" value="{{ users.per_page }}" />
+        <button type="submit" class="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">Apply filters</button>
+        {% if users.search or users.attendance_city %}
+          <a href="{{ url_for('in_person_users', per_page=users.per_page) }}" class="inline-flex items-center px-4 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">Clear</a>
+        {% endif %}
+        <a href="{{ url_for('in_person_users_export_csv') }}{% if users.export_query %}?{{ users.export_query }}{% endif %}"
+           class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-900 text-sm font-semibold hover:bg-emerald-100 no-underline"
+           download>
+          <span class="material-symbols-outlined text-[20px]" aria-hidden="true">download</span>
+          Download CSV
+        </a>
+      </div>
+    </div>
+  </form>
+
+  <div class="flex flex-wrap items-center justify-between gap-sm text-sm text-slate-600">
+    <span>
+      {% if users.total %}
+        {% set start = (users.page - 1) * users.per_page + 1 %}
+        {% set end_raw = users.page * users.per_page %}
+        {% set end = end_raw if end_raw < users.total else users.total %}
+        Showing <span class="font-semibold text-slate-900 tabular-nums">{{ "{:,}".format(start) }}</span>–
+        <span class="font-semibold text-slate-900 tabular-nums">{{ "{:,}".format(end) }}</span>
+        of <span class="font-semibold text-slate-900 tabular-nums">{{ "{:,}".format(users.total) }}</span>
+      {% else %}
+        No rows loaded
+      {% endif %}
+    </span>
+    <form method="get" class="flex items-center gap-2">
+      {% if users.search %}<input type="hidden" name="q" value="{{ users.search }}" />{% endif %}
+      {% if users.attendance_city %}<input type="hidden" name="attendance_city" value="{{ users.attendance_city }}" />{% endif %}
+      <input type="hidden" name="page" value="1" />
+      <label class="text-xs text-slate-500">Per page</label>
+      <select name="per_page" onchange="this.form.submit()"
+              class="text-sm rounded-lg border border-slate-200 px-2 py-1.5 bg-white">
+        {% for n in [10, 25, 50, 100] %}
+          <option value="{{ n }}" {% if users.per_page == n %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+      </select>
+    </form>
+  </div>
+
+  <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-sm min-w-[720px]">
+        <thead>
+          <tr class="border-b border-slate-200 bg-slate-50 text-slate-500">
+            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Name</th>
+            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Email</th>
+            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Location</th>
+            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Promptathon city</th>
+            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Occupation</th>
+            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Registered at</th>
+            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-right w-16">View</th>
+          </tr>
+        </thead>
+        <tbody class="text-slate-800">
+          {% for row in users.rows %}
+            <tr class="border-b border-slate-100 hover:bg-slate-50/80">
+              <td class="py-3 px-4 max-w-[200px]">
+                <div class="font-medium text-slate-900 truncate" title="{{ row.full_name or '—' }}">{{ row.full_name or '—' }}</div>
+                {% if row.profile_name %}
+                  <div class="text-xs text-slate-500 truncate" title="{{ row.profile_name }}">{{ row.profile_name }}</div>
+                {% endif %}
+              </td>
+              <td class="py-3 px-4 max-w-[220px]">
+                {% if row.email %}
+                  <a href="mailto:{{ row.email }}" class="truncate block text-emerald-600 hover:underline" title="{{ row.email }}">{{ row.email }}</a>
+                {% else %}
+                  <span class="truncate block">—</span>
+                {% endif %}
+              </td>
+              <td class="py-3 px-4 max-w-[160px]">
+                {% if row.city or row.state %}
+                  {% set loc = (row.city or '') ~ (', ' if (row.city and row.state) else '') ~ (row.state or '') %}
+                {% else %}
+                  {% set loc = row.country or '—' %}
+                {% endif %}
+                <span class="truncate block" title="{{ loc }}">{{ loc }}</span>
+              </td>
+              <td class="py-3 px-4 max-w-[140px]">
+                <span class="truncate block" title="{{ row.attendance_city or '—' }}">{{ row.attendance_city or '—' }}</span>
+              </td>
+              <td class="py-3 px-4 max-w-[140px]">
+                <span class="truncate block" title="{{ row.occupation or '—' }}">{{ row.occupation or '—' }}</span>
+              </td>
+              <td class="py-3 px-4 whitespace-nowrap text-slate-600 text-xs">
+                {% if row.form_timestamp %}
+                  {{ row.form_timestamp.strftime('%d-%m-%Y %H:%M:%S') }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td class="py-3 px-4 text-right">
+                <button type="button"
+                        class="pw-mdc-detail-btn inline-flex items-center justify-center w-9 h-9 rounded-lg border border-slate-200 text-slate-600 hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200 transition-colors"
+                        data-reg-id="{{ row.id }}"
+                        aria-label="View user detail for {{ row.email }}">
+                  <span class="material-symbols-outlined text-[22px]">visibility</span>
+                </button>
+              </td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="7" class="py-16 text-center text-slate-500">
+                No registrations found. Import a file from
+                <a href="{{ url_for('in_person_import') }}" class="text-emerald-600 hover:underline">In-person · Import</a>.
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% if users.total_pages and users.total_pages > 1 %}
+    <nav class="flex flex-wrap items-center justify-center gap-2 text-sm" aria-label="Pagination">
+      {% if users.page > 1 %}
+        <a class="px-3 py-2 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 no-underline font-medium"
+           href="{{ page_href(users.page - 1) }}">Previous</a>
+      {% endif %}
+      <span class="px-3 py-2 text-slate-600">Page <span class="font-semibold text-slate-900">{{ users.page }}</span> of {{ users.total_pages }}</span>
+      {% if users.page < users.total_pages %}
+        <a class="px-3 py-2 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 no-underline font-medium"
+           href="{{ page_href(users.page + 1) }}">Next</a>
+      {% endif %}
+    </nav>
+  {% endif %}
+
+  {% if adminAuthEnabled %}
+    <div class="flex justify-end pt-sm">
+      <form action="{{ url_for('admin_logout') }}" method="post">
+        <button type="submit" class="px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50">Log out</button>
+      </form>
+    </div>
+  {% endif %}
+</div>
+
+{# Modal #}
+<div id="pw-user-overlay" class="pw-user-overlay fixed inset-0 z-[100] items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="pw-user-modal-title" aria-hidden="true">
+  <div class="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col overflow-hidden">
+    <div class="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 shrink-0">
+      <h2 id="pw-user-modal-title" class="font-display text-headline-md text-slate-900">User detail</h2>
+      <button type="button" id="pw-user-modal-close" class="inline-flex items-center justify-center w-10 h-10 rounded-lg text-slate-500 hover:bg-slate-100" aria-label="Close">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+    <div id="pw-user-modal-loading" class="hidden px-4 py-12 text-center text-slate-600 text-sm">Loading…</div>
+    <div id="pw-user-modal-error" class="hidden px-4 py-6 text-sm text-rose-700"></div>
+    <div id="pw-user-modal-body" class="hidden overflow-y-auto px-4 py-4 text-sm"></div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var overlay = document.getElementById("pw-user-overlay");
+  var bodyEl = document.getElementById("pw-user-modal-body");
+  var loadEl = document.getElementById("pw-user-modal-loading");
+  var errEl = document.getElementById("pw-user-modal-error");
+  var closeBtn = document.getElementById("pw-user-modal-close");
+  if (!overlay || !bodyEl || !loadEl || !errEl || !closeBtn) return;
+
+  var detailUrlTmpl = {{ url_for("api_in_person_mdc_registration", reg_id=0) | tojson }};
+
+  function regUrl(id) {
+    return detailUrlTmpl.replace(/\/0$/, "/" + id);
+  }
+
+  function esc(s) {
+    if (s === null || s === undefined || s === "") return "—";
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function escAttr(s) {
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  function stripTrailingLinkPunct(u) {
+    return u.replace(/[,.;:!?)\]]+$/g, "");
+  }
+
+  function anchorHttp(url, display) {
+    var href = stripTrailingLinkPunct(url);
+    return (
+      '<a href="' +
+      escAttr(href) +
+      '" class="text-emerald-600 hover:underline break-all" target="_blank" rel="noopener noreferrer">' +
+      esc(display !== undefined ? display : url) +
+      "</a>"
+    );
+  }
+
+  function linkifySingleWholeValue(raw) {
+    var s = String(raw).trim();
+    if (!s) return null;
+    if (/^https?:\/\//i.test(s)) {
+      return anchorHttp(s, s);
+    }
+    if (/^mailto:/i.test(s)) {
+      return '<a href="' + escAttr(s) + '" class="text-emerald-600 hover:underline break-all">' + esc(s) + "</a>";
+    }
+    if (/^www\./i.test(s)) {
+      return anchorHttp("https://" + s, s);
+    }
+    if (/^[^\s<>]+@[^\s<>]+\.[^\s<>]+$/.test(s)) {
+      return '<a href="' + escAttr("mailto:" + s) + '" class="text-emerald-600 hover:underline break-all">' + esc(s) + "</a>";
+    }
+    return null;
+  }
+
+  function linkifyCellValue(v) {
+    if (v === null || v === undefined || v === "") return "—";
+    var raw = String(v);
+    var whole = linkifySingleWholeValue(raw);
+    if (whole !== null) return whole;
+
+    var re = /(https?:\/\/[^\s<]+)/gi;
+    var hasUrl = re.test(raw);
+    re.lastIndex = 0;
+    if (!hasUrl) {
+      return esc(raw);
+    }
+    var parts = [];
+    var last = 0;
+    var m;
+    while ((m = re.exec(raw)) !== null) {
+      parts.push(esc(raw.slice(last, m.index)));
+      parts.push(anchorHttp(m[0], m[0]));
+      last = m.index + m[0].length;
+    }
+    parts.push(esc(raw.slice(last)));
+    return parts.join("");
+  }
+
+  var FIELD_LABEL_OVERRIDES = { form_timestamp: "Registered at" };
+
+  function labelKey(k) {
+    if (Object.prototype.hasOwnProperty.call(FIELD_LABEL_OVERRIDES, k)) {
+      return FIELD_LABEL_OVERRIDES[k];
+    }
+    return k.replace(/_/g, " ").replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+  }
+
+  var DETAIL_GROUPS = [
+    { title: "Profile", keys: ["full_name", "profile_name", "email", "form_timestamp", "dob", "gender", "occupation"] },
+    { title: "Location & contact", keys: ["country", "state", "city", "mobile", "whatsapp"] },
+    {
+      title: "Organization & education",
+      keys: [
+        "org_name",
+        "org_state",
+        "org_city",
+        "class_stream",
+        "portfolio",
+        "domain",
+        "designation",
+        "founded_info",
+        "degree",
+      ],
+    },
+    { title: "Marketing (UTM)", keys: ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"] },
+    { title: "Promptathon", keys: ["attendance_city"] },
+    { title: "Social & links", keys: ["github_url", "linkedin_url"] },
+    { title: "Record", keys: ["id", "event_id", "created_at", "updated_at"] },
+  ];
+
+  function fieldRow(k, v) {
+    return (
+      "<tr class=\"border-b border-slate-100 last:border-b-0\">" +
+      "<th class=\"py-2 px-3 text-left text-xs font-semibold text-slate-500 align-top w-[38%] bg-slate-50/80\">" +
+      esc(labelKey(k)) +
+      "</th><td class=\"py-2 px-3 text-slate-800 break-words\">" +
+      linkifyCellValue(v) +
+      "</td></tr>"
+    );
+  }
+
+  function openModal() {
+    overlay.classList.add("is-open");
+    overlay.setAttribute("aria-hidden", "false");
+    document.body.style.overflow = "hidden";
+  }
+
+  function closeModal() {
+    overlay.classList.remove("is-open");
+    overlay.setAttribute("aria-hidden", "true");
+    document.body.style.overflow = "";
+    bodyEl.classList.add("hidden");
+    loadEl.classList.add("hidden");
+    errEl.classList.add("hidden");
+    bodyEl.innerHTML = "";
+    errEl.textContent = "";
+  }
+
+  function renderDetail(data) {
+    var skip = { email_normalized: true, error: true };
+    var used = {};
+    var parts = [];
+
+    DETAIL_GROUPS.forEach(function (g) {
+      var rows = [];
+      g.keys.forEach(function (k) {
+        if (skip[k] || !Object.prototype.hasOwnProperty.call(data, k)) return;
+        used[k] = true;
+        rows.push(fieldRow(k, data[k]));
+      });
+      if (!rows.length) return;
+      parts.push(
+        "<section class=\"mb-5 last:mb-0\">" +
+          "<h3 class=\"text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2\">" +
+          esc(g.title) +
+          "</h3>" +
+          "<table class=\"w-full text-left border border-slate-200 rounded-lg overflow-hidden\">" +
+          rows.join("") +
+          "</table>" +
+        "</section>"
+      );
+    });
+
+    var otherKeys = Object.keys(data)
+      .filter(function (k) {
+        return !skip[k] && !used[k];
+      })
+      .sort();
+    if (otherKeys.length) {
+      var otherRows = otherKeys.map(function (k) {
+        return fieldRow(k, data[k]);
+      });
+      parts.push(
+        "<section class=\"mb-0\">" +
+          "<h3 class=\"text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2\">Other</h3>" +
+          "<table class=\"w-full text-left border border-slate-200 rounded-lg overflow-hidden\">" +
+          otherRows.join("") +
+          "</table>" +
+        "</section>"
+      );
+    }
+
+    return parts.join("") || "<p class=\"text-slate-500 text-sm\">No fields returned.</p>";
+  }
+
+  closeBtn.addEventListener("click", closeModal);
+  overlay.addEventListener("click", function (e) {
+    if (e.target === overlay) closeModal();
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && overlay.classList.contains("is-open")) closeModal();
+  });
+
+  document.querySelectorAll(".pw-mdc-detail-btn").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      var id = btn.getAttribute("data-reg-id");
+      if (!id) return;
+      openModal();
+      loadEl.classList.remove("hidden");
+      bodyEl.classList.add("hidden");
+      errEl.classList.add("hidden");
+      errEl.textContent = "";
+      fetch(regUrl(id), { credentials: "same-origin", headers: { Accept: "application/json" } })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+        .then(function (res) {
+          loadEl.classList.add("hidden");
+          if (!res.ok) {
+            errEl.textContent = (res.body && res.body.error) ? res.body.error : "Could not load details.";
+            errEl.classList.remove("hidden");
+            return;
+          }
+          bodyEl.innerHTML = renderDetail(res.body);
+          bodyEl.classList.remove("hidden");
+        })
+        .catch(function () {
+          loadEl.classList.add("hidden");
+          errEl.textContent = "Network error.";
+          errEl.classList.remove("hidden");
+        });
+    });
+  });
+})();
+</script>
+{% endblock %}

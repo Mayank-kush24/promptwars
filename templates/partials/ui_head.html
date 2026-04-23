@@ -1,0 +1,232 @@
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0&amp;display=swap" />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&amp;display=swap" />
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-secondary-fixed-variant": "#4b4263",
+                        "surface": "#fdf7ff",
+                        "primary": "#4f378a",
+                        "on-tertiary-fixed": "#241a00",
+                        "surface-tint": "#6750a4",
+                        "outline-variant": "#cbc4d2",
+                        "tertiary-fixed-dim": "#e7c365",
+                        "on-secondary": "#ffffff",
+                        "on-primary-container": "#e0d2ff",
+                        "tertiary-fixed": "#ffdf93",
+                        "on-error-container": "#93000a",
+                        "secondary-container": "#e1d4fd",
+                        "surface-container": "#f2ecf4",
+                        "secondary": "#63597c",
+                        "on-background": "#1d1b20",
+                        "primary-fixed": "#e9ddff",
+                        "on-primary": "#ffffff",
+                        "on-primary-fixed": "#22005d",
+                        "tertiary-container": "#c9a74d",
+                        "error": "#ba1a1a",
+                        "tertiary": "#765b00",
+                        "surface-container-high": "#ece6ee",
+                        "outline": "#7a7582",
+                        "on-error": "#ffffff",
+                        "surface-container-lowest": "#ffffff",
+                        "secondary-fixed-dim": "#cdc0e9",
+                        "surface-container-low": "#f8f2fa",
+                        "primary-fixed-dim": "#cfbcff",
+                        "inverse-primary": "#cfbcff",
+                        "primary-container": "#6750a4",
+                        "error-container": "#ffdad6",
+                        "on-surface-variant": "#494551",
+                        "inverse-surface": "#322f35",
+                        "on-surface": "#1d1b20",
+                        "on-tertiary-fixed-variant": "#594400",
+                        "on-tertiary-container": "#503d00",
+                        "surface-bright": "#fdf7ff",
+                        "on-secondary-fixed": "#1f1635",
+                        "inverse-on-surface": "#f5eff7",
+                        "on-tertiary": "#ffffff",
+                        "background": "#fdf7ff",
+                        "secondary-fixed": "#e9ddff",
+                        "on-secondary-container": "#645a7d",
+                        "on-primary-fixed-variant": "#4f378a",
+                        "surface-dim": "#ded8e0",
+                        "surface-container-highest": "#e6e0e9",
+                        "surface-variant": "#e6e0e9"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.25rem",
+                        "lg": "0.5rem",
+                        "xl": "0.75rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "lg": "24px",
+                        "gutter": "24px",
+                        "xl": "40px",
+                        "sm": "8px",
+                        "unit": "4px",
+                        "xs": "4px",
+                        "margin": "32px",
+                        "md": "16px"
+                    },
+                    "fontFamily": {
+                        "sans": ["Google Sans", "ui-sans-serif", "system-ui", "sans-serif"],
+                        "body-md": ["Google Sans", "sans-serif"],
+                        "label-sm": ["Google Sans", "sans-serif"],
+                        "display": ["Google Sans", "sans-serif"],
+                        "body-lg": ["Google Sans", "sans-serif"],
+                        "headline-lg": ["Google Sans", "sans-serif"],
+                        "headline-md": ["Google Sans", "sans-serif"],
+                        "label-md": ["Google Sans", "sans-serif"]
+                    },
+                    "fontSize": {
+                        "body-md": ["16px", { "lineHeight": "24px", "letterSpacing": "0", "fontWeight": "400" }],
+                        "label-sm": ["12px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "700" }],
+                        "display": ["48px", { "lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "body-lg": ["18px", { "lineHeight": "28px", "letterSpacing": "0", "fontWeight": "400" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.01em", "fontWeight": "500" }],
+                        "headline-md": ["24px", { "lineHeight": "32px", "letterSpacing": "0", "fontWeight": "500" }],
+                        "label-md": ["14px", { "lineHeight": "20px", "letterSpacing": "0.02em", "fontWeight": "500" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        html, body {
+            font-family: "Google Sans", ui-sans-serif, system-ui, sans-serif;
+            margin: 0;
+            padding: 0;
+        }
+        .material-symbols-outlined {
+            font-family: "Material Symbols Outlined";
+            font-weight: normal;
+            font-style: normal;
+            font-size: 24px;
+            line-height: 1;
+            letter-spacing: normal;
+            text-transform: none;
+            display: inline-block;
+            white-space: nowrap;
+            word-wrap: normal;
+            direction: ltr;
+            -webkit-font-feature-settings: "liga";
+            -webkit-font-smoothing: antialiased;
+        }
+        body {
+            background-color: #f8fafc; /* slate-50 */
+        }
+        /* Sidebar: expanded / collapsed rail (md+). --pw-sidebar-current drives width + main offset. */
+        :root {
+            --pw-sidebar-width-expanded: 12rem;
+            --pw-sidebar-width-collapsed: 4.5rem;
+            --pw-sidebar-current: var(--pw-sidebar-width-expanded);
+        }
+        html[data-pw-sidebar="collapsed"] {
+            --pw-sidebar-current: var(--pw-sidebar-width-collapsed);
+        }
+        .pw-sidebar {
+            transition: width 0.22s ease;
+        }
+        .pw-sidebar-offset {
+            transition: padding-left 0.22s ease;
+        }
+        @media (min-width: 768px) {
+            html[data-pw-sidebar="collapsed"] .pw-sidebar-label {
+                display: none;
+            }
+            html[data-pw-sidebar="collapsed"] .pw-sidebar-link {
+                min-height: 3rem;
+                padding-top: 0.5rem;
+                padding-bottom: 0.5rem;
+            }
+            html[data-pw-sidebar="collapsed"] .pw-sidebar-toggle-text {
+                display: none;
+            }
+            html[data-pw-sidebar="collapsed"] .pw-sidebar-link {
+                justify-content: center;
+            }
+        }
+        /* Mobile nav drawer (slide-in + dim backdrop) */
+        #pw-mobile-backdrop {
+            transition: opacity 0.2s ease, visibility 0.2s ease;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+        }
+        body.pw-mobile-nav-open #pw-mobile-backdrop {
+            opacity: 1;
+            visibility: visible;
+            pointer-events: auto;
+        }
+        #pw-mobile-nav {
+            transition: transform 0.22s ease;
+            transform: translateX(-100%);
+            pointer-events: none;
+        }
+        body.pw-mobile-nav-open #pw-mobile-nav {
+            transform: translateX(0);
+            pointer-events: auto;
+        }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.55);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.6);
+            box-shadow: 0 1px 2px rgba(31, 22, 53, 0.04), 0 4px 12px rgba(31, 22, 53, 0.04);
+        }
+        .glass-panel-elevated {
+            background: rgba(255, 255, 255, 0.78);
+            backdrop-filter: blur(40px);
+            -webkit-backdrop-filter: blur(40px);
+            border: 1px solid rgba(255, 255, 255, 0.65);
+            box-shadow: 0 4px 18px rgba(31, 22, 53, 0.06), 0 1px 2px rgba(31, 22, 53, 0.04);
+        }
+        a { text-decoration: none; }
+        a:focus-visible, button:focus-visible, input:focus-visible {
+            outline: 2px solid rgba(103, 80, 164, 0.6);
+            outline-offset: 2px;
+            border-radius: 4px;
+        }
+        ::selection { background: rgba(103, 80, 164, 0.2); }
+
+        /* ---- Per-module accent theme ----
+           Defaults to a neutral blue. Module-specific accents below override
+           via `body[data-pw-module="..."]`. Components consume these vars via
+           Tailwind arbitrary values, e.g. `bg-[var(--pw-accent-soft)]`. */
+        body {
+            --pw-accent-soft: #eff6ff;     /* bg tint for soft chips / nav */
+            --pw-accent-strong: #1d4ed8;   /* text / heading on soft tint */
+            --pw-accent-icon: #2563eb;     /* icon color */
+            --pw-accent-border: #bfdbfe;   /* soft border */
+            --pw-accent-ring: rgba(59, 130, 246, 0.45); /* focus ring */
+            --pw-accent-grad: linear-gradient(90deg, #3b82f6 0%, #6366f1 100%);
+        }
+        body[data-pw-module="in_person"] {
+            --pw-accent-soft: #f7fee7;     /* lime-50 */
+            --pw-accent-strong: #4d7c0f;   /* lime-700 */
+            --pw-accent-icon: #65a30d;     /* lime-600 */
+            --pw-accent-border: #d9f99d;   /* lime-200 */
+            --pw-accent-ring: rgba(132, 204, 22, 0.5); /* lime-500 */
+            --pw-accent-grad: linear-gradient(90deg, #84cc16 0%, #facc15 100%);
+        }
+        body[data-pw-module="virtual"] {
+            --pw-accent-soft: #f5f3ff;     /* violet-50 */
+            --pw-accent-strong: #6d28d9;   /* violet-700 */
+            --pw-accent-icon: #7c3aed;     /* violet-600 */
+            --pw-accent-border: #ddd6fe;   /* violet-200 */
+            --pw-accent-ring: rgba(167, 139, 250, 0.5);
+            --pw-accent-grad: linear-gradient(90deg, #f0abfc 0%, #c4b5fd 50%, #7dd3fc 100%);
+        }
+    </style>
+<script>
+(function () {
+  try {
+    if (localStorage.getItem("pw_sidebar_collapsed") === "1") {
+      document.documentElement.setAttribute("data-pw-sidebar", "collapsed");
+    }
+  } catch (_e) {}
+})();
+</script>

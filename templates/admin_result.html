@@ -1,0 +1,23 @@
+{% extends "layouts/base_app.html" %}
+{% block title %}PromptWars — Import result{% endblock %}
+{% block content %}
+<div class="flex flex-col gap-sm">
+  <h1 class="font-display text-headline-lg text-primary">Import result</h1>
+  {% if ok %}
+    <div class="px-3 py-2 rounded-lg bg-emerald-500/10 text-emerald-700 font-label-md text-label-md border-l-2 border-emerald-500 max-w-fit">{{ message }}</div>
+  {% else %}
+    <div class="px-3 py-2 rounded-lg bg-error-container/40 text-error font-label-md text-label-md border-l-2 border-error max-w-fit">{{ message }}</div>
+  {% endif %}
+</div>
+
+{% if data %}
+  <div class="glass-panel p-lg rounded-xl">
+    <h2 class="font-headline-md text-headline-md text-primary mb-md">Details</h2>
+    <pre class="bg-surface-container-lowest border border-outline-variant/40 rounded-lg p-md overflow-auto text-sm font-mono text-on-surface">{{ data|tojson(indent=2) }}</pre>
+  </div>
+{% endif %}
+
+<div>
+  <a href="{{ url_for('admin_page') }}" class="font-label-md text-label-md text-primary hover:underline">← Back to admin</a>
+</div>
+{% endblock %}

@@ -1,0 +1,34 @@
+{# Sidebar (md+): sub-pages for the active module. Module switcher lives in the header. #}
+<aside id="pw-sidebar"
+       class="pw-sidebar hidden md:flex fixed top-16 bottom-0 left-0 z-30 flex-col w-[var(--pw-sidebar-current)] bg-white border-r border-slate-200 overflow-hidden"
+       aria-label="Module pages">
+  <div class="border-b border-slate-100 px-3 py-2">
+    <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Pages</p>
+    {% for m in pw_modules %}
+      {% if m.id == pw_module %}
+        <p class="text-xs font-semibold text-slate-700 truncate" title="{{ m.label }}">{{ m.label }}</p>
+      {% endif %}
+    {% endfor %}
+  </div>
+  <div class="flex-1 overflow-y-auto overflow-x-hidden py-2 flex flex-col gap-1">
+    {% for item in pw_subnav %}
+      <a href="{{ item.href }}"
+         title="{{ item.label }}"
+         class="pw-sidebar-link group mx-2 flex flex-row items-center gap-2 min-h-[3rem] py-2.5 px-2 rounded-xl no-underline transition-colors
+                {% if item.active %}bg-[var(--pw-accent-soft)] text-[var(--pw-accent-strong)]{% else %}text-slate-600 hover:bg-slate-50 hover:text-slate-900{% endif %}">
+        <span class="material-symbols-outlined text-[22px] shrink-0 {% if item.active %}text-[var(--pw-accent-icon)]{% else %}text-slate-500 group-hover:text-slate-700{% endif %}">{{ item.icon }}</span>
+        <span class="pw-sidebar-label text-left text-[12px] sm:text-[13px] font-semibold leading-snug flex-1 min-w-0">{{ item.label }}</span>
+      </a>
+    {% endfor %}
+  </div>
+  <div class="shrink-0 border-t border-slate-200 p-2 bg-white">
+    <button type="button"
+            class="pw-sidebar-toggle flex w-full items-center justify-center gap-2 rounded-xl border border-transparent py-2 text-slate-600 hover:bg-slate-100 hover:border-slate-200 transition-colors"
+            aria-expanded="true"
+            aria-controls="pw-sidebar"
+            aria-label="Collapse navigation">
+      <span class="material-symbols-outlined pw-sidebar-toggle-icon text-[22px]">chevron_left</span>
+      <span class="pw-sidebar-toggle-text text-[11px] font-semibold text-slate-500">Collapse</span>
+    </button>
+  </div>
+</aside>

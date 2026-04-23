@@ -1,0 +1,10 @@
+DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/prompt_wars
+FLASK_HOST=127.0.0.1
+FLASK_PORT=5000
+SESSION_SECRET=change-me-session
+# Optional: if set, /admin requires login
+# ADMIN_PASSWORD=
+
+DEFAULT_IN_PERSON_EVENT_ID=1
+DEFAULT_VIRTUAL_EVENT_ID=2
+DEFAULT_CHALLENGE_ID=1

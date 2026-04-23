@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>{% block title %}PromptWars{% endblock %}</title>
+{% include "partials/ui_head.html" %}
+{% block extra_head %}{% endblock %}
+</head>
+<body class="font-sans text-on-background min-h-screen m-0 p-0" data-pw-module="{{ pw_module }}">
+{% include "partials/ui_nav.html" %}
+{% include "partials/ui_sidebar.html" %}
+
+{# Clear the fixed header (h-16) without padding on body — avoids extra blank band above the bar in some browsers. #}
+<div class="pw-page-below-header pt-16 min-h-screen">
+  {# Optional full-bleed slot (used by main_dashboard's hero) #}
+  {% block hero %}{% endblock %}
+
+  <main class="pw-sidebar-offset pl-0 md:pl-[var(--pw-sidebar-current)]">
+    <div class="max-w-7xl mx-auto px-margin py-xl flex flex-col gap-xl">
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+</div>
+{% block scripts %}{% endblock %}
+</body>
+</html>

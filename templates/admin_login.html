@@ -1,0 +1,26 @@
+{% extends "layouts/base_app.html" %}
+{% block title %}PromptWars — Admin login{% endblock %}
+{% block content %}
+<div class="max-w-md mx-auto w-full">
+  <div class="glass-panel-elevated p-lg rounded-xl">
+    <h1 class="font-display text-headline-lg text-primary mb-sm">Admin login</h1>
+    <p class="font-body-md text-body-md text-on-surface-variant mb-md">Sign in to upload imports and grant credits.</p>
+    {% if error %}
+      <div class="mb-md px-3 py-2 rounded-lg bg-error-container/40 text-error font-label-md text-label-md border-l-2 border-error">{{ error }}</div>
+    {% endif %}
+    <form method="post" action="{{ url_for('admin_login_post') }}" class="flex flex-col gap-md">
+      <label class="flex flex-col gap-xs">
+        <span class="font-label-md text-label-md text-secondary">Password</span>
+        <input type="password" name="password" autocomplete="current-password" required
+               class="px-3 py-2 rounded-lg border border-outline-variant bg-white/70 focus:outline-none focus:ring-2 focus:ring-primary/40" />
+      </label>
+      <button type="submit" class="px-4 py-2 rounded-lg bg-primary text-on-primary font-label-md text-label-md hover:bg-on-primary-fixed-variant transition-colors">
+        Sign in
+      </button>
+    </form>
+    <p class="mt-md font-label-md text-label-md">
+      <a href="{{ url_for('main_dashboard') }}" class="text-primary hover:underline">← Back to dashboard</a>
+    </p>
+  </div>
+</div>
+{% endblock %}

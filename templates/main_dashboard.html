@@ -1,0 +1,232 @@
+{% extends "layouts/base_app.html" %}
+{% block title %}PromptWars — Overview{% endblock %}
+
+{% block hero %}
+<section class="pw-sidebar-offset pl-0 md:pl-[var(--pw-sidebar-current)]">
+  <div class="mx-margin md:mx-margin rounded-3xl overflow-hidden border border-white/60 shadow-sm
+              bg-gradient-to-r from-[#dbeafe] via-[#ede9fe] to-[#fce7f3] mt-0">
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-lg items-center px-margin py-xl">
+      <div class="lg:col-span-7 flex flex-col gap-md">
+        <div class="flex items-center gap-3 flex-wrap">
+          <span class="font-display text-[88px] md:text-[112px] leading-none font-black text-[#fbbf24] select-none">{</span>
+          <h1 class="font-display text-[44px] md:text-[60px] leading-none font-black text-slate-900 tracking-tight flex items-center gap-3">
+            Build
+            <span class="inline-flex items-center justify-center h-12 w-12 md:h-14 md:w-14 rounded-2xl bg-gradient-to-br from-[#4285F4] to-[#1d4ed8] text-white shadow-md rotate-6">
+              <span class="material-symbols-outlined text-[28px] md:text-[32px]">auto_awesome</span>
+            </span>
+            with AI
+          </h1>
+          <span class="font-display text-[88px] md:text-[112px] leading-none font-black text-[#fbbf24] select-none">}</span>
+        </div>
+        <div class="flex items-center gap-2 mt-1">
+          <span class="h-3 w-3 rounded-full bg-emerald-500"></span>
+          <span class="h-3 w-3 rounded-full bg-emerald-500"></span>
+          <span class="h-3 w-3 rounded-full bg-emerald-500"></span>
+        </div>
+      </div>
+
+      <div class="lg:col-span-5">
+        <div class="flex flex-col gap-sm">
+          <p class="font-display text-2xl md:text-3xl leading-snug text-slate-900">
+            Welcome to<br/>
+            <span class="font-medium text-slate-800">India's first end-to-end</span><br/>
+            <span class="font-medium text-slate-800">vibe coding challenge</span>
+          </p>
+          <div class="flex gap-3 mt-2">
+            <a href="{{ url_for('virtual_page') }}" class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-slate-900 text-white text-sm font-medium hover:bg-slate-800 transition-colors no-underline">
+              <span class="material-symbols-outlined text-[18px]">rocket_launch</span> Live arena
+            </a>
+            <a href="{{ url_for('in_person_page') }}" class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white text-slate-900 text-sm font-medium border border-slate-200 hover:bg-slate-50 transition-colors no-underline">
+              <span class="material-symbols-outlined text-[18px]">insights</span> Funnel
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# Bottom-right floating activity panel — mimicked from the screenshot's agent card #}
+    <div class="px-margin pb-xl">
+      <div class="ml-auto max-w-md bg-white/90 backdrop-blur rounded-2xl border border-white/80 shadow-sm p-md">
+        <div class="flex flex-col gap-sm">
+          <div class="flex items-start gap-3">
+            <span class="material-symbols-outlined text-blue-600 mt-1">bolt</span>
+            <div class="flex-1">
+              <p class="text-sm font-semibold text-slate-900">Live arena</p>
+              <p class="text-xs text-slate-500">Challenge {{ challenge_id }} · {{ overview.live_challenges_fmt }} live · auto-refresh leaderboard</p>
+            </div>
+            <a href="{{ url_for('virtual_page') }}" class="text-xs text-blue-600 hover:underline whitespace-nowrap no-underline">Open →</a>
+          </div>
+          <div class="h-px bg-slate-100"></div>
+          <div class="flex items-start gap-3">
+            <span class="material-symbols-outlined text-violet-600 mt-1">insights</span>
+            <div class="flex-1">
+              <p class="text-sm font-semibold text-slate-900">In-person analytics</p>
+              <p class="text-xs text-slate-500">{{ overview.in_person_rsvps_fmt }} RSVPs · {{ overview.in_person_submissions_fmt }} submissions · {{ overview.in_person_conversion_fmt }}</p>
+            </div>
+            <a href="{{ url_for('in_person_page') }}" class="text-xs text-blue-600 hover:underline whitespace-nowrap no-underline">Open →</a>
+          </div>
+          <div class="h-px bg-slate-100"></div>
+          <div class="flex items-start gap-3">
+            <span class="material-symbols-outlined text-amber-600 mt-1">toll</span>
+            <div class="flex-1">
+              <p class="text-sm font-semibold text-slate-900">Credits in circulation</p>
+              <p class="text-xs text-slate-500">{{ overview.credits_fmt }} across {{ overview.virtual_registrations_fmt }} virtual participants</p>
+            </div>
+            <a href="{{ url_for('admin_page') }}" class="text-xs text-blue-600 hover:underline whitespace-nowrap no-underline">Manage →</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block content %}
+{% if overview.get('error') %}
+  <div class="glass-panel p-md rounded-xl text-error font-body-md border-l-2 border-error">Overview query failed: {{ overview.error }}</div>
+{% endif %}
+
+<div class="flex flex-col gap-sm">
+  <h2 class="font-display text-headline-lg text-slate-900 leading-tight">System overview</h2>
+  <p class="font-body-md text-on-surface-variant">Live metrics from PostgreSQL for in-person and virtual tracks.</p>
+</div>
+
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-lg">
+  <div class="bg-white rounded-2xl border border-slate-200 p-lg flex flex-col justify-between min-h-[160px] gap-md hover:shadow-md transition-shadow">
+    <div class="flex justify-between items-start gap-2">
+      <span class="text-[12px] font-semibold text-slate-500 uppercase tracking-wider">Total PW registrations</span>
+      <span class="material-symbols-outlined text-blue-500">groups</span>
+    </div>
+    <div class="flex flex-col">
+      <span class="font-display text-headline-lg text-slate-900 leading-tight break-all">{{ overview.mdc_total_fmt }}</span>
+      <span class="text-xs text-slate-500 mt-1">In-person + virtual Prompt Wars · +{{ overview.mdc_last7_fmt }} in last 7 days</span>
+    </div>
+  </div>
+  <div class="bg-white rounded-2xl border border-slate-200 p-lg flex flex-col justify-between min-h-[160px] gap-md hover:shadow-md transition-shadow">
+    <div class="flex justify-between items-start gap-2">
+      <span class="text-[12px] font-semibold text-lime-700 uppercase tracking-wider">In-person PW</span>
+      <span class="material-symbols-outlined text-lime-600">stadium</span>
+    </div>
+    <div class="flex flex-col">
+      <span class="font-display text-headline-lg text-slate-900 leading-tight break-all">{{ overview.mdc_in_person.total_fmt }}</span>
+      <span class="text-xs text-slate-500 mt-1">+{{ overview.mdc_in_person.last7_fmt }} last 7d · top city {{ overview.mdc_in_person.top_city }}</span>
+    </div>
+  </div>
+  <div class="bg-white rounded-2xl border border-slate-200 p-lg flex flex-col justify-between min-h-[160px] gap-md hover:shadow-md transition-shadow">
+    <div class="flex justify-between items-start gap-2">
+      <span class="text-[12px] font-semibold text-violet-700 uppercase tracking-wider">Virtual PW</span>
+      <span class="material-symbols-outlined text-violet-600">stream</span>
+    </div>
+    <div class="flex flex-col">
+      <span class="font-display text-headline-lg text-slate-900 leading-tight break-all">{{ overview.mdc_virtual.total_fmt }}</span>
+      <span class="text-xs text-slate-500 mt-1">+{{ overview.mdc_virtual.last7_fmt }} last 7d · top city {{ overview.mdc_virtual.top_city }}</span>
+    </div>
+  </div>
+  <div class="bg-white rounded-2xl border border-slate-200 p-lg flex flex-col justify-between min-h-[160px] gap-md hover:shadow-md transition-shadow">
+    <div class="flex justify-between items-start gap-2">
+      <span class="text-[12px] font-semibold text-slate-500 uppercase tracking-wider">Credits in circulation</span>
+      <span class="material-symbols-outlined text-amber-500">toll</span>
+    </div>
+    <div class="flex flex-col">
+      <span class="font-display text-headline-lg text-slate-900 leading-tight break-all">{{ overview.credits_fmt }}</span>
+      <span class="text-xs text-slate-500 mt-1">Across {{ overview.virtual_registrations_fmt }} virtual participants · {{ overview.live_challenges_fmt }} live</span>
+    </div>
+  </div>
+</div>
+
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-lg">
+  <div class="bg-white rounded-2xl border border-lime-200 p-lg flex flex-col gap-md">
+    <div class="flex justify-between items-center border-b border-slate-100 pb-md">
+      <h3 class="font-display text-headline-md text-slate-900">In-person Prompt Wars</h3>
+      <span class="px-2.5 py-1 bg-lime-50 text-lime-700 text-[11px] font-semibold rounded-full">EVENT</span>
+    </div>
+    <div class="flex flex-col">
+      <div class="flex justify-between items-center py-2.5">
+        <span class="text-sm text-slate-600">Total PW registrations</span>
+        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.mdc_in_person.total_fmt }}</span>
+      </div>
+      <div class="h-px bg-slate-100"></div>
+      <div class="flex justify-between items-center py-2.5">
+        <span class="text-sm text-slate-600">New (last 7 days)</span>
+        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.mdc_in_person.last7_fmt }}</span>
+      </div>
+      <div class="h-px bg-slate-100"></div>
+      <div class="flex justify-between items-center py-2.5">
+        <span class="text-sm text-slate-600">Top attendance city</span>
+        <span class="text-sm font-semibold text-slate-900">{{ overview.mdc_in_person.top_city }} <span class="text-xs text-slate-500 font-normal">({{ overview.mdc_in_person.top_city_count_fmt }})</span></span>
+      </div>
+      <div class="h-px bg-slate-100"></div>
+      <div class="flex justify-between items-center py-2.5">
+        <span class="text-sm text-slate-600">Top state</span>
+        <span class="text-sm font-semibold text-slate-900">{{ overview.mdc_in_person.top_state }} <span class="text-xs text-slate-500 font-normal">({{ overview.mdc_in_person.top_state_count_fmt }})</span></span>
+      </div>
+      <div class="h-px bg-slate-100"></div>
+      <div class="flex justify-between items-center py-2.5">
+        <span class="text-sm text-slate-600">RSVPs (distinct)</span>
+        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.in_person_rsvps_fmt }}</span>
+      </div>
+      <div class="h-px bg-slate-100"></div>
+      <div class="flex justify-between items-center py-2.5">
+        <span class="text-sm text-slate-600">Submissions (distinct)</span>
+        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.in_person_submissions_fmt }}</span>
+      </div>
+      <div class="h-px bg-slate-100"></div>
+      <div class="flex justify-between items-center py-2.5">
+        <span class="text-sm text-slate-600">RSVP &rarr; submission</span>
+        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.in_person_conversion_fmt }}</span>
+      </div>
+    </div>
+    <a href="{{ url_for('in_person_page', inPersonEventId=in_person_event_id) }}"
+       class="inline-flex items-center gap-1 text-sm font-medium text-lime-700 hover:underline mt-1 no-underline">
+      Open in-person dashboard <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+    </a>
+  </div>
+
+  <div class="bg-white rounded-2xl border border-violet-200 p-lg flex flex-col gap-md">
+    <div class="flex justify-between items-center border-b border-slate-100 pb-md">
+      <h3 class="font-display text-headline-md text-slate-900">Virtual Prompt Wars</h3>
+      <span class="px-2.5 py-1 bg-violet-50 text-violet-700 text-[11px] font-semibold rounded-full">ARENA</span>
+    </div>
+    <div class="flex flex-col">
+      <div class="flex justify-between items-center py-2.5">
+        <span class="text-sm text-slate-600">Total PW registrations</span>
+        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.mdc_virtual.total_fmt }}</span>
+      </div>
+      <div class="h-px bg-slate-100"></div>
+      <div class="flex justify-between items-center py-2.5">
+        <span class="text-sm text-slate-600">New (last 7 days)</span>
+        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.mdc_virtual.last7_fmt }}</span>
+      </div>
+      <div class="h-px bg-slate-100"></div>
+      <div class="flex justify-between items-center py-2.5">
+        <span class="text-sm text-slate-600">Top residence city</span>
+        <span class="text-sm font-semibold text-slate-900">{{ overview.mdc_virtual.top_city }} <span class="text-xs text-slate-500 font-normal">({{ overview.mdc_virtual.top_city_count_fmt }})</span></span>
+      </div>
+      <div class="h-px bg-slate-100"></div>
+      <div class="flex justify-between items-center py-2.5">
+        <span class="text-sm text-slate-600">Top state</span>
+        <span class="text-sm font-semibold text-slate-900">{{ overview.mdc_virtual.top_state }} <span class="text-xs text-slate-500 font-normal">({{ overview.mdc_virtual.top_state_count_fmt }})</span></span>
+      </div>
+      <div class="h-px bg-slate-100"></div>
+      <div class="flex justify-between items-center py-2.5">
+        <span class="text-sm text-slate-600">Arena participants</span>
+        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.virtual_registrations_fmt }}</span>
+      </div>
+      <div class="h-px bg-slate-100"></div>
+      <div class="flex justify-between items-center py-2.5">
+        <span class="text-sm text-slate-600">Live challenges</span>
+        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.live_challenges_fmt }}</span>
+      </div>
+      <div class="h-px bg-slate-100"></div>
+      <div class="flex justify-between items-center py-2.5">
+        <span class="text-sm text-slate-600">Credit pool (sum balances)</span>
+        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.credits_fmt }}</span>
+      </div>
+    </div>
+    <a href="{{ url_for('virtual_page', virtualEventId=virtual_event_id, challengeId=challenge_id) }}"
+       class="inline-flex items-center gap-1 text-sm font-medium text-violet-700 hover:underline mt-1 no-underline">
+      Open virtual dashboard <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
+    </a>
+  </div>
+</div>
+{% endblock %}
