@@ -1,4 +1,4 @@
-{# Top bar — H2S × Google for Developers style #}
+{# Top bar: H2S gradient lives in the sidebar rail; here = Google for Developers + Prompt Wars. #}
 <style>
   .pw-module-tabs[data-active-module="in_person"] .pw-module-tabs-indicator {
     background: linear-gradient(90deg, #84cc16 0%, #facc15 100%);
@@ -11,23 +11,33 @@
     border-color: transparent;
   }
 </style>
-<header class="fixed top-0 left-0 right-0 z-50 bg-white border-b border-slate-200 h-16 flex items-center justify-between px-3 sm:px-4 md:px-5 relative">
-  {# Left cluster: intrinsic width only — avoid flex-1 + wide max-w, which stretched the bar and threw off balance. #}
-  <div class="flex shrink-0 items-center gap-2 md:gap-3 min-w-0 relative z-10">
-    <button type="button"
-            class="pw-sidebar-toggle hidden md:inline-flex items-center justify-center rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50 touch-manipulation"
-            aria-expanded="true"
-            aria-label="Collapse navigation">
-      <span class="material-symbols-outlined pw-sidebar-toggle-icon text-[22px]">chevron_left</span>
-    </button>
-    <a href="{{ url_for('main_dashboard') }}" class="flex items-center gap-3 no-underline shrink-0" aria-label="Home">
-      <span class="inline-flex items-center justify-center h-8 w-8 rounded-md bg-gradient-to-br from-indigo-500 to-violet-600 text-white font-black text-sm tracking-tight shadow-sm">H2S</span>
-      <span class="hidden sm:flex items-baseline gap-1.5">
-        <span class="font-display text-[20px] font-medium leading-none">
-          <span class="text-[#4285F4]">G</span><span class="text-[#EA4335]">o</span><span class="text-[#FBBC05]">o</span><span class="text-[#4285F4]">g</span><span class="text-[#34A853]">l</span><span class="text-[#EA4335]">e</span>
-        </span>
-        <span class="text-slate-600 font-normal text-[18px] leading-none">for Developers</span>
+<header class="pw-shell-header fixed top-0 right-0 left-0 md:left-[var(--pw-sidebar-current)] z-30 bg-white border-b border-slate-200 h-16 flex items-center justify-between px-3 sm:px-4 md:px-5">
+  {# Left cluster (to the right of the sidebar): partner + app wordmarks — not H2S (that is in the sidebar). #}
+  <div class="flex shrink-0 items-center gap-1.5 sm:gap-2 min-w-0 relative z-10">
+    <a href="https://developers.google.com/"
+       target="_blank"
+       rel="noopener noreferrer"
+       class="pw-header-google flex shrink-0 items-baseline gap-0.5 sm:gap-1 no-underline"
+       aria-label="Google for Developers (opens in new tab)">
+      <span class="font-display text-[13px] sm:text-[14px] md:text-[15px] font-medium leading-none whitespace-nowrap">
+        <span class="text-[#4285F4]">G</span><span class="text-[#EA4335]">o</span><span class="text-[#FBBC05]">o</span><span class="text-[#4285F4]">g</span><span class="text-[#34A853]">l</span><span class="text-[#EA4335]">e</span>
       </span>
+      <span class="text-slate-600 font-normal text-[11px] sm:text-[12px] md:text-[13px] leading-none whitespace-nowrap">for Developers</span>
+    </a>
+    <span class="h-5 w-px shrink-0 bg-slate-200" aria-hidden="true"></span>
+    <a href="{{ url_for('main_dashboard') }}"
+       class="flex min-w-0 flex-col leading-tight no-underline shrink-0"
+       aria-label="Prompt Wars home">
+      <span class="font-display text-[12px] sm:text-[13px] md:text-[14px] font-semibold tracking-tight text-slate-900 whitespace-nowrap">
+        Prompt <span class="bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">Wars</span>
+      </span>
+      <span class="text-[8px] sm:text-[8px] font-bold uppercase tracking-[0.16em] text-slate-400">Console</span>
+    </a>
+    <span class="h-5 w-px shrink-0 bg-slate-200 hidden sm:block" aria-hidden="true"></span>
+    <a href="{{ portal_dashboard_url }}"
+       rel="noopener"
+       class="hidden sm:inline-flex items-center text-[11px] md:text-xs font-semibold text-slate-500 hover:text-indigo-600 no-underline whitespace-nowrap">
+      Back to CDI dashboard
     </a>
   </div>
 
@@ -35,7 +45,7 @@
   <div id="pw-header-module" class="pointer-events-none hidden md:block absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-20">
     <div class="pw-module-tabs pointer-events-auto relative inline-flex h-[44px] items-center gap-0.5 rounded-full border border-slate-200 bg-slate-100 p-1 shadow-inner box-border"
          role="tablist" aria-label="Module" data-active-module="{{ pw_module }}">
-      <span class="pw-module-tabs-indicator pointer-events-none absolute top-1 bottom-1 left-0 rounded-full bg-white shadow-sm ring-1 ring-slate-200/60 transition-[transform,width] duration-300 ease-out opacity-0"
+      <span class="pw-module-tabs-indicator pointer-events-none absolute top-1 bottom-1 left-0 rounded-full bg-white shadow-sm ring-1 ring-slate-200/60 opacity-0"
             aria-hidden="true"></span>
       {% for m in pw_modules %}
         {% set _short = ('Overview' if m.id == 'overview' else ('In-person' if m.id == 'in_person' else ('Virtual' if m.id == 'virtual' else m.label))) %}
@@ -45,7 +55,7 @@
            aria-selected="{{ 'true' if pw_module == m.id else 'false' }}"
            data-module-id="{{ m.id }}"
            title="{{ m.label }}"
-           class="pw-module-tab relative z-[1] inline-flex h-full min-h-0 items-center justify-center rounded-full px-3 lg:px-4 text-xs font-semibold whitespace-nowrap no-underline transition-colors duration-200 {% if pw_module == m.id %}is-active {{ _active_text }}{% else %}text-slate-500 hover:text-slate-800{% endif %}">{{ _short }}</a>
+           class="pw-module-tab relative z-[1] inline-flex h-full min-h-0 items-center justify-center rounded-full px-3 lg:px-4 text-xs font-semibold whitespace-nowrap no-underline {% if pw_module == m.id %}is-active {{ _active_text }}{% else %}text-slate-500 hover:text-slate-800{% endif %}">{{ _short }}</a>
       {% endfor %}
     </div>
   </div>
@@ -93,7 +103,7 @@
     <p class="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Module</p>
     <div class="pw-module-tabs pw-module-tabs--mobile relative grid h-[44px] grid-cols-3 items-center gap-1 rounded-full border border-slate-200 bg-slate-100 p-1 shadow-inner box-border"
          role="tablist" aria-label="Module" data-active-module="{{ pw_module }}">
-      <span class="pw-module-tabs-indicator pointer-events-none absolute top-1 bottom-1 left-0 rounded-full bg-white shadow-sm ring-1 ring-slate-200/60 transition-[transform,width] duration-300 ease-out opacity-0"
+      <span class="pw-module-tabs-indicator pointer-events-none absolute top-1 bottom-1 left-0 rounded-full bg-white shadow-sm ring-1 ring-slate-200/60 opacity-0"
             aria-hidden="true"></span>
       {% for m in pw_modules %}
         {% set _short = ('Overview' if m.id == 'overview' else ('In-person' if m.id == 'in_person' else ('Virtual' if m.id == 'virtual' else m.label))) %}
@@ -103,7 +113,7 @@
            aria-selected="{{ 'true' if pw_module == m.id else 'false' }}"
            data-module-id="{{ m.id }}"
            title="{{ m.label }}"
-           class="pw-module-tab relative z-[1] inline-flex items-center justify-center rounded-full px-2 py-1.5 text-[13px] font-semibold no-underline text-center transition-colors duration-200 {% if pw_module == m.id %}is-active {{ _active_text }}{% else %}text-slate-500 hover:text-slate-800{% endif %}">{{ _short }}</a>
+           class="pw-module-tab relative z-[1] inline-flex items-center justify-center rounded-full px-2 py-1.5 text-[13px] font-semibold no-underline text-center {% if pw_module == m.id %}is-active {{ _active_text }}{% else %}text-slate-500 hover:text-slate-800{% endif %}">{{ _short }}</a>
       {% endfor %}
     </div>
   </div>
@@ -191,6 +201,7 @@
       var indicator = group.querySelector(".pw-module-tabs-indicator");
       var tabs = Array.prototype.slice.call(group.querySelectorAll(".pw-module-tab"));
       if (!indicator || !tabs.length) return;
+      var faded = false;
 
       function moveTo(el, animate) {
         if (!el) return;
@@ -200,13 +211,22 @@
         var w = rect.width;
         if (!w) return;
         if (!animate) {
+          /* Snap transform/width without animation, but trigger the CSS
+             opacity transition exactly ONCE so the pill smoothly fades in
+             on initial page load. Subsequent re-place calls (rAF, resize)
+             leave opacity alone so they never restart the fade. */
           var prev = indicator.style.transition;
           indicator.style.transition = "none";
           indicator.style.transform = "translateX(" + x + "px)";
           indicator.style.width = w + "px";
-          indicator.style.opacity = "1";
           void indicator.offsetWidth;
           indicator.style.transition = prev || "";
+          if (!faded) {
+            faded = true;
+            requestAnimationFrame(function () {
+              indicator.style.opacity = "1";
+            });
+          }
         } else {
           indicator.style.transform = "translateX(" + x + "px)";
           indicator.style.width = w + "px";

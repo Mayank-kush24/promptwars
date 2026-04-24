@@ -21,8 +21,25 @@ os.environ.setdefault("DATABASE_URL", "postgresql://test:test@127.0.0.1:5432/pro
 os.environ.setdefault("SESSION_SECRET", "test-secret")
 os.environ.setdefault("FLASK_DEBUG", "0")
 os.environ.setdefault("FLASK_USE_RELOADER", "0")
+os.environ.setdefault("H2S_CDI_MODULE_ID", "promptwars-test")
+os.environ.setdefault("H2S_CDI_URL", "http://127.0.0.1:9")
 
 import app as app_module  # noqa: E402
+
+import h2s_cdi_auth as h2s_cdi_auth_mod  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _cdi_auth_bypass_for_tests(monkeypatch):
+    """Portal JWT is not available in unit tests; treat all protected routes as admin."""
+
+    def _enforce_ok(page=None):
+        from flask import g as flask_g
+
+        flask_g.user = {"email": "test@example.com", "name": "Test User", "isAdmin": True}
+        return None
+
+    monkeypatch.setattr(h2s_cdi_auth_mod, "_enforce_request_auth", _enforce_ok)
 
 # Shared stub for Main Data Center dashboard blocks (in-person + virtual pages).
 MDC_PAGE_STUB: dict = {
@@ -70,9 +87,8 @@ def app_mod():
 
 
 @pytest.fixture
-def no_admin_pw(monkeypatch, app_mod):
-    """Disable admin password so admin routes don't redirect."""
-    monkeypatch.setattr(app_mod, "ADMIN_PASSWORD", "")
+def no_admin_pw(app_mod):
+    """Legacy name: CDI auth is bypassed in tests (see ``_cdi_auth_bypass_for_tests``)."""
     return app_mod
 
 
@@ -179,6 +195,72 @@ def virtual_stub(monkeypatch, app_mod):
     ]
     monkeypatch.setattr(
         app_mod, "_load_virtual_challenges_brief", lambda *_a, **_k: list(challenges_brief)
+    )
+    monkeypatch.setattr(
+        app_mod,
+        "_submission_leaderboard_payload",
+        lambda **kw: {
+            "rows": [
+                {
+                    "rank": 1,
+                    "team_name": "Alice",
+                    "leader_name": "Lead A",
+                    "leader_email": "a@example.com",
+                    "total_score": 100.0,
+                    "submitted_at": None,
+                },
+                {
+                    "rank": 2,
+                    "team_name": "Bob",
+                    "leader_name": "Lead B",
+                    "leader_email": "b@example.com",
+                    "total_score": 80.0,
+                    "submitted_at": None,
+                },
+            ],
+            "total": 2,
+            "error": None,
+            "challenge": {
+                "id": int(kw.get("challenge_id") or 101),
+                "title": "Sprint Alpha",
+                "event_id": 1,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        app_mod,
+        "_virtual_arena_challenge_stats",
+        lambda **kw: {
+            "error": None,
+            "challenge_id": int(kw.get("challenge_id") or 101),
+            "opens_at": None,
+            "closes_at": None,
+            "opens_at_display": None,
+            "closes_at_display": "08-05-2026 18:00:00",
+            "opens_at_set": False,
+            "registrations_at_open": None,
+            "registrations_at_close": 42,
+            "total_submissions": 2,
+            "unique_mdc_submissions": 2,
+            "top_400_rows": [
+                {
+                    "rank": 1,
+                    "team_name": "Alice",
+                    "leader_name": "Lead A",
+                    "leader_email": "a@example.com",
+                    "total_score": 100.0,
+                    "submitted_at": "2026-04-24T10:00:00+00:00",
+                },
+                {
+                    "rank": 2,
+                    "team_name": "Bob",
+                    "leader_name": "Lead B",
+                    "leader_email": "b@example.com",
+                    "total_score": 80.0,
+                    "submitted_at": "2026-04-24T11:00:00+00:00",
+                },
+            ],
+        },
     )
     return leaderboard, distribution, bins
 

@@ -11,12 +11,14 @@
 {% include "partials/ui_nav.html" %}
 {% include "partials/ui_sidebar.html" %}
 
-{# Clear the fixed header (h-16) without padding on body — avoids extra blank band above the bar in some browsers. #}
-<div class="pw-page-below-header pt-16 min-h-screen">
-  {# Optional full-bleed slot (used by main_dashboard's hero) #}
+{# Sidebar runs full height (top:0 → bottom:0). Offset the page content for both the
+   sidebar (left) and the fixed header (top). #}
+<div class="pw-page-below-header pt-16 pl-0 md:pl-[var(--pw-sidebar-current)] min-h-screen">
+  {# Optional full-bleed slot (used by main_dashboard's hero). It sits inside the
+     sidebar offset wrapper so it never slides under the sidebar. #}
   {% block hero %}{% endblock %}
 
-  <main class="pw-sidebar-offset pl-0 md:pl-[var(--pw-sidebar-current)]">
+  <main class="pw-sidebar-offset">
     <div class="max-w-7xl mx-auto px-margin py-xl flex flex-col gap-xl">
       {% block content %}{% endblock %}
     </div>

@@ -7,6 +7,10 @@ district-level file (which extends north into PoK / Aksai Chin / Siachen as per
 the official Indian boundary).
 
 The output is written to ``static/geo/in-all-claimed.geo.json``.
+
+If ``in-states-claimed.geo.json`` is absent (district-level GeoJSON from
+``udit-001/india-maps-data``), the script writes the Highcharts base unchanged
+so maps still load; add the districts file later to merge claimed J&K/Ladakh.
 """
 from __future__ import annotations
 
@@ -34,7 +38,27 @@ def _dissolve(features: list[dict]) -> dict:
 
 
 def main() -> None:
+    if not BASE.is_file():
+        raise SystemExit(f"Missing base GeoJSON: {BASE}")
+
     base = json.loads(BASE.read_text(encoding="utf-8"))
+
+    if not DISTRICTS.is_file():
+        out = {
+            "type": "FeatureCollection",
+            "title": "India admin-1 (Highcharts base — optional in-states-claimed.geo.json not present)",
+            "copyright": base.get("copyright") or base.get("copyrightShort") or "",
+            "copyrightShort": base.get("copyrightShort", ""),
+            "copyrightUrl": base.get("copyrightUrl", ""),
+            "features": list(base.get("features", [])),
+        }
+        OUT.write_text(json.dumps(out, separators=(",", ":")), encoding="utf-8")
+        print(
+            f"wrote {OUT.relative_to(ROOT)} ({OUT.stat().st_size} bytes) from base only; "
+            f"add {DISTRICTS.name} to dissolve Jammu and Kashmir + Ladakh from districts."
+        )
+        return
+
     districts = json.loads(DISTRICTS.read_text(encoding="utf-8"))
 
     by_state: dict[str, list[dict]] = {}

@@ -22,6 +22,31 @@ def test_leaderboard_rejects_both_scopes(client):
     assert resp.status_code == 400
 
 
+def test_submission_leaderboard_requires_challenge_id(client):
+    resp = client.get("/api/virtual/submission-leaderboard")
+    assert resp.status_code == 400
+    assert "challenge_id" in resp.get_json().get("error", "").lower()
+
+
+def test_virtual_leaderboard_page_renders(client, no_admin_pw, monkeypatch, app_mod):
+    monkeypatch.setattr(
+        app_mod,
+        "_submission_leaderboard_payload",
+        lambda **kw: {
+            "rows": [],
+            "total": 0,
+            "error": None,
+            "challenge": {"id": 1, "title": "Demo", "event_id": 2},
+        },
+    )
+    monkeypatch.setattr(app_mod, "_load_virtual_challenges_brief", lambda _eid: [])
+    resp = client.get("/virtual/leaderboard")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "Submission leaderboard" in body
+    assert "virtual_challenge_submission_rows" in body
+
+
 def test_distribution_requires_one_scope(client):
     resp = client.get("/api/distribution")
     assert resp.status_code == 400
@@ -112,14 +137,17 @@ def test_virtual_page_renders(client, virtual_stub):
     assert "Virtual Main Data Center" in body
     assert "Alice" in body
     assert "Bob" in body
-    assert "auto-refresh" in body
     assert "Attendance city" not in body
+    assert "Top 400 teams" in body
+    assert "Registrations at close" in body
+    assert "Unique MDC-linked" in body
+    assert "42" in body
 
 
-# ---------- Admin auth gate ----------------------------------------------
+# ---------- Admin / CDI ---------------------------------------------------
 
 
-def test_admin_open_when_no_password(client, no_admin_pw, monkeypatch, app_mod):
+def test_admin_page_renders(client, no_admin_pw, monkeypatch, app_mod):
     # /admin queries DB; stub the engine bits the view uses
     class _ConnStub:
         def __enter__(self):
@@ -153,42 +181,10 @@ def test_admin_open_when_no_password(client, no_admin_pw, monkeypatch, app_mod):
     assert "In-person CSV import" in body
 
 
-def test_admin_redirects_when_password_set(client, monkeypatch, app_mod):
-    monkeypatch.setattr(app_mod, "ADMIN_PASSWORD", "secret")
-    resp = client.get("/admin", follow_redirects=False)
+def test_legacy_admin_login_redirects_to_portal(client):
+    resp = client.get("/admin/login", follow_redirects=False)
     assert resp.status_code in (302, 303)
-    assert "/admin/login" in resp.headers.get("Location", "")
-
-
-def test_admin_login_renders(client, monkeypatch, app_mod):
-    monkeypatch.setattr(app_mod, "ADMIN_PASSWORD", "secret")
-    resp = client.get("/admin/login")
-    assert resp.status_code == 200
-    body = resp.get_data(as_text=True)
-    assert "Admin login" in body
-    assert "Sign in" in body
-
-
-def test_admin_login_rejects_wrong_password(client, monkeypatch, app_mod):
-    monkeypatch.setattr(app_mod, "ADMIN_PASSWORD", "secret")
-    resp = client.post("/admin/login", data={"password": "WRONG"})
-    assert resp.status_code == 401
-    body = resp.get_data(as_text=True)
-    assert "Invalid password" in body
-
-
-def test_admin_login_accepts_correct_password(client, monkeypatch, app_mod):
-    monkeypatch.setattr(app_mod, "ADMIN_PASSWORD", "secret")
-    resp = client.post("/admin/login", data={"password": "secret"}, follow_redirects=False)
-    assert resp.status_code in (302, 303)
-    assert "/admin" in resp.headers.get("Location", "")
-
-
-def test_credits_grant_requires_admin(client, monkeypatch, app_mod):
-    monkeypatch.setattr(app_mod, "ADMIN_PASSWORD", "secret")
-    resp = client.post("/api/credits/grant", json={"participant_id": 1, "delta": 1, "reason": "x"})
-    # admin_required redirects to /admin/login when not authenticated
-    assert resp.status_code in (302, 303, 401)
+    assert "login" in (resp.headers.get("Location") or "").lower()
 
 
 # ---------- Static / misc ------------------------------------------------
@@ -229,12 +225,6 @@ def test_module_subpages_render(client, no_admin_pw, monkeypatch, app_mod):
         resp = client.get(path)
         assert resp.status_code == 200, path
         assert title in resp.get_data(as_text=True), path
-
-
-def test_in_person_users_redirects_when_admin_password_set(client, monkeypatch, app_mod):
-    monkeypatch.setattr(app_mod, "ADMIN_PASSWORD", "secret")
-    resp = client.get("/in-person/users", follow_redirects=False)
-    assert resp.status_code in (302, 303)
 
 
 def test_in_person_users_roster_table(client, no_admin_pw):
@@ -338,12 +328,6 @@ def test_in_person_users_shows_download_and_city_filter(client, no_admin_pw, mon
     assert "attendance_city=Mumbai" in text
 
 
-def test_api_mdc_registration_requires_admin_when_password(client, monkeypatch, app_mod):
-    monkeypatch.setattr(app_mod, "ADMIN_PASSWORD", "secret")
-    resp = client.get("/api/in-person/main-data-center/registrations/1", follow_redirects=False)
-    assert resp.status_code in (302, 303, 401)
-
-
 def test_module_import_pages_when_admin_open(client, no_admin_pw):
     resp_ip = client.get("/in-person/import")
     assert resp_ip.status_code == 200
@@ -360,12 +344,6 @@ def test_module_import_pages_when_admin_open(client, no_admin_pw):
     assert "virtual_main_data_center" in body_v
     assert "/api/import/virtual/main-data-center" in body_v
     assert "/api/credits/grant" in body_v
-
-
-def test_module_import_redirects_when_admin_password_set(client, monkeypatch, app_mod):
-    monkeypatch.setattr(app_mod, "ADMIN_PASSWORD", "secret")
-    assert client.get("/in-person/import").status_code in (302, 303)
-    assert client.get("/virtual/import").status_code in (302, 303)
 
 
 def test_context_processor_injects_defaults(client, overview_stub):

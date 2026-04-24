@@ -281,7 +281,9 @@ window.addEventListener("DOMContentLoaded", function () {
       return;
     }
 
-    var urls = ["/static/geo/in-all-claimed.geo.json"];
+    var routes = (window.__PW_ROUTES__ || {});
+    var geoUrl = routes.indiaGeoUrl || "/static/geo/in-all-claimed.geo.json";
+    var urls = [geoUrl];
 
     function loadGeo(url) {
       return fetch(url).then(function (r) {
@@ -399,7 +401,9 @@ window.addEventListener("DOMContentLoaded", function () {
       })
       .catch(function () {
         host.innerHTML =
-          '<p class="text-xs text-slate-500 p-4 text-center">Could not load <code class="rounded bg-slate-100 px-1">/static/geo/in-all-claimed.geo.json</code>. Run <code class="rounded bg-slate-100 px-1">python scripts/build_india_states_claimed.py</code> to regenerate.</p>';
+          '<p class="text-xs text-slate-500 p-4 text-center">Could not load <code class="rounded bg-slate-100 px-1">' +
+          geoUrl +
+          '</code>. Run <code class="rounded bg-slate-100 px-1">python scripts/build_india_states_claimed.py</code> to regenerate.</p>';
       });
   }
 

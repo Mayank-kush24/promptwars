@@ -10,6 +10,15 @@
   {% endif %}
 </div>
 
+{% if data and data.archive_paths %}
+  <div class="px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-slate-700 text-sm">
+    <span class="font-semibold">Archived as:</span>
+    <ul class="mt-1 list-disc list-inside font-mono text-xs text-slate-600">
+      {% for p in data.archive_paths %}<li>{{ p }}</li>{% endfor %}
+    </ul>
+  </div>
+{% endif %}
+
 {% if data %}
   <div class="glass-panel p-lg rounded-xl">
     <h2 class="font-headline-md text-headline-md text-primary mb-md">Details</h2>

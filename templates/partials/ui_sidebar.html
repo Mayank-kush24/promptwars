@@ -1,8 +1,28 @@
-{# Sidebar (md+): sub-pages for the active module. Module switcher lives in the header. #}
+{# Sidebar (md+): sub-pages for the active module. Module switcher lives in the header.
+   Runs full height (top:0 → bottom:0). The top bar starts to the right of it. #}
 <aside id="pw-sidebar"
-       class="pw-sidebar hidden md:flex fixed top-16 bottom-0 left-0 z-30 flex-col w-[var(--pw-sidebar-current)] bg-white border-r border-slate-200 overflow-hidden"
+       class="pw-sidebar hidden md:flex fixed top-0 bottom-0 left-0 z-40 flex-col w-[var(--pw-sidebar-current)] bg-white border-r border-slate-200 overflow-hidden"
        aria-label="Module pages">
-  <div class="border-b border-slate-100 px-3 py-2">
+  {# Sidebar brand strip: H2S logo + icon-only rail toggle (same height as top bar). #}
+  <div class="pw-sidebar-brand-row h-16 shrink-0 border-b border-slate-200 flex items-center gap-0.5 px-1 sm:px-2 min-w-0">
+    <a href="{{ url_for('main_dashboard') }}"
+       class="pw-sidebar-brand-link flex min-w-0 flex-1 items-center justify-center max-w-full no-underline"
+       aria-label="Home">
+      <img src="{{ url_for('static', filename='branding/H2S_Gradient_Logo.svg') }}"
+           width="405"
+           height="152"
+           class="pw-sidebar-brand-logo block h-8 w-auto max-w-full object-contain object-center"
+           alt="" />
+    </a>
+    <button type="button"
+            class="pw-sidebar-toggle shrink-0 inline-flex items-center justify-center rounded-lg border border-transparent p-1.5 text-slate-600 hover:bg-slate-100 hover:border-slate-200"
+            aria-expanded="true"
+            aria-controls="pw-sidebar"
+            aria-label="Collapse navigation">
+      <span class="material-symbols-outlined pw-sidebar-toggle-icon text-[20px]">chevron_left</span>
+    </button>
+  </div>
+  <div class="pw-sidebar-module-heading border-b border-slate-100 px-3 py-2">
     <p class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Pages</p>
     {% for m in pw_modules %}
       {% if m.id == pw_module %}
@@ -14,21 +34,11 @@
     {% for item in pw_subnav %}
       <a href="{{ item.href }}"
          title="{{ item.label }}"
-         class="pw-sidebar-link group mx-2 flex flex-row items-center gap-2 min-h-[3rem] py-2.5 px-2 rounded-xl no-underline transition-colors
+         class="pw-sidebar-link group mx-2 flex flex-row items-center gap-2 min-h-[3rem] py-2.5 px-2 rounded-xl no-underline
                 {% if item.active %}bg-[var(--pw-accent-soft)] text-[var(--pw-accent-strong)]{% else %}text-slate-600 hover:bg-slate-50 hover:text-slate-900{% endif %}">
         <span class="material-symbols-outlined text-[22px] shrink-0 {% if item.active %}text-[var(--pw-accent-icon)]{% else %}text-slate-500 group-hover:text-slate-700{% endif %}">{{ item.icon }}</span>
         <span class="pw-sidebar-label text-left text-[12px] sm:text-[13px] font-semibold leading-snug flex-1 min-w-0">{{ item.label }}</span>
       </a>
     {% endfor %}
-  </div>
-  <div class="shrink-0 border-t border-slate-200 p-2 bg-white">
-    <button type="button"
-            class="pw-sidebar-toggle flex w-full items-center justify-center gap-2 rounded-xl border border-transparent py-2 text-slate-600 hover:bg-slate-100 hover:border-slate-200 transition-colors"
-            aria-expanded="true"
-            aria-controls="pw-sidebar"
-            aria-label="Collapse navigation">
-      <span class="material-symbols-outlined pw-sidebar-toggle-icon text-[22px]">chevron_left</span>
-      <span class="pw-sidebar-toggle-text text-[11px] font-semibold text-slate-500">Collapse</span>
-    </button>
   </div>
 </aside>

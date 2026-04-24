@@ -106,15 +106,10 @@
   <div id="mdc-inline-result" class="hidden mt-lg pt-lg border-t border-slate-200"></div>
 </div>
 
-{% if adminAuthEnabled %}
-  <div class="flex justify-end">
-    <form action="{{ url_for('admin_logout') }}" method="post">
-      <button type="submit" class="px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50">
-        Log out
-      </button>
-    </form>
-  </div>
-{% endif %}
+<div class="flex justify-end">
+  <a href="{{ url_for('logout') }}"
+     class="inline-flex items-center px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 no-underline">Sign out</a>
+</div>
 {% endblock %}
 
 {% block scripts %}

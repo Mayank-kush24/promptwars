@@ -29,13 +29,6 @@ def test_virtual_challenges_page_renders(client, no_admin_pw, challenges_stub):
     assert "12" in body and "50" in body
 
 
-def test_virtual_challenges_redirects_when_admin_password_set(client, monkeypatch, app_mod):
-    monkeypatch.setattr(app_mod, "ADMIN_PASSWORD", "secret")
-    resp = client.get("/virtual/challenges", follow_redirects=False)
-    assert resp.status_code in (302, 303)
-    assert "/admin/login" in resp.headers.get("Location", "")
-
-
 def test_virtual_challenges_create_validates_missing_title(client, no_admin_pw, challenges_stub):
     resp = client.post(
         "/virtual/challenges",
@@ -314,6 +307,71 @@ def test_virtual_dashboard_shows_eligibility_pill(client, virtual_stub, monkeypa
     assert "Manage challenges" in body
     assert "Challenge eligibility" in body
     assert "150" in body and "200" in body
+
+
+def test_virtual_redirects_when_challenge_id_not_in_event(client, virtual_stub, monkeypatch, app_mod):
+    monkeypatch.setattr(
+        app_mod,
+        "_submission_leaderboard_payload",
+        lambda **kw: {
+            "rows": [],
+            "total": 0,
+            "error": None,
+            "challenge": {"id": int(kw["challenge_id"]), "title": "stub", "event_id": 2},
+        },
+    )
+    resp = client.get("/virtual?challengeId=1", follow_redirects=False)
+    assert resp.status_code == 302
+    loc = resp.headers.get("Location", "")
+    assert "challengeId=1" not in loc
+
+
+def test_virtual_arena_challenge_param_overrides_eligibility(client, virtual_stub, monkeypatch, app_mod):
+    captured: dict = {}
+
+    def _capture(**kw):
+        captured["challenge_id"] = int(kw["challenge_id"])
+        return {
+            "rows": [],
+            "total": 0,
+            "error": None,
+            "challenge": {"id": int(kw["challenge_id"]), "title": "stub", "event_id": 2},
+        }
+
+    monkeypatch.setattr(app_mod, "_submission_leaderboard_payload", _capture)
+    resp = client.get("/virtual?challengeId=101&arenaChallengeId=102")
+    assert resp.status_code == 200
+    assert captured.get("challenge_id") == 102
+
+
+def test_virtual_picks_first_challenge_when_default_missing(client, monkeypatch, app_mod):
+    from tests.conftest import MDC_PAGE_STUB
+
+    brief = [
+        {"id": 55, "title": "Only", "opens_at": None, "closes_at": None, "status": "live"},
+    ]
+    monkeypatch.setattr(app_mod, "_load_virtual_challenges_brief", lambda *_a, **_k: list(brief))
+    monkeypatch.setattr(
+        app_mod,
+        "_load_virtual_bundle",
+        lambda *_a, **_k: ({"rows": [], "error": None}, {"bins": [], "error": None}, []),
+    )
+    monkeypatch.setattr(
+        app_mod,
+        "_submission_leaderboard_payload",
+        lambda **kw: {
+            "rows": [],
+            "total": 0,
+            "error": None,
+            "challenge": {"id": 55, "title": "Only", "event_id": 2},
+        },
+    )
+    monkeypatch.setattr(app_mod, "_load_mdc_stats", lambda *_a, **_k: dict(MDC_PAGE_STUB))
+    resp = client.get("/virtual")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "Only" in body
+    assert 'value="55"' in body
 
 
 # ---------- /api/credits/grant: enforcement ------------------------------

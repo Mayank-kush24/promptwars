@@ -179,13 +179,10 @@
     </nav>
   {% endif %}
 
-  {% if adminAuthEnabled %}
-    <div class="flex justify-end pt-sm">
-      <form action="{{ url_for('admin_logout') }}" method="post">
-        <button type="submit" class="px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50">Log out</button>
-      </form>
-    </div>
-  {% endif %}
+  <div class="flex justify-end pt-sm">
+    <a href="{{ url_for('logout') }}"
+       class="inline-flex items-center px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 no-underline">Sign out</a>
+  </div>
 </div>
 
 <div id="pw-user-overlay" class="pw-user-overlay fixed inset-0 z-[100] items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="pw-user-modal-title" aria-hidden="true">

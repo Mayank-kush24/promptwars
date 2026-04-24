@@ -12,14 +12,14 @@ import os
 import sys
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from functools import wraps
 from io import StringIO
 from pathlib import Path
 from urllib.parse import urlencode
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, redirect, render_template, request, Response, session, url_for
-from sqlalchemy import text
+from flask import Flask, g, jsonify, make_response, redirect, render_template, request, Response, session, url_for
+from werkzeug.middleware.proxy_fix import ProxyFix
+from sqlalchemy import bindparam, text
 from sqlalchemy.engine import Engine
 
 from audit.db import create_engine
@@ -28,9 +28,12 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts import etl_data_center, etl_in_person  # noqa: E402
+from scripts import etl_data_center, etl_in_person, etl_virtual_challenge_submissions  # noqa: E402
+from services.upload_archive import archive_upload, mark_archive_status  # noqa: E402
 
 load_dotenv(ROOT / ".env")
+
+from h2s_cdi_auth import get_portal_url, register_h2s_cdi_auth, register_with_portal  # noqa: E402
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
@@ -38,8 +41,28 @@ DATABASE_URL = os.environ.get(
 )
 APP_HOST = os.environ.get("FLASK_HOST", os.environ.get("HOST", "127.0.0.1"))
 APP_PORT = int(os.environ.get("FLASK_PORT", os.environ.get("PORT", "5000")))
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "dev-change-me")
+MODULE_DISPLAY_NAME = os.environ.get("MODULE_NAME", "Prompt Wars")
+MODULE_BASE_URL = os.environ.get("BASE_URL", f"http://{APP_HOST}:{APP_PORT}").rstrip("/")
+
+APPLICATION_ROOT = (os.environ.get("APPLICATION_ROOT") or "").strip()
+if APPLICATION_ROOT and not APPLICATION_ROOT.startswith("/"):
+    APPLICATION_ROOT = "/" + APPLICATION_ROOT
+
+
+def _cdi_mount_prefix_for_wsgi() -> str:
+    """URL prefix stripped at WSGI level (Flask routes match before ``before_request``)."""
+    r = (APPLICATION_ROOT or "").strip().rstrip("/")
+    if r:
+        return r
+    mid = (os.environ.get("H2S_CDI_MODULE_ID") or os.environ.get("JARVIS_MODULE_ID") or "").strip()
+    if not mid:
+        return ""
+    m = mid.lower().replace(" ", "-")
+    return "/" + m.lstrip("/")
+
+
+CDI_MOUNT_PREFIX = _cdi_mount_prefix_for_wsgi()
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -88,8 +111,161 @@ def _format_dt_display(v) -> str:
 
 engine: Engine = create_engine(DATABASE_URL, future=True)
 
+
+class _StripCdiPathMiddleware:
+    """
+    Strip ``/prompt-wars`` (or APPLICATION_ROOT / module slug) from PATH_INFO before
+    Flask matches URLs. ``before_request`` runs too late — routing already used PATH_INFO.
+    """
+
+    __slots__ = ("app", "prefix")
+
+    def __init__(self, app, prefix: str):
+        self.app = app
+        p = (prefix or "").strip().rstrip("/")
+        self.prefix = p if (not p or p.startswith("/")) else ("/" + p)
+
+    def __call__(self, environ, start_response):
+        if self.prefix:
+            path = environ.get("PATH_INFO") or "/"
+            if path == self.prefix or path.startswith(self.prefix + "/"):
+                script = (environ.get("SCRIPT_NAME") or "").rstrip("/")
+                environ["SCRIPT_NAME"] = (script + self.prefix) if script else self.prefix
+                rest = path[len(self.prefix) :] or "/"
+                if rest == "":
+                    rest = "/"
+                if not rest.startswith("/"):
+                    rest = "/" + rest
+                environ["PATH_INFO"] = rest
+        return self.app(environ, start_response)
+
+
 app = Flask(__name__, template_folder="templates", static_folder="static", static_url_path="/static")
 app.secret_key = SESSION_SECRET
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+if CDI_MOUNT_PREFIX:
+    app.wsgi_app = _StripCdiPathMiddleware(app.wsgi_app, CDI_MOUNT_PREFIX)
+
+
+@app.before_request
+def _pw_set_script_name_for_cdi():
+    """
+    Prefer SCRIPT_NAME from ``X-Forwarded-Prefix`` when PATH_INFO is already normalized
+    (e.g. by ``_StripCdiPathMiddleware``). PATH_INFO rewriting here is a fallback only.
+    """
+    app_root = (APPLICATION_ROOT or CDI_MOUNT_PREFIX or "").strip().rstrip("/")
+    if app_root and not app_root.startswith("/"):
+        app_root = "/" + app_root
+    path_info = request.environ.get("PATH_INFO") or "/"
+    if app_root and (path_info == app_root or path_info.startswith(app_root + "/")):
+        request.environ["SCRIPT_NAME"] = app_root
+        rest = path_info[len(app_root) :] or "/"
+        if rest == "":
+            rest = "/"
+        if not rest.startswith("/"):
+            rest = "/" + rest
+        request.environ["PATH_INFO"] = rest
+        return
+    prefix = request.environ.get("HTTP_X_FORWARDED_PREFIX", "").strip().rstrip("/")
+    if prefix and not prefix.startswith("/"):
+        prefix = "/" + prefix
+    if not prefix and APPLICATION_ROOT:
+        prefix = APPLICATION_ROOT.rstrip("/")
+    if prefix:
+        request.environ["SCRIPT_NAME"] = prefix
+
+
+# Portal page registry (pageId must match path_page_rules and portal RBAC).
+MODULE_PAGES: list[dict[str, str]] = [
+    {"pageId": "overview_dashboard", "label": "Overview · Dashboard", "path": "/"},
+    {"pageId": "overview_users", "label": "Overview · Users", "path": "/overview/users"},
+    {"pageId": "overview_settings", "label": "Overview · Settings", "path": "/overview/settings"},
+    {"pageId": "in_person_dashboard", "label": "In-person · Dashboard", "path": "/in-person"},
+    {"pageId": "in_person_users", "label": "In-person · Users", "path": "/in-person/users"},
+    {"pageId": "in_person_import", "label": "In-person · Import", "path": "/in-person/import"},
+    {"pageId": "in_person_settings", "label": "In-person · Settings", "path": "/in-person/settings"},
+    {"pageId": "virtual_dashboard", "label": "Virtual · Dashboard", "path": "/virtual"},
+    {"pageId": "virtual_leaderboard", "label": "Virtual · Leaderboard", "path": "/virtual/leaderboard"},
+    {"pageId": "virtual_challenges", "label": "Virtual · Challenges", "path": "/virtual/challenges"},
+    {"pageId": "virtual_users", "label": "Virtual · Users", "path": "/virtual/users"},
+    {"pageId": "virtual_import", "label": "Virtual · Import", "path": "/virtual/import"},
+    {"pageId": "virtual_settings", "label": "Virtual · Settings", "path": "/virtual/settings"},
+]
+
+# Longest-prefix wins inside h2s_cdi_auth; order here is readability only.
+_H2S_PATH_PAGE_RULES: list[tuple[str, str]] = [
+    ("/admin/import/virtual/challenge-submissions", "overview_settings"),
+    ("/admin/import/virtual/main-data-center", "overview_settings"),
+    ("/admin/import/in-person/main-data-center", "overview_settings"),
+    ("/admin/import", "overview_settings"),
+    ("/admin", "overview_settings"),
+    ("/api/import/latest", "overview_settings"),
+    ("/api/credits/grant", "overview_settings"),
+    ("/overview/settings", "overview_settings"),
+    ("/api/import/virtual/challenge-submissions", "virtual_import"),
+    ("/api/import/virtual/main-data-center", "virtual_import"),
+    ("/virtual/import", "virtual_import"),
+    ("/api/import/in-person/main-data-center", "in_person_import"),
+    ("/api/import/in-person", "in_person_import"),
+    ("/in-person/import", "in_person_import"),
+    ("/api/virtual/main-data-center/registrations", "virtual_users"),
+    ("/virtual/users/export.csv", "virtual_users"),
+    ("/virtual/users", "virtual_users"),
+    ("/api/in-person/main-data-center/registrations", "in_person_users"),
+    ("/in-person/users/export.csv", "in_person_users"),
+    ("/in-person/users", "in_person_users"),
+    ("/api/virtual/challenges", "virtual_challenges"),
+    ("/virtual/challenges", "virtual_challenges"),
+    ("/api/virtual/submission-leaderboard", "virtual_leaderboard"),
+    ("/api/distribution", "virtual_leaderboard"),
+    ("/api/leaderboard", "virtual_leaderboard"),
+    ("/virtual/leaderboard", "virtual_leaderboard"),
+    ("/api/stats/city", "in_person_dashboard"),
+    ("/api/funnel", "in_person_dashboard"),
+    ("/in-person", "in_person_dashboard"),
+    ("/virtual/settings", "virtual_settings"),
+    ("/overview/users", "overview_users"),
+    ("/virtual", "virtual_dashboard"),
+    ("/", "overview_dashboard"),
+]
+# Portal may redirect using pageId as a single path segment (see h2s_cdi_auth._first_allowed_path).
+_H2S_PATH_PAGE_RULES.extend((f"/{p['pageId']}", p["pageId"]) for p in MODULE_PAGES)
+
+register_h2s_cdi_auth(
+    app,
+    public_paths=(
+        "/static",
+        "/favicon.ico",
+        "/api/health",
+        "/login",
+        "/logout",
+        "/admin/login",
+    ),
+    path_page_rules=_H2S_PATH_PAGE_RULES,
+    default_page=None,
+)
+
+
+def _pw_cdi_first_allowed_path(pages: list[str] | None) -> str:
+    """
+    ``h2s_cdi_auth`` uses ``pages[0]`` from the JWT; portal order is often alphabetical,
+    so ``in_person_dashboard`` wins over ``overview_dashboard``. Prefer the overview
+    home when it is among allowed pages; otherwise use ``MODULE_PAGES`` order.
+    """
+    _root = (request.environ.get("SCRIPT_NAME") or "").rstrip("/")
+    if not pages:
+        return f"{_root}/dashboard"
+    if "overview_dashboard" in pages:
+        pid = "overview_dashboard"
+    else:
+        order = [p["pageId"] for p in MODULE_PAGES]
+        pid = min(pages, key=lambda p: (order.index(p) if p in order else 9999, p))
+    return f"{_root}/{pid}"
+
+
+import h2s_cdi_auth as _h2s_cdi_auth_module  # noqa: E402
+
+_h2s_cdi_auth_module._first_allowed_path = _pw_cdi_first_allowed_path
 
 # Master Audit Log: install once at boot. After this call every HTTP request,
 # every SQL statement (incl. SELECT), and every auth event is captured into
@@ -113,9 +289,13 @@ _PW_ENDPOINT_NAV: dict[str, tuple[str, str]] = {
     "api_in_person_mdc_registration": ("in_person", "users"),
     "api_virtual_mdc_registration": ("virtual", "users"),
     "api_import_virtual_main_data_center": ("virtual", "import"),
+    "api_import_virtual_challenge_submissions": ("virtual", "import"),
     "admin_import_virtual_main_data_center": ("overview", "settings"),
+    "admin_import_virtual_challenge_submissions": ("overview", "settings"),
     "virtual_users_export_csv": ("virtual", "users"),
     "virtual_page": ("virtual", "dashboard"),
+    "virtual_submission_leaderboard": ("virtual", "leaderboard"),
+    "api_virtual_submission_leaderboard": ("virtual", "leaderboard"),
     "virtual_users": ("virtual", "users"),
     "virtual_settings": ("virtual", "settings"),
     "virtual_import": ("virtual", "import"),
@@ -126,9 +306,8 @@ _PW_ENDPOINT_NAV: dict[str, tuple[str, str]] = {
     "api_virtual_challenges": ("virtual", "challenges"),
     "api_virtual_challenge_eligibility": ("virtual", "challenges"),
     "admin_page": ("overview", "settings"),
-    "admin_login": ("overview", "settings"),
-    "admin_login_post": ("overview", "settings"),
-    "admin_logout": ("overview", "settings"),
+    "portal_login": ("overview", "settings"),
+    "logout": ("overview", "settings"),
     "admin_import_in_person": ("overview", "settings"),
     "admin_import_in_person_data_center": ("overview", "settings"),
     "admin_result": ("overview", "settings"),
@@ -152,6 +331,7 @@ def _pw_subnav_rows(module: str) -> list[dict[str, str]]:
     else:
         spec = (
             ("dashboard", "Dashboard", "virtual_page", "stadia_controller"),
+            ("leaderboard", "Leaderboard", "virtual_submission_leaderboard", "leaderboard"),
             ("challenges", "Challenges", "virtual_challenges", "flag"),
             ("users", "Users", "virtual_users", "group"),
             ("import", "Import", "virtual_import", "upload_file"),
@@ -180,6 +360,7 @@ def _inject_ui_context() -> dict:
         {"id": "in_person", "label": "Prompt Wars In-person", "href": url_for("in_person_page")},
         {"id": "virtual", "label": "Prompt Wars Virtual", "href": url_for("virtual_page")},
     ]
+    _portal = get_portal_url().rstrip("/")
     return {
         "in_person_event_id": request.args.get("inPersonEventId", type=int) or DEFAULT_IN_PERSON_EVENT_ID,
         "virtual_event_id": request.args.get("virtualEventId", type=int) or DEFAULT_VIRTUAL_EVENT_ID,
@@ -188,19 +369,9 @@ def _inject_ui_context() -> dict:
         "pw_nav_sub": pw_nav_sub,
         "pw_subnav": pw_subnav,
         "pw_modules": pw_modules,
+        "portal_url": _portal,
+        "portal_dashboard_url": f"{_portal}/dashboard",
     }
-
-
-def admin_required(fn):
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        if not ADMIN_PASSWORD:
-            return fn(*args, **kwargs)
-        if session.get("admin"):
-            return fn(*args, **kwargs)
-        return redirect(url_for("admin_login"))
-
-    return wrapper
 
 
 def _fetch_allowed_city_ids(conn, event_id: int) -> set[int]:
@@ -251,10 +422,37 @@ def _import_in_person_core():
     if not rsvp_file or not sub_file:
         return jsonify({"error": "Both rsvps and submissions CSV files are required"}), 400
 
+    archived_rsvp = archive_upload(
+        rsvp_file,
+        engine=engine,
+        module="in_person_rsvps",
+        source_route=request.path,
+        event_id=event_id,
+    )
+    archived_sub = archive_upload(
+        sub_file,
+        engine=engine,
+        module="in_person_submissions",
+        source_route=request.path,
+        event_id=event_id,
+    )
+    archive_ids = [a.id for a in (archived_rsvp, archived_sub) if a.id is not None]
+
+    def _mark_all(status: str, *, error: str | None = None, rows_written: int | None = None) -> None:
+        for aid in archive_ids:
+            mark_archive_status(
+                aid,
+                status,
+                engine=engine,
+                error=error,
+                rows_written=rows_written,
+            )
+
     job_id = None
     try:
-        df_r = etl_in_person.parse_rsvps_csv(rsvp_file.stream)
-        df_s = etl_in_person.parse_submissions_csv(sub_file.stream)
+        df_r = etl_in_person.parse_rsvps_csv(archived_rsvp.fresh_stream())
+        df_s = etl_in_person.parse_submissions_csv(archived_sub.fresh_stream())
+        _mark_all("parsed")
 
         with engine.connect() as conn:
             ev = conn.execute(
@@ -262,8 +460,10 @@ def _import_in_person_core():
                 {"id": event_id},
             ).fetchone()
             if not ev:
+                _mark_all("failed", error="event not found")
                 return jsonify({"error": "event not found"}), 404
             if str(ev[1]) != "in_person":
+                _mark_all("failed", error="event must be in_person kind")
                 return jsonify({"error": "event must be in_person kind"}), 400
 
             allowed = _fetch_allowed_city_ids(conn, event_id)
@@ -280,6 +480,8 @@ def _import_in_person_core():
                 ),
             )
             job_id = int(res.scalar_one())
+            for aid in archive_ids:
+                mark_archive_status(aid, "parsed", engine=engine, import_job_id=job_id)
 
             result = etl_in_person.to_etl_result(df_r, df_s)
 
@@ -345,8 +547,18 @@ def _import_in_person_core():
                 {"rc": json.dumps(counts), "jid": job_id},
             )
 
-        return jsonify({"import_job_id": job_id, "status": "success", "row_counts": counts})
+        rows_total = rsvp_inserted + sub_inserted
+        _mark_all("success", rows_written=rows_total)
+        return jsonify(
+            {
+                "import_job_id": job_id,
+                "status": "success",
+                "row_counts": counts,
+                "archive_paths": [a.stored_path for a in (archived_rsvp, archived_sub)],
+            }
+        )
     except ValueError as ve:
+        _mark_all("failed", error=str(ve))
         if job_id is not None:
             with engine.begin() as conn:
                 conn.execute(
@@ -361,6 +573,7 @@ def _import_in_person_core():
                 )
         return jsonify({"error": str(ve)}), 400
     except Exception as exc:  # noqa: BLE001
+        _mark_all("failed", error=str(exc))
         if job_id is not None:
             with engine.begin() as conn:
                 conn.execute(
@@ -426,6 +639,44 @@ _MDC_UPSERT_SQL = """
 _IN_PERSON_MDC_UPSERT = text(_MDC_UPSERT_SQL.format(table=TABLE_IN_PERSON_MDC))
 _VIRTUAL_MDC_UPSERT = text(_MDC_UPSERT_SQL.format(table=TABLE_VIRTUAL_MDC))
 
+_VCSR_UPSERT = text(
+    """
+    INSERT INTO virtual_challenge_submission_rows (
+      event_id, challenge_id, import_job_id, virtual_mdc_registration_id, source_sheet_name,
+      team_name, leader_name, leader_email, leader_phone, team_size, problem_statements,
+      total_score, deployed_link, linkedin_post, github_repository_link,
+      export_created_at, export_created_by_name, export_created_by_email,
+      export_updated_at, export_updated_by_name, export_updated_by_email
+    ) VALUES (
+      :event_id, :challenge_id, :import_job_id, :virtual_mdc_registration_id, :source_sheet_name,
+      :team_name, :leader_name, :leader_email, :leader_phone, :team_size, :problem_statements,
+      :total_score, :deployed_link, :linkedin_post, :github_repository_link,
+      :export_created_at, :export_created_by_name, :export_created_by_email,
+      :export_updated_at, :export_updated_by_name, :export_updated_by_email
+    )
+    ON CONFLICT (challenge_id, team_name_normalized) DO UPDATE SET
+      import_job_id = EXCLUDED.import_job_id,
+      virtual_mdc_registration_id = EXCLUDED.virtual_mdc_registration_id,
+      source_sheet_name = EXCLUDED.source_sheet_name,
+      leader_name = EXCLUDED.leader_name,
+      leader_email = EXCLUDED.leader_email,
+      leader_phone = EXCLUDED.leader_phone,
+      team_size = EXCLUDED.team_size,
+      problem_statements = EXCLUDED.problem_statements,
+      total_score = EXCLUDED.total_score,
+      deployed_link = EXCLUDED.deployed_link,
+      linkedin_post = EXCLUDED.linkedin_post,
+      github_repository_link = EXCLUDED.github_repository_link,
+      export_created_at = EXCLUDED.export_created_at,
+      export_created_by_name = EXCLUDED.export_created_by_name,
+      export_created_by_email = EXCLUDED.export_created_by_email,
+      export_updated_at = EXCLUDED.export_updated_at,
+      export_updated_by_name = EXCLUDED.export_updated_by_name,
+      export_updated_by_email = EXCLUDED.export_updated_by_email,
+      updated_at = now()
+    """
+)
+
 
 def _import_in_person_main_data_center_core():
     event_id = DEFAULT_IN_PERSON_EVENT_ID
@@ -438,10 +689,23 @@ def _import_in_person_main_data_center_core():
     if not (fn.endswith(".csv") or fn.endswith(".xlsx") or fn.endswith(".xls")):
         return jsonify({"error": "File must be .csv, .xlsx, or .xls"}), 400
 
+    archived = archive_upload(
+        upload,
+        engine=engine,
+        module="in_person_mdc",
+        source_route=request.path,
+        event_id=event_id,
+    )
+
     try:
-        rows, parse_stats = etl_data_center.parse_main_data_center_file(upload.stream, upload.filename or "")
+        rows, parse_stats = etl_data_center.parse_main_data_center_file(
+            archived.fresh_stream(), upload.filename or ""
+        )
     except ValueError as ve:
+        mark_archive_status(archived.id, "failed", engine=engine, error=str(ve))
         return jsonify({"error": str(ve)}), 400
+
+    mark_archive_status(archived.id, "parsed", engine=engine)
 
     with engine.connect() as conn:
         ev = conn.execute(
@@ -449,8 +713,10 @@ def _import_in_person_main_data_center_core():
             {"id": event_id},
         ).fetchone()
         if not ev:
+            mark_archive_status(archived.id, "failed", engine=engine, error="event not found")
             return jsonify({"error": "event not found"}), 404
         if str(ev[1]) != "in_person":
+            mark_archive_status(archived.id, "failed", engine=engine, error="event must be in_person kind")
             return jsonify({"error": "event must be in_person kind"}), 400
 
     rows_created = 0
@@ -466,9 +732,11 @@ def _import_in_person_main_data_center_core():
                 else:
                     rows_updated += 1
     except Exception as exc:  # noqa: BLE001
+        mark_archive_status(archived.id, "failed", engine=engine, error=str(exc))
         return jsonify({"error": str(exc), "parse_stats": parse_stats}), 500
 
     rows_written = rows_created + rows_updated
+    mark_archive_status(archived.id, "success", engine=engine, rows_written=rows_written)
     payload = {
         "status": "success",
         "rows_created": rows_created,
@@ -478,6 +746,7 @@ def _import_in_person_main_data_center_core():
         "rows_read": int(parse_stats.get("rows_read") or 0),
         "rows_after_dedupe": int(parse_stats.get("rows_after_dedupe") or 0),
         "duplicate_emails_collapsed": int(parse_stats.get("duplicate_emails_collapsed") or 0),
+        "archive_path": archived.stored_path,
     }
     return jsonify(payload)
 
@@ -493,10 +762,23 @@ def _import_virtual_main_data_center_core():
     if not (fn.endswith(".csv") or fn.endswith(".xlsx") or fn.endswith(".xls")):
         return jsonify({"error": "File must be .csv, .xlsx, or .xls"}), 400
 
+    archived = archive_upload(
+        upload,
+        engine=engine,
+        module="virtual_mdc",
+        source_route=request.path,
+        event_id=event_id,
+    )
+
     try:
-        rows, parse_stats = etl_data_center.parse_main_data_center_file(upload.stream, upload.filename or "")
+        rows, parse_stats = etl_data_center.parse_main_data_center_file(
+            archived.fresh_stream(), upload.filename or ""
+        )
     except ValueError as ve:
+        mark_archive_status(archived.id, "failed", engine=engine, error=str(ve))
         return jsonify({"error": str(ve)}), 400
+
+    mark_archive_status(archived.id, "parsed", engine=engine)
 
     with engine.connect() as conn:
         ev = conn.execute(
@@ -504,8 +786,10 @@ def _import_virtual_main_data_center_core():
             {"id": event_id},
         ).fetchone()
         if not ev:
+            mark_archive_status(archived.id, "failed", engine=engine, error="event not found")
             return jsonify({"error": "event not found"}), 404
         if str(ev[1]) != "virtual":
+            mark_archive_status(archived.id, "failed", engine=engine, error="event must be virtual kind")
             return jsonify({"error": "event must be virtual kind"}), 400
 
     rows_created = 0
@@ -521,9 +805,11 @@ def _import_virtual_main_data_center_core():
                 else:
                     rows_updated += 1
     except Exception as exc:  # noqa: BLE001
+        mark_archive_status(archived.id, "failed", engine=engine, error=str(exc))
         return jsonify({"error": str(exc), "parse_stats": parse_stats}), 500
 
     rows_written = rows_created + rows_updated
+    mark_archive_status(archived.id, "success", engine=engine, rows_written=rows_written)
     payload = {
         "status": "success",
         "rows_created": rows_created,
@@ -533,12 +819,225 @@ def _import_virtual_main_data_center_core():
         "rows_read": int(parse_stats.get("rows_read") or 0),
         "rows_after_dedupe": int(parse_stats.get("rows_after_dedupe") or 0),
         "duplicate_emails_collapsed": int(parse_stats.get("duplicate_emails_collapsed") or 0),
+        "archive_path": archived.stored_path,
     }
     return jsonify(payload)
 
 
+def _import_virtual_challenge_submissions_core():
+    """Multi-sheet .xlsx: tabs ``Submission …`` → challenges; rows upserted by team per challenge."""
+    event_id = DEFAULT_VIRTUAL_EVENT_ID
+
+    upload = request.files.get("virtual_challenge_submissions")
+    if not upload or not upload.filename:
+        return jsonify({"error": "An .xlsx file is required (field virtual_challenge_submissions)"}), 400
+
+    fn = (upload.filename or "").lower()
+    if not fn.endswith(".xlsx"):
+        return jsonify({"error": "File must be .xlsx"}), 400
+
+    archived = archive_upload(
+        upload,
+        engine=engine,
+        module="virtual_challenge_submissions",
+        source_route=request.path,
+        event_id=event_id,
+    )
+
+    with engine.connect() as conn:
+        ch_rows = conn.execute(
+            text(
+                """
+                SELECT id, title, import_sheet_suffix
+                FROM challenges
+                WHERE event_id = :eid
+                ORDER BY id
+                """
+            ),
+            {"eid": event_id},
+        ).mappings().all()
+        challenges = [dict(r) for r in ch_rows]
+
+    if not challenges:
+        mark_archive_status(
+            archived.id,
+            "failed",
+            engine=engine,
+            error="No challenges defined for this virtual event. Create challenges first.",
+        )
+        return (
+            jsonify(
+                {
+                    "error": "No challenges defined for this virtual event. Create challenges first.",
+                }
+            ),
+            400,
+        )
+
+    try:
+        rows, parse_stats = etl_virtual_challenge_submissions.parse_virtual_challenge_submissions_workbook(
+            archived.fresh_stream(), upload.filename or "", challenges
+        )
+    except ValueError as ve:
+        mark_archive_status(archived.id, "failed", engine=engine, error=str(ve))
+        return jsonify({"error": str(ve)}), 400
+
+    emails_set = sorted({(r.get("leader_email") or "").strip().lower() for r in rows if (r.get("leader_email") or "").strip()})
+    if not emails_set:
+        mark_archive_status(archived.id, "failed", engine=engine, error="No leader emails in parsed rows")
+        return jsonify({"error": "No leader emails in parsed rows"}), 400
+
+    with engine.connect() as conn:
+        ev = conn.execute(
+            text("SELECT id, kind FROM events WHERE id = :id"),
+            {"id": event_id},
+        ).fetchone()
+        if not ev:
+            mark_archive_status(archived.id, "failed", engine=engine, error="event not found")
+            return jsonify({"error": "event not found"}), 404
+        if str(ev[1]) != "virtual":
+            mark_archive_status(archived.id, "failed", engine=engine, error="event must be virtual kind")
+            return jsonify({"error": "event must be virtual kind"}), 400
+
+        m_stmt = text(
+            f"""
+            SELECT id, email_normalized
+            FROM {TABLE_VIRTUAL_MDC}
+            WHERE event_id = :eid AND email_normalized IN :emails
+            """
+        ).bindparams(bindparam("emails", expanding=True))
+        mrows = conn.execute(m_stmt, {"eid": event_id, "emails": emails_set}).fetchall()
+        mdc_by_email = {str(r[1]): int(r[0]) for r in mrows}
+
+    missing = [e for e in emails_set if e not in mdc_by_email]
+    if missing:
+        msg = (
+            "Leader email(s) not found in Virtual Main Data Center for this event "
+            f"(showing up to 20 of {len(missing)}): {', '.join(missing[:20])}"
+        )
+        mark_archive_status(archived.id, "failed", engine=engine, error=msg)
+        id_to_title = {int(c["id"]): (c.get("title") or "") for c in challenges}
+        sheets_disp: dict[str, dict] = {}
+        for sn, info in (parse_stats.get("sheets") or {}).items():
+            cid = int(info.get("challenge_id") or 0)
+            sheets_disp[str(sn)] = {
+                **dict(info),
+                "challenge_title": id_to_title.get(cid, ""),
+            }
+        parse_for_ui = {**parse_stats, "sheets": sheets_disp}
+        return jsonify(
+            {
+                "error": msg,
+                "missing_emails": missing,
+                "nothing_written": True,
+                "target_table": "virtual_challenge_submission_rows",
+                "virtual_event_id": event_id,
+                "parse_stats": parse_for_ui,
+                "rows_ready_to_import": len(rows),
+                "archive_path": archived.stored_path,
+            }
+        ), 400
+
+    mark_archive_status(archived.id, "parsed", engine=engine)
+
+    job_id: int | None = None
+    try:
+        with engine.begin() as conn:
+            res = conn.execute(
+                text(
+                    """
+                    INSERT INTO import_jobs (module, status, started_at, row_counts)
+                    VALUES ('virtual_challenge_submissions', 'running', now(), '{}'::jsonb)
+                    RETURNING id
+                    """
+                ),
+            )
+            job_id = int(res.scalar_one())
+            mark_archive_status(archived.id, "parsed", engine=engine, import_job_id=job_id)
+
+            for r in rows:
+                email_n = (r.get("leader_email") or "").strip().lower()
+                vid = mdc_by_email[email_n]
+                params = {
+                    "event_id": event_id,
+                    "challenge_id": int(r["challenge_id"]),
+                    "import_job_id": job_id,
+                    "virtual_mdc_registration_id": vid,
+                    "source_sheet_name": r["source_sheet_name"],
+                    "team_name": (r.get("team_name") or "").strip(),
+                    "leader_name": r.get("leader_name"),
+                    "leader_email": (r.get("leader_email") or "").strip(),
+                    "leader_phone": r.get("leader_phone"),
+                    "team_size": r.get("team_size"),
+                    "problem_statements": r.get("problem_statements"),
+                    "total_score": r.get("total_score"),
+                    "deployed_link": r.get("deployed_link"),
+                    "linkedin_post": r.get("linkedin_post"),
+                    "github_repository_link": r.get("github_repository_link"),
+                    "export_created_at": r.get("export_created_at"),
+                    "export_created_by_name": r.get("export_created_by_name"),
+                    "export_created_by_email": r.get("export_created_by_email"),
+                    "export_updated_at": r.get("export_updated_at"),
+                    "export_updated_by_name": r.get("export_updated_by_name"),
+                    "export_updated_by_email": r.get("export_updated_by_email"),
+                }
+                conn.execute(_VCSR_UPSERT, params)
+
+            counts = {**parse_stats, "rows_written": len(rows)}
+            conn.execute(
+                text(
+                    """
+                    UPDATE import_jobs
+                    SET status = 'success', finished_at = now(), row_counts = CAST(:rc AS jsonb), error_message = NULL
+                    WHERE id = :jid
+                    """
+                ),
+                {"rc": json.dumps(counts), "jid": job_id},
+            )
+
+        mark_archive_status(archived.id, "success", engine=engine, rows_written=len(rows))
+        id_to_title = {int(c["id"]): (c.get("title") or "") for c in challenges}
+        sheets_disp: dict[str, dict] = {}
+        for sn, info in (parse_stats.get("sheets") or {}).items():
+            cid = int(info.get("challenge_id") or 0)
+            sheets_disp[str(sn)] = {
+                **dict(info),
+                "challenge_title": id_to_title.get(cid, ""),
+            }
+        parse_for_ui = {**parse_stats, "sheets": sheets_disp}
+        return jsonify(
+            {
+                "status": "success",
+                "import_job_id": job_id,
+                "rows_written": len(rows),
+                "parse_stats": parse_for_ui,
+                "archive_path": archived.stored_path,
+                "target_table": "virtual_challenge_submission_rows",
+                "virtual_event_id": event_id,
+                "merge_policy": (
+                    "Upsert: each row is keyed by (challenge_id, team name). "
+                    "Re-importing the same team updates the existing row."
+                ),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        mark_archive_status(archived.id, "failed", engine=engine, error=str(exc))
+        if job_id is not None:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE import_jobs
+                        SET status = 'failed', finished_at = now(), error_message = :msg
+                        WHERE id = :jid
+                        """
+                    ),
+                    {"msg": str(exc), "jid": job_id},
+                )
+        return jsonify({"error": str(exc), "parse_stats": parse_stats}), 500
+
+
 @app.post("/admin/import")
-@admin_required
 def admin_import_in_person():
     out = _import_in_person_core()
     resp, status = out if isinstance(out, tuple) else (out, 200)
@@ -565,13 +1064,11 @@ def admin_import_in_person():
 
 
 @app.post("/api/import/in-person")
-@admin_required
 def api_import_in_person():
     return _import_in_person_core()
 
 
 @app.post("/admin/import/in-person/main-data-center")
-@admin_required
 def admin_import_in_person_data_center():
     out = _import_in_person_main_data_center_core()
     resp, status = out if isinstance(out, tuple) else (out, 200)
@@ -602,19 +1099,16 @@ def admin_import_in_person_data_center():
 
 
 @app.post("/api/import/in-person/main-data-center")
-@admin_required
 def api_import_in_person_main_data_center():
     return _import_in_person_main_data_center_core()
 
 
 @app.post("/api/import/virtual/main-data-center")
-@admin_required
 def api_import_virtual_main_data_center():
     return _import_virtual_main_data_center_core()
 
 
 @app.post("/admin/import/virtual/main-data-center")
-@admin_required
 def admin_import_virtual_main_data_center():
     out = _import_virtual_main_data_center_core()
     resp, status = out if isinstance(out, tuple) else (out, 200)
@@ -645,8 +1139,41 @@ def admin_import_virtual_main_data_center():
     )
 
 
+@app.post("/api/import/virtual/challenge-submissions")
+def api_import_virtual_challenge_submissions():
+    return _import_virtual_challenge_submissions_core()
+
+
+@app.post("/admin/import/virtual/challenge-submissions")
+def admin_import_virtual_challenge_submissions():
+    out = _import_virtual_challenge_submissions_core()
+    resp, status = out if isinstance(out, tuple) else (out, 200)
+    payload = resp.get_json(silent=True) if hasattr(resp, "get_json") else None
+    if status != 200:
+        msg = (payload or {}).get("error") if isinstance(payload, dict) else str(payload)
+        return (
+            render_template(
+                "virtual_challenge_submissions_import_result.html",
+                title="Virtual challenge submissions import",
+                ok=False,
+                message=msg or "Import failed",
+                stats=None,
+                error_detail=payload if isinstance(payload, dict) else None,
+            ),
+            status,
+        )
+    stats = payload if isinstance(payload, dict) else {}
+    return render_template(
+        "virtual_challenge_submissions_import_result.html",
+        title="Virtual challenge submissions import",
+        ok=True,
+        message="Challenge submissions import completed",
+        stats=stats,
+        error_detail=None,
+    )
+
+
 @app.get("/api/in-person/main-data-center/registrations/<int:reg_id>")
-@admin_required
 @audit_view(
     entity="in_person_main_data_center_registrations",
     module="in_person",
@@ -678,7 +1205,6 @@ def api_in_person_mdc_registration(reg_id: int):
 
 
 @app.get("/api/virtual/main-data-center/registrations/<int:reg_id>")
-@admin_required
 @audit_view(
     entity="virtual_main_data_center_registrations",
     module="virtual",
@@ -868,8 +1394,37 @@ def leaderboard():
     return jsonify({"scope": scope, "rows": [_serialize(r) for r in rows]})
 
 
+@app.get("/api/virtual/submission-leaderboard")
+def api_virtual_submission_leaderboard():
+    """Team scores from imported XLSX rows; not the credit_ledger leaderboard."""
+    eid = request.args.get("virtualEventId", type=int) or DEFAULT_VIRTUAL_EVENT_ID
+    cid = request.args.get("challenge_id", type=int)
+    if cid is None:
+        return jsonify({"error": "challenge_id is required"}), 400
+    limit = request.args.get("limit", default=50, type=int) or 50
+    offset = request.args.get("offset", default=0, type=int) or 0
+    payload = _submission_leaderboard_payload(event_id=eid, challenge_id=cid, limit=limit, offset=offset)
+    if payload.get("error") == "challenge not found":
+        return jsonify({"error": "challenge not found"}), 404
+    if payload.get("error"):
+        return jsonify({"error": payload["error"]}), 500
+    ch = payload.get("challenge") or {}
+    return jsonify(
+        {
+            "scope": {
+                "virtual_event_id": int(eid),
+                "challenge_id": int(ch.get("id", cid)),
+                "challenge_title": ch.get("title") or "",
+            },
+            "rows": payload["rows"],
+            "total": payload["total"],
+            "limit": min(max(int(limit), 1), 500),
+            "offset": max(int(offset), 0),
+        }
+    )
+
+
 @app.post("/api/credits/grant")
-@admin_required
 def credits_grant():
     body = request.get_json(silent=True) or {}
     participant_id = body.get("participant_id")
@@ -1565,6 +2120,8 @@ def _load_mdc_stats(event_id: int, *, mode: str = "in_person") -> dict:
                 out["timeline_labels"] = labels
                 out["timeline_counts"] = counts
 
+            # Hour buckets: TIMESTAMPTZ -> local IST wall clock, then EXTRACT(HOUR).
+            # (Same semantics as timestamps that already include +05:30 in the export.)
             hrows = conn.execute(
                 text(
                     f"""
@@ -1733,7 +2290,7 @@ def _get_virtual_challenge(challenge_id: int) -> dict | None:
             row = conn.execute(
                 text(
                     """
-                    SELECT c.id, c.event_id, c.title, c.description, c.slug,
+                    SELECT c.id, c.event_id, c.title, c.description, c.slug, c.import_sheet_suffix,
                            c.opens_at, c.closes_at, c.status, c.created_at, c.updated_at,
                            e.kind AS event_kind, e.name AS event_name
                     FROM challenges c
@@ -1774,7 +2331,7 @@ def _load_virtual_challenges(event_id: int) -> list[dict]:
             rows = conn.execute(
                 text(
                     f"""
-                    SELECT c.id, c.title, c.description, c.slug,
+                    SELECT c.id, c.title, c.description, c.slug, c.import_sheet_suffix,
                            c.opens_at, c.closes_at, c.status,
                            c.created_at, c.updated_at,
                            COUNT(m.id) FILTER (
@@ -1812,7 +2369,7 @@ def _load_virtual_challenges_brief(event_id: int) -> list[dict]:
             rows = conn.execute(
                 text(
                     """
-                    SELECT id, title, opens_at, closes_at, status
+                    SELECT id, title, import_sheet_suffix, opens_at, closes_at, status
                     FROM challenges
                     WHERE event_id = :eid
                     ORDER BY
@@ -1826,6 +2383,51 @@ def _load_virtual_challenges_brief(event_id: int) -> list[dict]:
         return [dict(r) for r in rows]
     except Exception:  # noqa: BLE001
         return []
+
+
+def _resolve_virtual_arena_challenge_id(
+    event_id: int,
+    *,
+    requested: int | None,
+    challenges: list[dict] | None = None,
+) -> tuple[int | None, list[dict]]:
+    """Challenge id for Virtual arena charts / submission leaderboard for this event.
+
+    If ``requested`` is in the event's challenge list, use it. If the URL omits a
+    challenge, prefer ``DEFAULT_CHALLENGE_ID`` when that row still exists; otherwise
+    the first challenge for the event (by the same ordering as
+    :func:`_load_virtual_challenges_brief`).     Stale ids (e.g. deleted challenge #1)
+    are not used.
+    """
+    chs = challenges if challenges is not None else _load_virtual_challenges_brief(event_id)
+    ids = [int(c["id"]) for c in chs]
+    if not ids:
+        return None, chs
+    id_set = set(ids)
+    if requested is not None and requested in id_set:
+        return requested, chs
+    if requested is None and DEFAULT_CHALLENGE_ID in id_set:
+        return DEFAULT_CHALLENGE_ID, chs
+    return ids[0], chs
+
+
+def _effective_arena_challenge_seed(
+    *,
+    arena_challenge_id: int | None,
+    eligibility_challenge_id: int | None,
+    valid_ids: set[int],
+) -> int | None:
+    """Pick URL intent for which challenge powers the Virtual arena (LB + distribution).
+
+    Explicit ``arenaChallengeId`` wins when valid. Otherwise a valid ``challengeId``
+    (eligibility filter) still drives the arena for backward compatibility. If neither
+    applies, returns None so :func:`_resolve_virtual_arena_challenge_id` applies defaults.
+    """
+    if arena_challenge_id is not None and arena_challenge_id in valid_ids:
+        return arena_challenge_id
+    if eligibility_challenge_id is not None and eligibility_challenge_id in valid_ids:
+        return eligibility_challenge_id
+    return None
 
 
 def _load_virtual_eligibility_summary(event_id: int, challenge_id: int) -> dict:
@@ -2209,6 +2811,226 @@ def _load_virtual_bundle(challenge_id: int, bins: int = 10) -> tuple[dict, dict,
     return leaderboard, distribution, dist_bins
 
 
+def _validate_virtual_submission_challenge(conn, *, event_id: int, challenge_id: int) -> dict | None:
+    """Challenge must belong to event_id and event must be virtual."""
+    row = conn.execute(
+        text(
+            """
+            SELECT c.id, c.title, c.event_id
+            FROM challenges c
+            JOIN events e ON e.id = c.event_id AND e.kind = 'virtual'
+            WHERE c.id = :cid AND c.event_id = :eid
+            """
+        ),
+        {"cid": int(challenge_id), "eid": int(event_id)},
+    ).mappings().fetchone()
+    return dict(row) if row else None
+
+
+def _submission_leaderboard_payload(
+    *,
+    event_id: int,
+    challenge_id: int,
+    limit: int,
+    offset: int,
+) -> dict:
+    """
+    Team rows from virtual_challenge_submission_rows for one challenge.
+    Order: total_score DESC, export_created_at ASC (earlier submission wins ties), id ASC.
+    """
+    limit = min(max(int(limit or 50), 1), 500)
+    offset = max(int(offset or 0), 0)
+    out: dict = {"rows": [], "total": 0, "error": None, "challenge": None}
+    try:
+        with engine.connect() as conn:
+            ch = _validate_virtual_submission_challenge(conn, event_id=event_id, challenge_id=challenge_id)
+            if not ch:
+                out["error"] = "challenge not found"
+                return out
+            out["challenge"] = {"id": int(ch["id"]), "title": ch.get("title") or "", "event_id": int(ch["event_id"])}
+            total = conn.execute(
+                text(
+                    """
+                    SELECT COUNT(*)::BIGINT
+                    FROM virtual_challenge_submission_rows
+                    WHERE event_id = :eid AND challenge_id = :cid
+                    """
+                ),
+                {"eid": int(event_id), "cid": int(challenge_id)},
+            ).scalar()
+            out["total"] = int(total or 0)
+            rows = conn.execute(
+                text(
+                    """
+                    WITH ranked AS (
+                        SELECT id,
+                               team_name,
+                               leader_name,
+                               leader_email,
+                               total_score,
+                               export_created_at,
+                               ROW_NUMBER() OVER (
+                                 ORDER BY total_score DESC NULLS LAST,
+                                          export_created_at ASC NULLS LAST,
+                                          id ASC
+                               ) AS rank
+                        FROM virtual_challenge_submission_rows
+                        WHERE event_id = :eid AND challenge_id = :cid
+                    )
+                    SELECT rank, team_name, leader_name, leader_email, total_score,
+                           export_created_at AS submitted_at
+                    FROM ranked
+                    ORDER BY rank
+                    LIMIT :lim OFFSET :off
+                    """
+                ),
+                {"eid": int(event_id), "cid": int(challenge_id), "lim": limit, "off": offset},
+            ).mappings().all()
+            for r in rows:
+                d = dict(r)
+                if d.get("total_score") is not None:
+                    d["total_score"] = float(d["total_score"])
+                sa = d.get("submitted_at")
+                if sa is not None and hasattr(sa, "isoformat"):
+                    d["submitted_at"] = sa.isoformat()
+                elif sa is not None:
+                    d["submitted_at"] = str(sa)
+                d["rank"] = int(d["rank"])
+                out["rows"].append(d)
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(exc)
+    return out
+
+
+def _virtual_arena_challenge_stats(*, event_id: int, challenge_id: int) -> dict:
+    """
+    Per-arena-challenge: registration counts at opens_at / closes_at (MDC),
+    submission totals, distinct MDC-linked rows, top 400 teams (same ordering as leaderboard).
+    """
+    out: dict = {
+        "error": None,
+        "challenge_id": int(challenge_id),
+        "opens_at": None,
+        "closes_at": None,
+        "opens_at_display": None,
+        "closes_at_display": None,
+        "opens_at_set": False,
+        "registrations_at_open": None,
+        "registrations_at_close": 0,
+        "total_submissions": 0,
+        "unique_mdc_submissions": 0,
+        "top_400_rows": [],
+    }
+    try:
+        with engine.connect() as conn:
+            ch = conn.execute(
+                text(
+                    """
+                    SELECT c.id, c.title, c.event_id, c.opens_at, c.closes_at
+                    FROM challenges c
+                    JOIN events e ON e.id = c.event_id AND e.kind = 'virtual'
+                    WHERE c.id = :cid AND c.event_id = :eid
+                    """
+                ),
+                {"cid": int(challenge_id), "eid": int(event_id)},
+            ).mappings().fetchone()
+            if not ch:
+                out["error"] = "challenge not found"
+                return out
+            oa = ch.get("opens_at")
+            ca = ch.get("closes_at")
+            out["opens_at"] = oa
+            out["closes_at"] = ca
+            out["opens_at_display"] = _format_dt_display(oa) if oa is not None else None
+            out["closes_at_display"] = _format_dt_display(ca) if ca is not None else None
+            out["opens_at_set"] = bool(oa is not None)
+
+            reg_row = conn.execute(
+                text(
+                    f"""
+                    SELECT
+                      (SELECT COUNT(*)::BIGINT FROM {TABLE_VIRTUAL_MDC} m
+                       WHERE m.event_id = c.event_id
+                         AND m.form_timestamp IS NOT NULL
+                         AND m.form_timestamp <= c.closes_at) AS reg_close,
+                      CASE WHEN c.opens_at IS NULL THEN NULL::BIGINT
+                           ELSE (
+                             SELECT COUNT(*)::BIGINT FROM {TABLE_VIRTUAL_MDC} m2
+                             WHERE m2.event_id = c.event_id
+                               AND m2.form_timestamp IS NOT NULL
+                               AND m2.form_timestamp <= c.opens_at
+                           )
+                      END AS reg_open
+                    FROM challenges c
+                    WHERE c.id = :cid AND c.event_id = :eid
+                    """
+                ),
+                {"cid": int(challenge_id), "eid": int(event_id)},
+            ).mappings().fetchone()
+            if reg_row:
+                out["registrations_at_close"] = int(reg_row["reg_close"] or 0)
+                ro = reg_row.get("reg_open")
+                out["registrations_at_open"] = int(ro) if ro is not None else None
+
+            sub_row = conn.execute(
+                text(
+                    """
+                    SELECT COUNT(*)::BIGINT AS total,
+                           COUNT(DISTINCT virtual_mdc_registration_id)
+                             FILTER (WHERE virtual_mdc_registration_id IS NOT NULL)::BIGINT AS uniq_mdc
+                    FROM virtual_challenge_submission_rows
+                    WHERE event_id = :eid AND challenge_id = :cid
+                    """
+                ),
+                {"eid": int(event_id), "cid": int(challenge_id)},
+            ).mappings().fetchone()
+            if sub_row:
+                out["total_submissions"] = int(sub_row["total"] or 0)
+                out["unique_mdc_submissions"] = int(sub_row["uniq_mdc"] or 0)
+
+            rows = conn.execute(
+                text(
+                    """
+                    WITH ranked AS (
+                        SELECT id,
+                               team_name,
+                               leader_name,
+                               leader_email,
+                               total_score,
+                               export_created_at,
+                               ROW_NUMBER() OVER (
+                                 ORDER BY total_score DESC NULLS LAST,
+                                          export_created_at ASC NULLS LAST,
+                                          id ASC
+                               ) AS rank
+                        FROM virtual_challenge_submission_rows
+                        WHERE event_id = :eid AND challenge_id = :cid
+                    )
+                    SELECT rank, team_name, leader_name, leader_email, total_score,
+                           export_created_at AS submitted_at
+                    FROM ranked
+                    ORDER BY rank
+                    LIMIT 400
+                    """
+                ),
+                {"eid": int(event_id), "cid": int(challenge_id)},
+            ).mappings().all()
+            for r in rows:
+                d = dict(r)
+                if d.get("total_score") is not None:
+                    d["total_score"] = float(d["total_score"])
+                sa = d.get("submitted_at")
+                if sa is not None and hasattr(sa, "isoformat"):
+                    d["submitted_at"] = sa.isoformat()
+                elif sa is not None:
+                    d["submitted_at"] = str(sa)
+                d["rank"] = int(d["rank"])
+                out["top_400_rows"].append(d)
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(exc)
+    return out
+
+
 @app.get("/")
 def main_dashboard():
     in_person_event_id = request.args.get("inPersonEventId", type=int) or DEFAULT_IN_PERSON_EVENT_ID
@@ -2243,14 +3065,54 @@ def in_person_page():
 def virtual_page():
     in_person_event_id = request.args.get("inPersonEventId", type=int) or DEFAULT_IN_PERSON_EVENT_ID
     virtual_event_id = request.args.get("virtualEventId", type=int) or DEFAULT_VIRTUAL_EVENT_ID
-    challenge_id = request.args.get("challengeId", type=int) or DEFAULT_CHALLENGE_ID
-    leaderboard, distribution, dist_bins = _load_virtual_bundle(challenge_id)
-    data_center = _load_mdc_stats(virtual_event_id, mode="virtual")
     challenges = _load_virtual_challenges_brief(virtual_event_id)
+    id_set = {int(c["id"]) for c in challenges}
+    eligibility_requested = request.args.get("challengeId", type=int)
+    arena_requested = request.args.get("arenaChallengeId", type=int)
+    if eligibility_requested is not None and id_set and eligibility_requested not in id_set:
+        q = request.args.to_dict(flat=True)
+        q.pop("challengeId", None)
+        return redirect(f"{request.path}?{urlencode(q)}")
+    if arena_requested is not None and id_set and arena_requested not in id_set:
+        q = request.args.to_dict(flat=True)
+        q["arenaChallengeId"] = str(int(challenges[0]["id"]))
+        return redirect(f"{request.path}?{urlencode(q)}")
+    seed = _effective_arena_challenge_seed(
+        arena_challenge_id=arena_requested,
+        eligibility_challenge_id=eligibility_requested,
+        valid_ids=id_set,
+    )
+    challenge_id, challenges = _resolve_virtual_arena_challenge_id(
+        virtual_event_id, requested=seed, challenges=challenges
+    )
+    if challenge_id is not None:
+        leaderboard, distribution, dist_bins = _load_virtual_bundle(challenge_id)
+    else:
+        leaderboard, distribution, dist_bins = (
+            {"rows": [], "error": None},
+            {"bins": [], "error": None},
+            [],
+        )
+    data_center = _load_mdc_stats(virtual_event_id, mode="virtual")
     eligibility = None
-    active_challenge_id = request.args.get("challengeId", type=int)
+    active_challenge_id = eligibility_requested
     if active_challenge_id:
         eligibility = _load_virtual_eligibility_summary(virtual_event_id, active_challenge_id)
+    submission_lb = (
+        _submission_leaderboard_payload(
+            event_id=virtual_event_id,
+            challenge_id=challenge_id,
+            limit=50,
+            offset=0,
+        )
+        if challenge_id is not None
+        else {"rows": [], "total": 0, "error": None, "challenge": None}
+    )
+    arena_stats = (
+        _virtual_arena_challenge_stats(event_id=virtual_event_id, challenge_id=challenge_id)
+        if challenge_id is not None
+        else None
+    )
     return render_template(
         "virtual.html",
         in_person_event_id=in_person_event_id,
@@ -2263,6 +3125,63 @@ def virtual_page():
         virtual_challenges=challenges,
         active_challenge_id=active_challenge_id,
         eligibility=eligibility,
+        submission_leaderboard=submission_lb,
+        arena_stats=arena_stats,
+    )
+
+
+@app.get("/virtual/leaderboard")
+def virtual_submission_leaderboard():
+    in_person_event_id = request.args.get("inPersonEventId", type=int) or DEFAULT_IN_PERSON_EVENT_ID
+    virtual_event_id = request.args.get("virtualEventId", type=int) or DEFAULT_VIRTUAL_EVENT_ID
+    challenges = _load_virtual_challenges_brief(virtual_event_id)
+    id_set = {int(c["id"]) for c in challenges}
+    url_challenge = request.args.get("challengeId", type=int)
+    arena_requested = request.args.get("arenaChallengeId", type=int)
+    if url_challenge is not None and id_set and url_challenge not in id_set and arena_requested is None:
+        q = request.args.to_dict(flat=True)
+        q.pop("challengeId", None)
+        return redirect(f"{request.path}?{urlencode(q)}")
+    if arena_requested is not None and id_set and arena_requested not in id_set:
+        q = request.args.to_dict(flat=True)
+        q["arenaChallengeId"] = str(int(challenges[0]["id"]))
+        return redirect(f"{request.path}?{urlencode(q)}")
+    seed = _effective_arena_challenge_seed(
+        arena_challenge_id=arena_requested,
+        eligibility_challenge_id=url_challenge,
+        valid_ids=id_set,
+    )
+    challenge_id, challenges = _resolve_virtual_arena_challenge_id(
+        virtual_event_id, requested=seed, challenges=challenges
+    )
+    page = request.args.get("page", default=1, type=int) or 1
+    per_page = request.args.get("per_page", default=25, type=int) or 25
+    per_page = min(max(int(per_page), 10), 100)
+    page = max(int(page), 1)
+    offset = (page - 1) * per_page
+    payload = (
+        _submission_leaderboard_payload(
+            event_id=virtual_event_id,
+            challenge_id=challenge_id,
+            limit=per_page,
+            offset=offset,
+        )
+        if challenge_id is not None
+        else {"rows": [], "total": 0, "error": None, "challenge": None}
+    )
+    total = int(payload.get("total") or 0)
+    total_pages = max(1, (total + per_page - 1) // per_page) if total else 1
+    return render_template(
+        "virtual_leaderboard.html",
+        title="Virtual · Submission leaderboard",
+        in_person_event_id=in_person_event_id,
+        virtual_event_id=virtual_event_id,
+        challenge_id=challenge_id,
+        submission_leaderboard=payload,
+        virtual_challenges=challenges,
+        page=page,
+        per_page=per_page,
+        total_pages=total_pages,
     )
 
 
@@ -2286,7 +3205,6 @@ def overview_settings():
 
 
 @app.get("/in-person/users")
-@admin_required
 def in_person_users():
     page = request.args.get("page", default=1, type=int) or 1
     per_page = request.args.get("per_page", default=25, type=int) or 25
@@ -2297,13 +3215,11 @@ def in_person_users():
     return render_template(
         "in_person_users.html",
         title="In-person · Users",
-        adminAuthEnabled=bool(ADMIN_PASSWORD),
         users=users,
     )
 
 
 @app.get("/in-person/users/export.csv")
-@admin_required
 @audit_view(
     entity="in_person_main_data_center_registrations",
     action="EXPORT",
@@ -2338,7 +3254,6 @@ def in_person_settings():
 
 
 @app.get("/virtual/users")
-@admin_required
 def virtual_users():
     page = request.args.get("page", default=1, type=int) or 1
     per_page = request.args.get("per_page", default=25, type=int) or 25
@@ -2352,7 +3267,6 @@ def virtual_users():
     return render_template(
         "virtual_users.html",
         title="Virtual · Users",
-        adminAuthEnabled=bool(ADMIN_PASSWORD),
         users=users,
         virtual_challenges=challenges,
         active_challenge_id=cid,
@@ -2360,7 +3274,6 @@ def virtual_users():
 
 
 @app.get("/virtual/users/export.csv")
-@admin_required
 @audit_view(
     entity="virtual_main_data_center_registrations",
     action="EXPORT",
@@ -2403,6 +3316,9 @@ def _parse_challenge_form(form) -> tuple[dict | None, str | None]:
     title = (form.get("title") or "").strip()
     description = (form.get("description") or "").strip() or None
     slug = (form.get("slug") or "").strip() or None
+    import_sheet_suffix = (form.get("import_sheet_suffix") or "").strip() or None
+    if import_sheet_suffix and len(import_sheet_suffix) > 200:
+        return None, "import_sheet_suffix must be at most 200 characters."
     status = (form.get("status") or "draft").strip().lower()
     opens_raw = (form.get("opens_at") or "").strip()
     closes_raw = (form.get("closes_at") or "").strip()
@@ -2439,6 +3355,7 @@ def _parse_challenge_form(form) -> tuple[dict | None, str | None]:
             "title": title[:200],
             "description": description,
             "slug": slug[:200] if slug else None,
+            "import_sheet_suffix": import_sheet_suffix[:200] if import_sheet_suffix else None,
             "opens_at": opens_at,
             "closes_at": closes_at,
             "status": status,
@@ -2448,7 +3365,6 @@ def _parse_challenge_form(form) -> tuple[dict | None, str | None]:
 
 
 @app.get("/virtual/challenges")
-@admin_required
 def virtual_challenges():
     event_id = request.args.get("virtualEventId", type=int) or DEFAULT_VIRTUAL_EVENT_ID
     challenges = _load_virtual_challenges(event_id)
@@ -2458,7 +3374,6 @@ def virtual_challenges():
     return render_template(
         "virtual_challenges.html",
         title="Virtual · Challenges",
-        adminAuthEnabled=bool(ADMIN_PASSWORD),
         virtual_event_id=event_id,
         challenges=challenges,
         error=err,
@@ -2469,7 +3384,6 @@ def virtual_challenges():
 
 
 @app.post("/virtual/challenges")
-@admin_required
 @audit_view(
     entity="challenges",
     action="INSERT",
@@ -2495,9 +3409,9 @@ def virtual_challenges_create():
             conn.execute(
                 text(
                     """
-                    INSERT INTO challenges (event_id, title, description, slug,
+                    INSERT INTO challenges (event_id, title, description, slug, import_sheet_suffix,
                                             opens_at, closes_at, status)
-                    VALUES (:eid, :title, :description, :slug, :opens_at, :closes_at, :status)
+                    VALUES (:eid, :title, :description, :slug, :import_sheet_suffix, :opens_at, :closes_at, :status)
                     """
                 ),
                 {"eid": event_id, **payload},
@@ -2513,7 +3427,6 @@ def virtual_challenges_create():
 
 
 @app.post("/virtual/challenges/<int:cid>")
-@admin_required
 @audit_view(
     entity="challenges",
     action="UPDATE",
@@ -2542,6 +3455,7 @@ def virtual_challenges_update(cid: int):
                     SET title = :title,
                         description = :description,
                         slug = :slug,
+                        import_sheet_suffix = :import_sheet_suffix,
                         opens_at = :opens_at,
                         closes_at = :closes_at,
                         status = :status
@@ -2561,7 +3475,6 @@ def virtual_challenges_update(cid: int):
 
 
 @app.post("/virtual/challenges/<int:cid>/delete")
-@admin_required
 @audit_view(
     entity="challenges",
     action="DELETE",
@@ -2599,6 +3512,7 @@ def api_virtual_challenges():
             {
                 "id": int(r["id"]),
                 "title": r["title"],
+                "import_sheet_suffix": r.get("import_sheet_suffix"),
                 "status": r["status"],
                 "opens_at": _format_dt_display(r["opens_at"]) or None,
                 "closes_at": _format_dt_display(r["closes_at"]) or None,
@@ -2618,58 +3532,44 @@ def api_virtual_challenge_eligibility(cid: int):
 
 
 @app.get("/in-person/import")
-@admin_required
 def in_person_import():
-    return render_template(
-        "import_in_person.html",
-        adminAuthEnabled=bool(ADMIN_PASSWORD),
-    )
+    return render_template("import_in_person.html")
 
 
 @app.get("/virtual/import")
-@admin_required
 def virtual_import():
     challenge_id = request.args.get("challengeId", type=int) or DEFAULT_CHALLENGE_ID
     virtual_event_id = request.args.get("virtualEventId", type=int) or DEFAULT_VIRTUAL_EVENT_ID
     return render_template(
         "import_virtual.html",
-        adminAuthEnabled=bool(ADMIN_PASSWORD),
         challenge_id=challenge_id,
         virtual_event_id=virtual_event_id,
     )
 
 
+@app.get("/login")
 @app.get("/admin/login")
-def admin_login():
-    if not ADMIN_PASSWORD:
-        return redirect(url_for("admin_page"))
-    return render_template("admin_login.html", title="Admin login", error=None)
+def portal_login():
+    """Public: send users to the CDI portal for authentication."""
+    return redirect(f"{get_portal_url().rstrip('/')}/login")
 
 
-@app.post("/admin/login")
-def admin_login_post():
-    from audit.admin_hooks import log_login_failed, log_login_success
-
-    p = request.form.get("password", "")
-    if ADMIN_PASSWORD and p == ADMIN_PASSWORD:
-        session["admin"] = True
-        log_login_success(principal="admin")
-        return redirect(url_for("admin_page"))
-    log_login_failed(attempted="admin")
-    return render_template("admin_login.html", title="Admin login", error="Invalid password"), 401
-
-
-@app.post("/admin/logout")
-def admin_logout():
+@app.get("/logout")
+@app.post("/logout")
+def logout():
     from audit.admin_hooks import log_logout
 
-    log_logout()
+    try:
+        log_logout()
+    except Exception:  # noqa: BLE001
+        pass
     session.clear()
-    return redirect(url_for("admin_login"))
+    resp = make_response(redirect(f"{get_portal_url().rstrip('/')}/dashboard"))
+    resp.delete_cookie("h2s_cdi_session", path="/")
+    return resp
 
 
 @app.get("/admin")
-@admin_required
 def admin_page():
     health_payload: dict = {"ok": False}
     try:
@@ -2705,12 +3605,34 @@ def admin_page():
         title="Admin — Prompt Wars",
         health=health_payload,
         latestJob=latest_job,
-        adminAuthEnabled=bool(ADMIN_PASSWORD),
     )
+
+
+def _register_cdi_page_id_redirects() -> None:
+    """Map ``/<pageId>`` (portal-style) to canonical routes under SCRIPT_NAME."""
+
+    def _make_redirect(target_path: str):
+        def _go() -> Response:
+            sn = (request.environ.get("SCRIPT_NAME") or "").rstrip("/")
+            loc = f"{sn}{target_path}" if sn else target_path
+            return redirect(loc)
+
+        return _go
+
+    for _p in MODULE_PAGES:
+        pid = _p["pageId"]
+        tp = _p["path"]
+        fn = _make_redirect(tp)
+        fn.__name__ = f"cdi_page_redirect_{pid}"
+        app.add_url_rule(f"/{pid}", endpoint=f"cdi_page_redirect_{pid}", view_func=fn, methods=["GET"])
+
+
+_register_cdi_page_id_redirects()
 
 
 def main():
     mode = "DEBUG" if DEBUG_MODE else "PROD"
+    register_with_portal(MODULE_PAGES, module_name=MODULE_DISPLAY_NAME, base_url=MODULE_BASE_URL)
     print(
         f"Prompt Wars [{mode}] listening on http://{APP_HOST}:{APP_PORT}"
         f" (reloader={'on' if USE_RELOADER else 'off'})",

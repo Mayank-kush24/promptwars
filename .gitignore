@@ -25,3 +25,6 @@ Thumbs.db
 
 # Large local media (re-add if you want it versioned)
 *.mp4
+
+# Archived uploads (forensic copies of every CSV/XLSX import)
+uploads/

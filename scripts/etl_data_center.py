@@ -20,10 +20,33 @@ Audit note:
 
 from __future__ import annotations
 
+from datetime import datetime
 from io import BytesIO
 from typing import Any, BinaryIO
 
 import pandas as pd
+
+
+def _normalize_form_timestamp_for_db(val: Any) -> datetime | None:
+    """Return a timezone-aware UTC datetime suitable for TIMESTAMPTZ.
+
+    Exports often include an explicit offset (e.g. ``...+05:30``); those are
+    parsed as absolute instants. Naive spreadsheet datetimes are treated as
+    **Asia/Kolkata** wall time so PostgreSQL does not reinterpret them using
+    the server or client session timezone (which would skew IST hour charts).
+    """
+    if val is None:
+        return None
+    if isinstance(val, float) and pd.isna(val):
+        return None
+    ts = pd.Timestamp(val)
+    if pd.isna(ts):
+        return None
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("Asia/Kolkata", ambiguous=True, nonexistent="shift_forward")
+    else:
+        ts = ts.tz_convert("UTC")
+    return ts.to_pydatetime()
 
 # Normalized header (lower, collapsed whitespace) -> internal column name
 HEADER_MAP: dict[str, str] = {
@@ -158,7 +181,7 @@ def parse_main_data_center_file(fileobj: BinaryIO, filename: str) -> tuple[list[
         dob = s.get("dob")
         row: dict[str, Any] = {
             "email": str(s["email"]).strip(),
-            "form_timestamp": None if pd.isna(fts) else pd.Timestamp(fts).to_pydatetime(),
+            "form_timestamp": _normalize_form_timestamp_for_db(fts),
             "utm_source": s.get("utm_source"),
             "utm_medium": s.get("utm_medium"),
             "utm_campaign": s.get("utm_campaign"),

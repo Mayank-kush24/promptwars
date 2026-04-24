@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}{{ nav_pages[0].label if nav_pages else 'App' }}{% endblock %}</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: system-ui, sans-serif; margin: 0; padding: 1rem 2rem; background: #f5f5f5; }
+        nav { background: #1a1a2e; padding: 0.6rem 1.2rem; margin: -1rem -2rem 1.5rem -2rem; display: flex; align-items: center; gap: 0.25rem; flex-wrap: wrap; }
+        nav a { color: #ccd6f6; text-decoration: none; padding: 0.35rem 0.75rem; border-radius: 4px; font-size: 0.9rem; transition: background 0.15s; }
+        nav a:hover, nav a.active { background: #16213e; color: #fff; }
+        .nav-right { margin-left: auto; display: flex; align-items: center; gap: 0.5rem; }
+        .btn-cdi-back {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            padding: 0.4rem 0.85rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            text-decoration: none;
+            color: #fff;
+            background: #0f3460;
+            border: 1px solid rgba(255,255,255,0.12);
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .btn-cdi-back:hover { background: #16213e; border-color: rgba(255,255,255,0.2); color: #fff; }
+        .badge { background: #0f3460; color: #ccd6f6; padding: 0.2rem 0.6rem; border-radius: 4px; font-size: 0.8rem; }
+        main { background: #fff; padding: 1.75rem 2rem; border-radius: 8px; max-width: 900px; box-shadow: 0 1px 4px rgba(0,0,0,.07); }
+        h1 { margin-top: 0; color: #1a1a2e; }
+        .flash { padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem; font-size: 0.9rem; }
+        .flash.success { background: #d4edda; color: #155724; }
+        .flash.error   { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    {% if current_user %}
+    <nav>
+        {% for p in nav_pages %}
+        <a href="{{ script_root }}{{ p.path }}"
+           class="{{ 'active' if request.path.endswith(p.path) else '' }}">{{ p.label }}</a>
+        {% endfor %}
+        <span class="nav-right">
+            {% if current_user.get('isAdmin') %}
+            <span class="badge">admin</span>
+            {% endif %}
+            <span class="badge">{{ current_user.get('email', '') }}</span>
+            <a href="https://h2s.tech/dashboard" class="btn-cdi-back" rel="noopener">← Back to CDI dashboard</a>
+        </span>
+    </nav>
+    {% endif %}
+    <main>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for cat, msg in messages %}
+            <div class="flash {{ cat }}">{{ msg }}</div>
+            {% endfor %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>

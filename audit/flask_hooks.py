@@ -25,26 +25,35 @@ _REGISTERED_FLAG = "_pw_audit_flask_registered"
 
 def _resolve_principal() -> tuple[str, str | None]:
     """
-    Identity model (per the user's chosen option in the plan):
-      session.get('admin') == True  -> 'admin'
-      otherwise                     -> 'anonymous'
+    CDI portal JWT (g.user) when present; else legacy session admin; else anonymous.
     Returns (principal, session_id).
     """
+    try:
+        user = getattr(g, "user", None)
+        if isinstance(user, dict) and user.get("email"):
+            email = str(user.get("email") or "").strip() or "unknown"
+            if user.get("isAdmin"):
+                return (f"admin:{email}", _sid_from_cookie("h2s_cdi_session"))
+            return (email, _sid_from_cookie("h2s_cdi_session"))
+    except Exception:  # noqa: BLE001
+        pass
     try:
         is_admin = bool(session.get("admin"))
     except Exception:  # noqa: BLE001
         is_admin = False
-    sid = None
+    sid = _sid_from_cookie(getattr(request, "session_cookie_name", "session"))
+    return ("admin" if is_admin else "anonymous", sid)
+
+
+def _sid_from_cookie(name: str) -> str | None:
     try:
-        # Flask doesn't expose a real session id out of the box; derive a
-        # short hash from the cookie so we can correlate without leaking it.
-        cookie = request.cookies.get(getattr(request, "session_cookie_name", "session")) or ""
+        cookie = request.cookies.get(name) or ""
         if cookie:
             from hashlib import blake2s
-            sid = blake2s(cookie.encode("utf-8"), digest_size=8).hexdigest()
+            return blake2s(cookie.encode("utf-8"), digest_size=8).hexdigest()
     except Exception:  # noqa: BLE001
-        sid = None
-    return ("admin" if is_admin else "anonymous", sid)
+        pass
+    return None
 
 
 def _resolve_client_ip() -> str | None:

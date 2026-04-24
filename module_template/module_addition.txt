@@ -1,0 +1,43 @@
+Step 1 — Copy auth files into your existing app
+Put these next to your Flask entrypoint (same folder as app.py / server.py), or anywhere on PYTHONPATH if you already use a package layout.
+Copy module_template/h2s_cdi_auth.py → your app (required).
+Copy module_template/jarvis_auth.py → your app (optional — only if you want from jarvis_auth import ... or old “jarvis” names; it’s a thin re-export of h2s_cdi_auth).
+Alternative: from the JARVIS repo root you can run
+python scripts/copy_cdi_auth_into_module.py <path-to-your-app>
+which copies the auth files for you (see MODULE_INTEGRATION.md).
+Step 2 — Dependencies
+Add to your app’s environment / requirements.txt:
+PyJWT
+requests
+python-dotenv
+(Plus whatever you already use for Flask.)
+Step 3 — Environment
+Copy values from module_template/.env.example into your app’s .env and set at least:
+H2S_CDI_MODULE_ID (or JARVIS_MODULE_ID) — same as portal/nginx slug
+H2S_CDI_JWT_SECRET (or JARVIS_JWT_SECRET) — same as portal
+H2S_CDI_REGISTRATION_SECRET (or JARVIS_REGISTRATION_SECRET) — same as portal MODULE_REGISTRATION_SECRET
+H2S_CDI_URL (or JARVIS_URL) — public portal base URL
+Optionally H2S_CDI_INTERNAL_URL / JARVIS_INTERNAL_URL if the module registers against localhost
+APPLICATION_ROOT=/<slug> when served under a path prefix
+Call load_dotenv() early in your app if you use .env.
+Step 4 — Code changes (generic prompt you can reuse)
+Paste this into another chat / Agent mode / a teammate. Swap the bracketed bits.
+Prompt:
+Integrate Hack2skill CDI portal auth into this Flask app using the copied h2s_cdi_auth.py (and jarvis_auth.py if present).
+Requirements:
+1. After creating the Flask app, wrap with ProxyFix: app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1).
+2. Add a @app.before_request handler that sets request.environ["SCRIPT_NAME"] from HTTP_X_FORWARDED_PREFIX, or from os.environ APPLICATION_ROOT if the header is missing (leading slash, no trailing slash on the stored prefix). Match the pattern in JARVIS module_template/app.py.
+3. Call load_dotenv() at startup if not already.
+4. Import register_h2s_cdi_auth (from h2s_cdi_auth, or register_jarvis_auth from jarvis_auth — same function). Call it once after the SCRIPT_NAME before_request is registered:
+  - public_paths: ("/static", "/favicon.ico", "/health", "/login", "/logout") plus any other unauthenticated prefixes this app needs.
+  - path_page_rules: a list of (url_prefix, pageId) for every portal L2 page. pageId must match portal registration. Longest URL prefix wins; subpaths inherit the same page (e.g. /settings covers /settings/save).
+  - default_page=None so paths not matched by any rule only require a valid JWT (use for / and /api/* if those should not map to a single L2 page).
+5. Remove redundant @h2s_cdi_auth_required / @jarvis_auth_required decorators from routes once global auth covers them.
+6. Define MODULE_PAGES as a list of dicts: {"pageId", "label", "path"} for each page. On startup (e.g. under if __name__ == "__main__" or app factory), call register_with_portal(MODULE_PAGES, module_name=..., base_url=...) with the same pageIds and paths as path_page_rules.
+7. In routes and templates, use g.user after auth (set by middleware). Use get_portal_url() for redirects to /login. Use get_module_pages(g.user) for nav if needed.
+Do not change unrelated business logic. Keep existing route URLs unless they conflict with path_page_rules.
+Step 5 — Portal / ops (short)
+Nginx (or portal UI): add the module service, slug = module id, reload.
+Portal .env: MODULE_URL_<SLUG>=https://domain/<slug>/
+Restart portal; start module; open from Dashboard.
+Note: jarvis_auth.py is only for import compatibility; h2s_cdi_auth.py is the real implementation. If you only ever from h2s_cdi_auth import ..., you can skip jarvis_auth.py.

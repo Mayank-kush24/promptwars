@@ -6,11 +6,13 @@ DROP VIEW IF EXISTS v_in_person_conversion CASCADE;
 DROP TABLE IF EXISTS credit_ledger CASCADE;
 DROP TABLE IF EXISTS participant_balances CASCADE;
 DROP TABLE IF EXISTS registrations CASCADE;
+DROP TABLE IF EXISTS virtual_challenge_submission_rows CASCADE;
 DROP TABLE IF EXISTS challenges CASCADE;
 DROP TABLE IF EXISTS submissions CASCADE;
 DROP TABLE IF EXISTS rsvps CASCADE;
 DROP TABLE IF EXISTS cities CASCADE;
 DROP TABLE IF EXISTS participants CASCADE;
+DROP TABLE IF EXISTS upload_archive CASCADE;
 DROP TABLE IF EXISTS import_jobs CASCADE;
 DROP TABLE IF EXISTS virtual_main_data_center_registrations CASCADE;
 DROP TABLE IF EXISTS in_person_main_data_center_registrations CASCADE;
@@ -41,6 +43,31 @@ CREATE TABLE import_jobs (
   row_counts JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Forensic copy of every accepted upload, regardless of downstream success.
+CREATE TABLE upload_archive (
+  id BIGSERIAL PRIMARY KEY,
+  module TEXT NOT NULL,
+  source_route TEXT NOT NULL,
+  original_name TEXT NOT NULL,
+  stored_path TEXT NOT NULL,
+  size_bytes BIGINT NOT NULL,
+  sha256 TEXT NOT NULL,
+  mime_type TEXT,
+  uploaded_by TEXT,
+  client_ip TEXT,
+  event_id INTEGER REFERENCES events (id) ON DELETE SET NULL,
+  import_job_id INTEGER REFERENCES import_jobs (id) ON DELETE SET NULL,
+  status TEXT NOT NULL DEFAULT 'received'
+    CHECK (status IN ('received', 'parsed', 'success', 'failed')),
+  error_message TEXT,
+  rows_written INTEGER,
+  uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_upload_archive_uploaded_at ON upload_archive (uploaded_at DESC);
+CREATE INDEX idx_upload_archive_module ON upload_archive (module);
+CREATE INDEX idx_upload_archive_sha256 ON upload_archive (sha256);
 
 -- In-person Main Data Center: Vision export (CSV/XLSX). One row per email per in-person event.
 CREATE TABLE in_person_main_data_center_registrations (
@@ -179,6 +206,8 @@ CREATE TABLE challenges (
   title TEXT NOT NULL,
   description TEXT,
   slug TEXT,
+  /* When set, XLSX sheet suffix after "Submission " matches this (normalized), not title. */
+  import_sheet_suffix TEXT,
   opens_at TIMESTAMPTZ,
   closes_at TIMESTAMPTZ,
   status TEXT NOT NULL CHECK (status IN ('draft', 'live', 'closed')),
@@ -189,6 +218,9 @@ CREATE TABLE challenges (
 CREATE INDEX idx_challenges_event ON challenges (event_id);
 CREATE INDEX idx_challenges_live ON challenges (event_id) WHERE status = 'live';
 CREATE UNIQUE INDEX uq_challenges_event_title_lower ON challenges (event_id, lower(title));
+CREATE UNIQUE INDEX uq_challenges_event_import_sheet_suffix_lower
+  ON challenges (event_id, lower(import_sheet_suffix))
+  WHERE import_sheet_suffix IS NOT NULL AND btrim(import_sheet_suffix) <> '';
 
 -- Touch trigger for challenges.updated_at
 CREATE OR REPLACE FUNCTION fn_challenges_touch_updated_at()
@@ -206,6 +238,62 @@ CREATE TRIGGER challenges_touch_updated_at
 BEFORE UPDATE ON challenges
 FOR EACH ROW
 EXECUTE FUNCTION fn_challenges_touch_updated_at();
+
+-- Virtual challenge workbook import: one row per team per challenge (distinct from in-person `submissions`).
+CREATE TABLE virtual_challenge_submission_rows (
+  id BIGSERIAL PRIMARY KEY,
+  event_id INTEGER NOT NULL REFERENCES events (id) ON DELETE CASCADE,
+  challenge_id INTEGER NOT NULL REFERENCES challenges (id) ON DELETE CASCADE,
+  import_job_id INTEGER REFERENCES import_jobs (id) ON DELETE SET NULL,
+  virtual_mdc_registration_id BIGINT REFERENCES virtual_main_data_center_registrations (id) ON DELETE SET NULL,
+  source_sheet_name TEXT NOT NULL,
+  team_name TEXT NOT NULL,
+  team_name_normalized TEXT GENERATED ALWAYS AS (lower(btrim(team_name))) STORED,
+  leader_name TEXT,
+  leader_email TEXT NOT NULL,
+  leader_email_normalized TEXT GENERATED ALWAYS AS (lower(trim(leader_email))) STORED,
+  leader_phone TEXT,
+  team_size INTEGER,
+  problem_statements TEXT,
+  total_score NUMERIC(14, 4),
+  deployed_link TEXT,
+  linkedin_post TEXT,
+  github_repository_link TEXT,
+  export_created_at TIMESTAMPTZ,
+  export_created_by_name TEXT,
+  export_created_by_email TEXT,
+  export_updated_at TIMESTAMPTZ,
+  export_updated_by_name TEXT,
+  export_updated_by_email TEXT,
+  imported_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_vcsr_event ON virtual_challenge_submission_rows (event_id);
+CREATE INDEX idx_vcsr_challenge ON virtual_challenge_submission_rows (challenge_id);
+CREATE INDEX idx_vcsr_leader_email ON virtual_challenge_submission_rows (leader_email_normalized);
+CREATE UNIQUE INDEX uq_vcsr_challenge_team ON virtual_challenge_submission_rows (challenge_id, team_name_normalized);
+CREATE INDEX idx_vcsr_challenge_score_submitted ON virtual_challenge_submission_rows (
+  challenge_id,
+  total_score DESC NULLS LAST,
+  export_created_at ASC NULLS LAST
+);
+
+CREATE OR REPLACE FUNCTION fn_vcsr_touch_updated_at()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.updated_at := now();
+  RETURN NEW;
+END
+$$;
+
+DROP TRIGGER IF EXISTS vcsr_touch_updated_at ON virtual_challenge_submission_rows;
+CREATE TRIGGER vcsr_touch_updated_at
+BEFORE UPDATE ON virtual_challenge_submission_rows
+FOR EACH ROW
+EXECUTE FUNCTION fn_vcsr_touch_updated_at();
 
 CREATE TABLE registrations (
   id SERIAL PRIMARY KEY,

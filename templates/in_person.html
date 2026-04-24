@@ -101,47 +101,47 @@
     <span class="block mt-1 text-xs text-amber-800">If you just added this feature, apply <code class="rounded bg-amber-100 px-1">database/init.sql</code> so the table exists.</span>
   </div>
 {% else %}
-  {# Snapshot pills #}
-  <div class="flex flex-wrap gap-2 md:gap-3">
-    <div class="inline-flex items-center gap-2 rounded-full border border-lime-200 bg-white px-4 py-2 shadow-sm">
-      <span class="material-symbols-outlined text-lime-600 text-[20px]">groups</span>
-      <div>
+  {# Snapshot pills — full width row at xl (5 equal columns); sm–lg: 2- or 3-column responsive grid #}
+  <div class="grid w-full grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-2 md:gap-3">
+    <div class="flex w-full min-w-0 items-center gap-2 rounded-full border border-lime-200 bg-white px-3 sm:px-4 py-2 shadow-sm">
+      <span class="material-symbols-outlined shrink-0 text-lime-600 text-[20px]">groups</span>
+      <div class="min-w-0 flex-1">
         <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total registrations</p>
-        <p class="font-display text-lg text-slate-900 tabular-nums leading-tight">{{ "{:,}".format(data_center.total_registrations or 0) }}</p>
+        <p class="font-display text-base sm:text-lg text-slate-900 tabular-nums leading-tight">{{ "{:,}".format(data_center.total_registrations or 0) }}</p>
       </div>
     </div>
-    <div class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 shadow-sm">
-      <span class="material-symbols-outlined text-amber-500 text-[20px]">pin_drop</span>
-      <div>
+    <div class="flex w-full min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 sm:px-4 py-2 shadow-sm">
+      <span class="material-symbols-outlined shrink-0 text-amber-500 text-[20px]">pin_drop</span>
+      <div class="min-w-0 flex-1">
         <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Top city</p>
-        <p class="font-display text-lg text-slate-900 leading-tight max-w-[180px] truncate" title="{{ data_center.pill_top_city or '—' }}">{{ data_center.pill_top_city or "—" }}</p>
-        {% if data_center.pill_top_city_count %}<p class="text-[11px] text-slate-500 tabular-nums">{{ "{:,}".format(data_center.pill_top_city_count) }} in top bucket</p>{% endif %}
+        <p class="font-display text-base sm:text-lg text-slate-900 leading-tight truncate" title="{{ data_center.pill_top_city or '—' }}">{{ data_center.pill_top_city or "—" }}</p>
+        {% if data_center.pill_top_city_count %}<p class="text-[11px] text-slate-500 tabular-nums truncate">{{ "{:,}".format(data_center.pill_top_city_count) }} in top bucket</p>{% endif %}
       </div>
     </div>
-    <div class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 shadow-sm">
-      <span class="material-symbols-outlined text-emerald-600 text-[20px]">map</span>
-      <div>
+    <div class="flex w-full min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 sm:px-4 py-2 shadow-sm">
+      <span class="material-symbols-outlined shrink-0 text-emerald-600 text-[20px]">map</span>
+      <div class="min-w-0 flex-1">
         <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Top state</p>
-        <p class="font-display text-lg text-slate-900 leading-tight max-w-[180px] truncate" title="{{ data_center.pill_top_state or '—' }}">{{ data_center.pill_top_state or "—" }}</p>
-        {% if data_center.pill_top_state_count %}<p class="text-[11px] text-slate-500 tabular-nums">{{ "{:,}".format(data_center.pill_top_state_count) }} in top bucket</p>{% endif %}
+        <p class="font-display text-base sm:text-lg text-slate-900 leading-tight truncate" title="{{ data_center.pill_top_state or '—' }}">{{ data_center.pill_top_state or "—" }}</p>
+        {% if data_center.pill_top_state_count %}<p class="text-[11px] text-slate-500 tabular-nums truncate">{{ "{:,}".format(data_center.pill_top_state_count) }} in top bucket</p>{% endif %}
       </div>
     </div>
-    <div class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 shadow-sm">
-      <span class="material-symbols-outlined text-yellow-500 text-[20px]">cake</span>
-      <div>
+    <div class="flex w-full min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 sm:px-4 py-2 shadow-sm">
+      <span class="material-symbols-outlined shrink-0 text-yellow-500 text-[20px]">cake</span>
+      <div class="min-w-0 flex-1">
         <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Average age</p>
-        <p class="font-display text-lg text-slate-900 tabular-nums leading-tight">
+        <p class="font-display text-base sm:text-lg text-slate-900 tabular-nums leading-tight truncate">
           {% if data_center.average_age is not none %}{{ data_center.average_age }} yrs{% else %}—{% endif %}
         </p>
-        {% if data_center.with_dob_count %}<p class="text-[11px] text-slate-500">{{ "{:,}".format(data_center.with_dob_count) }} with DOB</p>{% endif %}
+        {% if data_center.with_dob_count %}<p class="text-[11px] text-slate-500 truncate">{{ "{:,}".format(data_center.with_dob_count) }} with DOB</p>{% endif %}
       </div>
     </div>
-    <div class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 shadow-sm">
-      <span class="material-symbols-outlined text-lime-700 text-[20px]">trending_up</span>
-      <div>
+    <div class="col-span-1 flex w-full min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 sm:px-4 py-2 shadow-sm sm:col-span-2 lg:col-span-1">
+      <span class="material-symbols-outlined shrink-0 text-lime-700 text-[20px]">trending_up</span>
+      <div class="min-w-0 flex-1">
         <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Last 7 days</p>
-        <p class="font-display text-lg text-slate-900 tabular-nums leading-tight">{{ "{:,}".format(data_center.registrations_last_7_days or 0) }}</p>
-        <p class="text-[11px] text-slate-500">New timestamps</p>
+        <p class="font-display text-base sm:text-lg text-slate-900 tabular-nums leading-tight truncate">{{ "{:,}".format(data_center.registrations_last_7_days or 0) }}</p>
+        <p class="text-[11px] text-slate-500 truncate">New timestamps</p>
       </div>
     </div>
   </div>
@@ -237,6 +237,7 @@
   window.__PW_ROUTES__ = {
     mdcUsersUrl: {{ url_for("in_person_users") | tojson }},
     inPersonUsers: {{ url_for("in_person_users") | tojson }},
+    indiaGeoUrl: {{ url_for("static", filename="geo/in-all-claimed.geo.json") | tojson }},
   };
 </script>
 <script src="{{ url_for('static', filename='mdc_dashboard.js') }}" defer></script>

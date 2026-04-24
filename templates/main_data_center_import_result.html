@@ -49,6 +49,14 @@
           </li>
         </ul>
       </div>
+
+      {% if stats.archive_path %}
+        <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
+          <h2 class="font-display text-headline-md text-slate-900 mb-sm">Archived copy</h2>
+          <p class="text-sm text-slate-600">A timestamped copy of the original upload was stored at:</p>
+          <p class="mt-1 font-mono text-xs text-slate-700 break-all">{{ stats.archive_path }}</p>
+        </div>
+      {% endif %}
     {% endif %}
   {% else %}
     <div class="px-4 py-3 rounded-xl bg-rose-50 text-rose-800 border border-rose-200 text-sm font-medium">
