@@ -20,11 +20,30 @@ Audit note:
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from io import BytesIO
 from typing import Any, BinaryIO
 
 import pandas as pd
+
+# Trailing "( 2 )" / "(2)" on designation = years of experience (not inner parens like "(Co-founder)").
+_DESIGNATION_TRAILING_YEARS_RE = re.compile(r"\s*\(\s*(\d+)\s*\)\s*$")
+
+
+def split_designation_with_years(raw: Any) -> tuple[str | None, int | None]:
+    """Return ``(designation_text, years)`` with trailing ``( N )`` stripped into ``years``."""
+    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+        return None, None
+    s = str(raw).strip()
+    if not s:
+        return None, None
+    m = _DESIGNATION_TRAILING_YEARS_RE.search(s)
+    if not m:
+        return s, None
+    years = int(m.group(1))
+    clean = s[: m.start()].rstrip()
+    return (clean or None), years
 
 
 def _normalize_form_timestamp_for_db(val: Any) -> datetime | None:
@@ -179,6 +198,7 @@ def parse_main_data_center_file(fileobj: BinaryIO, filename: str) -> tuple[list[
     for _, s in out.iterrows():
         fts = s.get("form_timestamp")
         dob = s.get("dob")
+        des_t, des_y = split_designation_with_years(s.get("designation"))
         row: dict[str, Any] = {
             "email": str(s["email"]).strip(),
             "form_timestamp": _normalize_form_timestamp_for_db(fts),
@@ -193,7 +213,8 @@ def parse_main_data_center_file(fileobj: BinaryIO, filename: str) -> tuple[list[
             "class_stream": s.get("class_stream"),
             "portfolio": s.get("portfolio"),
             "domain": s.get("domain"),
-            "designation": s.get("designation"),
+            "designation": des_t,
+            "designation_years_experience": des_y,
             "founded_info": s.get("founded_info"),
             "degree": s.get("degree"),
             "profile_name": s.get("profile_name"),

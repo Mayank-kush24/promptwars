@@ -8,16 +8,12 @@
 {% endblock %}
 {% block content %}
 {% macro page_href(p) -%}
-{{- url_for('virtual_users', page=p, per_page=users.per_page) -}}
-{%- if users.search %}&q={{ users.search | urlencode }}{% endif %}
-{%- if active_challenge_id %}&challengeId={{ active_challenge_id }}{% endif %}
+{{- url_for('virtual_users', page=p) -}}
+{%- if users.preserve_query_str %}&{{ users.preserve_query_str }}{% endif %}
 {%- endmacro %}
 <div class="flex flex-col gap-md">
   <div class="flex flex-col gap-sm">
     <h1 class="font-display text-headline-lg text-slate-900 leading-tight">{{ title }}</h1>
-    <p class="font-body-md text-slate-600 max-w-3xl">
-      Virtual Main Data Center registrations for your Vision export (same scope as Virtual · Import). Filter by name, email, profile, or mobile.
-    </p>
   </div>
 
   {% if users.error %}
@@ -51,7 +47,7 @@
       <div class="flex flex-wrap gap-2 items-center">
         <input type="hidden" name="per_page" value="{{ users.per_page }}" />
         <button type="submit" class="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">Apply filters</button>
-        {% if users.search or active_challenge_id %}
+        {% if users.search or active_challenge_id or users.advanced_active %}
           <a href="{{ url_for('virtual_users', per_page=users.per_page) }}" class="inline-flex items-center px-4 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">Clear</a>
         {% endif %}
         <a href="{{ url_for('virtual_users_export_csv') }}{% if users.export_query %}?{{ users.export_query }}{% endif %}"
@@ -68,6 +64,8 @@
         Showing only registrants eligible for challenge #{{ active_challenge_id }}
       </div>
     {% endif %}
+    {% set pw_adv_input_focus = 'focus:outline-none focus:ring-2 focus:ring-violet-400/50' %}
+    {% include "partials/mdc_users_advanced_filters.html" %}
   </form>
 
   <div class="flex flex-wrap items-center justify-between gap-sm text-sm text-slate-600">
@@ -84,7 +82,9 @@
       {% endif %}
     </span>
     <form method="get" class="flex items-center gap-2">
-      {% if users.search %}<input type="hidden" name="q" value="{{ users.search }}" />{% endif %}
+      {% for k, v in users.preserve_items %}
+        <input type="hidden" name="{{ k }}" value="{{ v }}" />
+      {% endfor %}
       <input type="hidden" name="page" value="1" />
       <label class="text-xs text-slate-500">Per page</label>
       <select name="per_page" onchange="this.form.submit()"
@@ -98,13 +98,15 @@
 
   <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
     <div class="overflow-x-auto">
-      <table class="w-full text-left text-sm min-w-[640px]">
+      <table class="w-full text-left text-sm min-w-[860px]">
         <thead>
           <tr class="border-b border-slate-200 bg-slate-50 text-slate-500">
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Name</th>
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Email</th>
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Location</th>
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Occupation</th>
+            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Designation</th>
+            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-right tabular-nums">Yrs exp.</th>
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Registered at</th>
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-right w-16">View</th>
           </tr>
@@ -136,6 +138,16 @@
               <td class="py-3 px-4 max-w-[140px]">
                 <span class="truncate block" title="{{ row.occupation or '—' }}">{{ row.occupation or '—' }}</span>
               </td>
+              <td class="py-3 px-4 max-w-[160px]">
+                <span class="truncate block text-slate-700" title="{{ row.designation or '—' }}">{{ row.designation or '—' }}</span>
+              </td>
+              <td class="py-3 px-4 text-right tabular-nums text-slate-700">
+                {% if row.designation_years_experience is not none %}
+                  {{ row.designation_years_experience }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
               <td class="py-3 px-4 whitespace-nowrap text-slate-600 text-xs">
                 {% if row.form_timestamp %}
                   {{ row.form_timestamp.strftime('%d-%m-%Y %H:%M:%S') }}
@@ -154,7 +166,7 @@
             </tr>
           {% else %}
             <tr>
-              <td colspan="6" class="py-16 text-center text-slate-500">
+              <td colspan="8" class="py-16 text-center text-slate-500">
                 No registrations found. Import a file from
                 <a href="{{ url_for('virtual_import') }}" class="text-violet-600 hover:underline">Virtual · Import</a>.
               </td>
@@ -291,7 +303,10 @@
     return parts.join("");
   }
 
-  var FIELD_LABEL_OVERRIDES = { form_timestamp: "Registered at" };
+  var FIELD_LABEL_OVERRIDES = {
+    form_timestamp: "Registered at",
+    designation_years_experience: "Years of experience",
+  };
 
   function labelKey(k) {
     if (Object.prototype.hasOwnProperty.call(FIELD_LABEL_OVERRIDES, k)) {
@@ -313,6 +328,7 @@
         "portfolio",
         "domain",
         "designation",
+        "designation_years_experience",
         "founded_info",
         "degree",
       ],

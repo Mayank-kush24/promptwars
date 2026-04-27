@@ -2,78 +2,97 @@
 {% block title %}PromptWars — Overview{% endblock %}
 
 {% block hero %}
-<section class="pw-sidebar-offset pl-0 md:pl-[var(--pw-sidebar-current)]">
-  <div class="mx-margin md:mx-margin rounded-3xl overflow-hidden border border-white/60 shadow-sm
+<section class="pw-sidebar-offset min-w-0 pl-0 md:pl-[var(--pw-sidebar-current)]">
+  <div class="mx-4 sm:mx-6 md:mx-margin rounded-3xl overflow-hidden border border-white/60 shadow-sm
               bg-gradient-to-r from-[#dbeafe] via-[#ede9fe] to-[#fce7f3] mt-0">
-    <div class="grid grid-cols-1 lg:grid-cols-12 gap-lg items-center px-margin py-xl">
-      <div class="lg:col-span-7 flex flex-col gap-md">
-        <div class="flex items-center gap-3 flex-wrap">
-          <span class="font-display text-[88px] md:text-[112px] leading-none font-black text-[#fbbf24] select-none">{</span>
-          <h1 class="font-display text-[44px] md:text-[60px] leading-none font-black text-slate-900 tracking-tight flex items-center gap-3">
-            Build
-            <span class="inline-flex items-center justify-center h-12 w-12 md:h-14 md:w-14 rounded-2xl bg-gradient-to-br from-[#4285F4] to-[#1d4ed8] text-white shadow-md rotate-6">
-              <span class="material-symbols-outlined text-[28px] md:text-[32px]">auto_awesome</span>
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-lg items-start px-4 sm:px-6 md:px-margin pt-xl pb-md">
+      <div class="lg:col-span-7 flex min-w-0 flex-col gap-md relative">
+        <svg class="pointer-events-none absolute -left-4 -top-6 h-48 w-64 text-violet-400/25 sm:h-56 sm:w-80" viewBox="0 0 200 160" fill="currentColor" aria-hidden="true">
+          <circle cx="40" cy="30" r="3"/><circle cx="120" cy="20" r="2"/><circle cx="170" cy="55" r="2.5"/>
+          <circle cx="90" cy="70" r="2"/><circle cx="30" cy="100" r="2"/><circle cx="150" cy="110" r="3"/>
+          <circle cx="60" cy="130" r="2"/><circle cx="180" cy="140" r="2"/>
+        </svg>
+        <div class="relative z-10 flex items-center justify-center gap-2 sm:gap-3 flex-wrap sm:justify-start">
+          <span class="font-display text-[clamp(2.5rem,12vw,5.5rem)] md:text-[112px] leading-none font-black text-[#fbbf24] select-none shrink-0">{</span>
+          <h1 class="font-display text-[clamp(1.35rem,5.5vw,2.75rem)] md:text-[60px] leading-none font-black text-slate-900 tracking-tight flex min-w-0 flex-wrap items-center justify-center gap-2 sm:gap-3 sm:justify-start">
+            <span class="sr-only">Build with AI</span>
+            <span aria-hidden="true">Build</span>
+            <span class="inline-flex shrink-0 items-center justify-center h-10 w-10 sm:h-12 sm:w-12 md:h-14 md:w-14 rounded-2xl bg-gradient-to-br from-[#4285F4] to-[#1d4ed8] text-white shadow-md rotate-6">
+              <span class="material-symbols-outlined text-[22px] sm:text-[28px] md:text-[32px]">auto_awesome</span>
             </span>
-            with AI
+            <span aria-hidden="true">with AI</span>
           </h1>
-          <span class="font-display text-[88px] md:text-[112px] leading-none font-black text-[#fbbf24] select-none">}</span>
+          <span class="font-display text-[clamp(2.5rem,12vw,5.5rem)] md:text-[112px] leading-none font-black text-[#fbbf24] select-none shrink-0">}</span>
         </div>
-        <div class="flex items-center gap-2 mt-1">
-          <span class="h-3 w-3 rounded-full bg-emerald-500"></span>
-          <span class="h-3 w-3 rounded-full bg-emerald-500"></span>
-          <span class="h-3 w-3 rounded-full bg-emerald-500"></span>
+        <div class="relative z-10 flex flex-wrap items-center gap-2">
+          <span class="inline-flex items-center gap-2 rounded-full border border-white/80 bg-white/70 px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm backdrop-blur">
+            <span class="relative flex h-2 w-2">
+              <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60"></span>
+              <span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
+            </span>
+            Live · {{ hero_ist_now }}
+          </span>
         </div>
       </div>
 
-      <div class="lg:col-span-5">
-        <div class="flex flex-col gap-sm">
-          <p class="font-display text-2xl md:text-3xl leading-snug text-slate-900">
-            Welcome to<br/>
-            <span class="font-medium text-slate-800">India's first end-to-end</span><br/>
-            <span class="font-medium text-slate-800">vibe coding challenge</span>
-          </p>
-          <div class="flex gap-3 mt-2">
-            <a href="{{ url_for('virtual_page') }}" class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-slate-900 text-white text-sm font-medium hover:bg-slate-800 transition-colors no-underline">
-              <span class="material-symbols-outlined text-[18px]">rocket_launch</span> Live arena
-            </a>
-            <a href="{{ url_for('in_person_page') }}" class="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white text-slate-900 text-sm font-medium border border-slate-200 hover:bg-slate-50 transition-colors no-underline">
-              <span class="material-symbols-outlined text-[18px]">insights</span> Funnel
-            </a>
-          </div>
+      <div class="lg:col-span-5 min-w-0 flex flex-col gap-sm lg:pt-2">
+        <p class="font-display text-xl sm:text-2xl md:text-3xl leading-snug text-slate-900">
+          Welcome to <span class="font-semibold text-slate-800">India's first end-to-end vibe coding challenge</span>.
+        </p>
+        <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:gap-3">
+          <a href="{{ url_for('virtual_page', virtualEventId=virtual_event_id) }}" class="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-slate-900 text-white text-sm font-medium hover:bg-slate-800 transition-colors no-underline">
+            <span class="material-symbols-outlined text-[18px]">rocket_launch</span> Live arena
+          </a>
+          <a href="{{ url_for('in_person_page', inPersonEventId=in_person_event_id) }}" class="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-white text-slate-900 text-sm font-medium border border-slate-200 hover:bg-slate-50 transition-colors no-underline">
+            <span class="material-symbols-outlined text-[18px]">insights</span> Funnel
+          </a>
         </div>
       </div>
     </div>
 
-    {# Bottom-right floating activity panel — mimicked from the screenshot's agent card #}
-    <div class="px-margin pb-xl">
-      <div class="ml-auto max-w-md bg-white/90 backdrop-blur rounded-2xl border border-white/80 shadow-sm p-md">
-        <div class="flex flex-col gap-sm">
-          <div class="flex items-start gap-3">
-            <span class="material-symbols-outlined text-blue-600 mt-1">bolt</span>
-            <div class="flex-1">
-              <p class="text-sm font-semibold text-slate-900">Live arena</p>
-              <p class="text-xs text-slate-500">Challenge {{ challenge_id }} · {{ overview.live_challenges_fmt }} live · auto-refresh leaderboard</p>
+    <div class="px-4 sm:px-6 md:px-margin pb-xl">
+      <div class="w-full max-w-2xl mx-auto lg:mx-0 lg:ml-auto rounded-2xl border border-white/80 bg-white/85 backdrop-blur shadow-sm overflow-hidden">
+        <div class="grid grid-cols-1 sm:grid-cols-2 divide-y sm:divide-y-0 sm:divide-x divide-slate-100">
+          <a href="{{ url_for('virtual_page', virtualEventId=virtual_event_id) }}" class="group flex items-start gap-3 p-4 hover:bg-white/90 transition-colors no-underline min-w-0">
+            <span class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+              <span class="material-symbols-outlined text-[22px]">bolt</span>
+            </span>
+            <div class="min-w-0 flex-1">
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">Live arena</p>
+              <p class="text-sm font-semibold text-slate-900 mt-0.5">{{ overview.live_challenges_fmt }} live · Challenge {{ challenge_id }}</p>
+              <p class="text-xs text-blue-600 font-semibold mt-1 group-hover:underline">Open virtual →</p>
             </div>
-            <a href="{{ url_for('virtual_page') }}" class="text-xs text-blue-600 hover:underline whitespace-nowrap no-underline">Open →</a>
-          </div>
-          <div class="h-px bg-slate-100"></div>
-          <div class="flex items-start gap-3">
-            <span class="material-symbols-outlined text-violet-600 mt-1">insights</span>
-            <div class="flex-1">
-              <p class="text-sm font-semibold text-slate-900">In-person analytics</p>
-              <p class="text-xs text-slate-500">{{ overview.in_person_rsvps_fmt }} RSVPs · {{ overview.in_person_submissions_fmt }} submissions · {{ overview.in_person_conversion_fmt }}</p>
+          </a>
+          <a href="{{ url_for('virtual_page', virtualEventId=virtual_event_id) }}" class="group flex items-start gap-3 p-4 hover:bg-white/90 transition-colors no-underline min-w-0">
+            <span class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-600">
+              <span class="material-symbols-outlined text-[22px]">groups</span>
+            </span>
+            <div class="min-w-0 flex-1">
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">Arena participants</p>
+              <p class="text-sm font-semibold text-slate-900 mt-0.5 tabular-nums">{{ overview.virtual_registrations_fmt }}</p>
+              <p class="text-xs text-violet-700 font-semibold mt-1 group-hover:underline">Open arena →</p>
             </div>
-            <a href="{{ url_for('in_person_page') }}" class="text-xs text-blue-600 hover:underline whitespace-nowrap no-underline">Open →</a>
-          </div>
-          <div class="h-px bg-slate-100"></div>
-          <div class="flex items-start gap-3">
-            <span class="material-symbols-outlined text-amber-600 mt-1">toll</span>
-            <div class="flex-1">
-              <p class="text-sm font-semibold text-slate-900">Credits in circulation</p>
-              <p class="text-xs text-slate-500">{{ overview.credits_fmt }} across {{ overview.virtual_registrations_fmt }} virtual participants</p>
+          </a>
+          <a href="{{ url_for('in_person_page', inPersonEventId=in_person_event_id) }}" class="group flex items-start gap-3 p-4 hover:bg-white/90 transition-colors no-underline min-w-0">
+            <span class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-lime-50 text-lime-700">
+              <span class="material-symbols-outlined text-[22px]">trending_up</span>
+            </span>
+            <div class="min-w-0 flex-1">
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">In-person funnel</p>
+              <p class="text-sm font-semibold text-slate-900 mt-0.5">{{ overview.in_person_rsvps_fmt }} → {{ overview.in_person_submissions_fmt }} <span class="text-slate-500 font-normal">({{ overview.in_person_conversion_fmt }})</span></p>
+              <p class="text-xs text-lime-700 font-semibold mt-1 group-hover:underline">Open funnel →</p>
             </div>
-            <a href="{{ url_for('admin_page') }}" class="text-xs text-blue-600 hover:underline whitespace-nowrap no-underline">Manage →</a>
-          </div>
+          </a>
+          <a href="{{ url_for('admin_page') }}" class="group flex items-start gap-3 p-4 hover:bg-white/90 transition-colors no-underline min-w-0">
+            <span class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+              <span class="material-symbols-outlined text-[22px]">toll</span>
+            </span>
+            <div class="min-w-0 flex-1">
+              <p class="text-xs font-bold uppercase tracking-wide text-slate-500">Credits in circulation</p>
+              <p class="text-sm font-semibold text-slate-900 mt-0.5">{{ overview.credits_fmt }}</p>
+              <p class="text-xs text-amber-700 font-semibold mt-1 group-hover:underline">Manage credits →</p>
+            </div>
+          </a>
         </div>
       </div>
     </div>
@@ -86,147 +105,327 @@
   <div class="glass-panel p-md rounded-xl text-error font-body-md border-l-2 border-error">Overview query failed: {{ overview.error }}</div>
 {% endif %}
 
+{% set vg = overview.get("virtual_score_stats_global") or {} %}
+{% set vc = overview.get("virtual_score_stats_challenge") or {} %}
+{% set ipss = overview.get("in_person_action_score_stats") or {} %}
+{% set vtop = overview.get("virtual_arena_top3") or {} %}
+{% set v_glb = overview.get("virtual_ac_global_top10") or {} %}
+{% set ip_glb = overview.get('in_person_ac_global_top10') or {} %}
+{% set ch_title = (vtop.get("challenge") or {}).get("title") or vc.get("challenge_title") or "Selected arena" %}
+
 <div class="flex flex-col gap-sm">
   <h2 class="font-display text-headline-lg text-slate-900 leading-tight">System overview</h2>
-  <p class="font-body-md text-on-surface-variant">Live metrics from PostgreSQL for in-person and virtual tracks.</p>
 </div>
 
 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-lg">
-  <div class="bg-white rounded-2xl border border-slate-200 p-lg flex flex-col justify-between min-h-[160px] gap-md hover:shadow-md transition-shadow">
+  <div class="bg-white rounded-2xl border border-slate-200 p-lg flex flex-col justify-between min-h-[140px] gap-md hover:shadow-md transition-shadow">
     <div class="flex justify-between items-start gap-2">
       <span class="text-[12px] font-semibold text-slate-500 uppercase tracking-wider">Total PW registrations</span>
-      <span class="material-symbols-outlined text-blue-500">groups</span>
+      <span class="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+        <span class="material-symbols-outlined text-[22px]">groups</span>
+      </span>
     </div>
     <div class="flex flex-col">
       <span class="font-display text-headline-lg text-slate-900 leading-tight break-all">{{ overview.mdc_total_fmt }}</span>
-      <span class="text-xs text-slate-500 mt-1">In-person + virtual Prompt Wars · +{{ overview.mdc_last7_fmt }} in last 7 days</span>
+      <span class="text-xs text-slate-500 mt-1">In-person + virtual · +{{ overview.mdc_last7_fmt }} last 7 days</span>
     </div>
   </div>
-  <div class="bg-white rounded-2xl border border-slate-200 p-lg flex flex-col justify-between min-h-[160px] gap-md hover:shadow-md transition-shadow">
+  <div class="bg-white rounded-2xl border border-slate-200 p-lg flex flex-col justify-between min-h-[140px] gap-md hover:shadow-md transition-shadow">
     <div class="flex justify-between items-start gap-2">
       <span class="text-[12px] font-semibold text-lime-700 uppercase tracking-wider">In-person PW</span>
-      <span class="material-symbols-outlined text-lime-600">stadium</span>
+      <span class="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-lime-50 text-lime-600">
+        <span class="material-symbols-outlined text-[22px]">stadium</span>
+      </span>
     </div>
     <div class="flex flex-col">
       <span class="font-display text-headline-lg text-slate-900 leading-tight break-all">{{ overview.mdc_in_person.total_fmt }}</span>
       <span class="text-xs text-slate-500 mt-1">+{{ overview.mdc_in_person.last7_fmt }} last 7d · top city {{ overview.mdc_in_person.top_city }}</span>
     </div>
   </div>
-  <div class="bg-white rounded-2xl border border-slate-200 p-lg flex flex-col justify-between min-h-[160px] gap-md hover:shadow-md transition-shadow">
+  <div class="bg-white rounded-2xl border border-slate-200 p-lg flex flex-col justify-between min-h-[140px] gap-md hover:shadow-md transition-shadow">
     <div class="flex justify-between items-start gap-2">
       <span class="text-[12px] font-semibold text-violet-700 uppercase tracking-wider">Virtual PW</span>
-      <span class="material-symbols-outlined text-violet-600">stream</span>
+      <span class="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-violet-50 text-violet-600">
+        <span class="material-symbols-outlined text-[22px]">stream</span>
+      </span>
     </div>
     <div class="flex flex-col">
       <span class="font-display text-headline-lg text-slate-900 leading-tight break-all">{{ overview.mdc_virtual.total_fmt }}</span>
       <span class="text-xs text-slate-500 mt-1">+{{ overview.mdc_virtual.last7_fmt }} last 7d · top city {{ overview.mdc_virtual.top_city }}</span>
     </div>
   </div>
-  <div class="bg-white rounded-2xl border border-slate-200 p-lg flex flex-col justify-between min-h-[160px] gap-md hover:shadow-md transition-shadow">
+  <div class="bg-white rounded-2xl border border-slate-200 p-lg flex flex-col justify-between min-h-[140px] gap-md hover:shadow-md transition-shadow">
     <div class="flex justify-between items-start gap-2">
       <span class="text-[12px] font-semibold text-slate-500 uppercase tracking-wider">Credits in circulation</span>
-      <span class="material-symbols-outlined text-amber-500">toll</span>
+      <span class="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+        <span class="material-symbols-outlined text-[22px]">toll</span>
+      </span>
     </div>
     <div class="flex flex-col">
       <span class="font-display text-headline-lg text-slate-900 leading-tight break-all">{{ overview.credits_fmt }}</span>
-      <span class="text-xs text-slate-500 mt-1">Across {{ overview.virtual_registrations_fmt }} virtual participants · {{ overview.live_challenges_fmt }} live</span>
+      <span class="text-xs text-slate-500 mt-1">{{ overview.virtual_registrations_fmt }} participants · {{ overview.live_challenges_fmt }} live</span>
     </div>
   </div>
 </div>
 
-<div class="grid grid-cols-1 lg:grid-cols-2 gap-lg">
-  <div class="bg-white rounded-2xl border border-lime-200 p-lg flex flex-col gap-md">
-    <div class="flex justify-between items-center border-b border-slate-100 pb-md">
-      <h3 class="font-display text-headline-md text-slate-900">In-person Prompt Wars</h3>
-      <span class="px-2.5 py-1 bg-lime-50 text-lime-700 text-[11px] font-semibold rounded-full">EVENT</span>
+<div class="mt-lg">
+  <h3 class="font-display text-headline-md text-slate-900 mb-md">At a glance</h3>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-lg">
+    <div class="bg-white rounded-2xl border border-lime-200 p-lg shadow-sm flex flex-col gap-md min-w-0">
+      <div class="flex flex-wrap items-start justify-between gap-2 border-b border-slate-100 pb-md">
+        <div>
+          <p class="text-[10px] font-bold uppercase tracking-wider text-lime-700">In-person</p>
+          <h4 class="font-display text-lg text-slate-900">Action Center</h4>
+        </div>
+        <a href="{{ url_for('in_person_page', inPersonEventId=in_person_event_id) }}" class="text-xs font-semibold text-lime-700 hover:underline shrink-0 no-underline">Open dashboard →</a>
+      </div>
+      <dl class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+        <div class="rounded-lg bg-slate-50 px-2 py-1.5"><dt class="text-slate-500">Total registrations</dt><dd class="font-semibold tabular-nums text-slate-900">{{ overview.mdc_in_person.total_fmt }}</dd></div>
+        <div class="rounded-lg bg-slate-50 px-2 py-1.5"><dt class="text-slate-500">+7d</dt><dd class="font-semibold tabular-nums text-slate-900">{{ overview.mdc_in_person.last7_fmt }}</dd></div>
+        <div class="rounded-lg bg-slate-50 px-2 py-1.5 min-w-0 sm:col-span-2"><dt class="text-slate-500">Top city</dt><dd class="font-semibold text-slate-900 truncate">{{ overview.mdc_in_person.top_city }}</dd></div>
+        <div class="rounded-lg bg-slate-50 px-2 py-1.5 min-w-0 sm:col-span-2"><dt class="text-slate-500">Top state</dt><dd class="font-semibold text-slate-900 truncate">{{ overview.mdc_in_person.top_state }}</dd></div>
+      </dl>
+      <div class="flex flex-wrap gap-2 text-xs text-slate-600">
+        <span class="rounded-full bg-lime-50 px-2.5 py-1 font-medium text-lime-900">RSVP {{ overview.in_person_rsvps_fmt }}</span>
+        <span class="rounded-full bg-lime-50 px-2.5 py-1 font-medium text-lime-900">Submissions {{ overview.in_person_submissions_fmt }}</span>
+        <span class="rounded-full bg-white border border-lime-100 px-2.5 py-1 font-medium text-lime-800">{{ overview.in_person_conversion_fmt }} conversion</span>
+      </div>
+      <div class="rounded-xl border border-lime-100 bg-lime-50/50 p-md">
+        <p class="text-[10px] font-bold uppercase tracking-wider text-lime-800 mb-2">Main sheet scores</p>
+        {% if ipss.get("error") %}
+          <p class="text-xs text-rose-700">{{ ipss.error }}</p>
+        {% else %}
+          <p class="text-[10px] text-slate-500 mb-2">{{ "{:,}".format(ipss.row_n|int) }} rows · {{ "{:,}".format(ipss.scored_n|int) }} scored</p>
+          <dl class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+            <div><dt class="text-slate-600">Min score</dt><dd class="font-semibold tabular-nums">{{ ipss.min_score_fmt }}</dd></div>
+            <div><dt class="text-slate-600">Max score</dt><dd class="font-semibold tabular-nums">{{ ipss.max_score_fmt }}</dd></div>
+            <div><dt class="text-slate-600">Average</dt><dd class="font-semibold tabular-nums">{{ ipss.avg_score_fmt }}</dd></div>
+            <div><dt class="text-slate-600">Std dev</dt><dd class="font-semibold tabular-nums">{{ ipss.stddev_score_fmt }}</dd></div>
+          </dl>
+        {% endif %}
+      </div>
+      <div>
+        <p class="text-[10px] font-bold uppercase text-lime-800 mb-2">Global standings · top 3</p>
+        {% if ip_glb.get('error') %}
+          <p class="text-xs text-rose-700">{{ ip_glb.error }}</p>
+        {% elif (ip_glb.get('rows') or [])|length %}
+          <ol class="space-y-1.5 text-sm">
+            {% for r in (ip_glb.rows or [])[:3] %}
+              <li class="flex items-center gap-2 min-w-0">
+                <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-lime-100 text-xs font-bold text-lime-900 tabular-nums">{{ r.rank }}</span>
+                <span class="flex-1 min-w-0 truncate font-medium text-slate-900" title="{{ r.team_name }}">{{ r.team_name }}</span>
+                <span class="font-semibold tabular-nums text-lime-800 shrink-0">{% if r.total_score is not none %}{{ "{:g}".format(r.total_score|float) }}{% else %}—{% endif %}</span>
+              </li>
+            {% endfor %}
+          </ol>
+        {% else %}
+          <p class="text-xs text-slate-500">No rows yet.</p>
+        {% endif %}
+      </div>
     </div>
-    <div class="flex flex-col">
-      <div class="flex justify-between items-center py-2.5">
-        <span class="text-sm text-slate-600">Total PW registrations</span>
-        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.mdc_in_person.total_fmt }}</span>
-      </div>
-      <div class="h-px bg-slate-100"></div>
-      <div class="flex justify-between items-center py-2.5">
-        <span class="text-sm text-slate-600">New (last 7 days)</span>
-        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.mdc_in_person.last7_fmt }}</span>
-      </div>
-      <div class="h-px bg-slate-100"></div>
-      <div class="flex justify-between items-center py-2.5">
-        <span class="text-sm text-slate-600">Top attendance city</span>
-        <span class="text-sm font-semibold text-slate-900">{{ overview.mdc_in_person.top_city }} <span class="text-xs text-slate-500 font-normal">({{ overview.mdc_in_person.top_city_count_fmt }})</span></span>
-      </div>
-      <div class="h-px bg-slate-100"></div>
-      <div class="flex justify-between items-center py-2.5">
-        <span class="text-sm text-slate-600">Top state</span>
-        <span class="text-sm font-semibold text-slate-900">{{ overview.mdc_in_person.top_state }} <span class="text-xs text-slate-500 font-normal">({{ overview.mdc_in_person.top_state_count_fmt }})</span></span>
-      </div>
-      <div class="h-px bg-slate-100"></div>
-      <div class="flex justify-between items-center py-2.5">
-        <span class="text-sm text-slate-600">RSVPs (distinct)</span>
-        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.in_person_rsvps_fmt }}</span>
-      </div>
-      <div class="h-px bg-slate-100"></div>
-      <div class="flex justify-between items-center py-2.5">
-        <span class="text-sm text-slate-600">Submissions (distinct)</span>
-        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.in_person_submissions_fmt }}</span>
-      </div>
-      <div class="h-px bg-slate-100"></div>
-      <div class="flex justify-between items-center py-2.5">
-        <span class="text-sm text-slate-600">RSVP &rarr; submission</span>
-        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.in_person_conversion_fmt }}</span>
-      </div>
-    </div>
-    <a href="{{ url_for('in_person_page', inPersonEventId=in_person_event_id) }}"
-       class="inline-flex items-center gap-1 text-sm font-medium text-lime-700 hover:underline mt-1 no-underline">
-      Open in-person dashboard <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
-    </a>
-  </div>
 
-  <div class="bg-white rounded-2xl border border-violet-200 p-lg flex flex-col gap-md">
-    <div class="flex justify-between items-center border-b border-slate-100 pb-md">
-      <h3 class="font-display text-headline-md text-slate-900">Virtual Prompt Wars</h3>
-      <span class="px-2.5 py-1 bg-violet-50 text-violet-700 text-[11px] font-semibold rounded-full">ARENA</span>
+    <div class="bg-white rounded-2xl border border-violet-200 p-lg shadow-sm flex flex-col gap-md min-w-0">
+      <div class="flex flex-wrap items-start justify-between gap-2 border-b border-slate-100 pb-md">
+        <div>
+          <p class="text-[10px] font-bold uppercase tracking-wider text-violet-700">Virtual</p>
+          <h4 class="font-display text-lg text-slate-900">Arena & imports</h4>
+        </div>
+        <a href="{{ url_for('virtual_page', virtualEventId=virtual_event_id, challengeId=challenge_id) }}" class="text-xs font-semibold text-violet-700 hover:underline shrink-0 no-underline">Open dashboard →</a>
+      </div>
+      <dl class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+        <div class="rounded-lg bg-slate-50 px-2 py-1.5"><dt class="text-slate-500">Total registrations</dt><dd class="font-semibold tabular-nums text-slate-900">{{ overview.mdc_virtual.total_fmt }}</dd></div>
+        <div class="rounded-lg bg-slate-50 px-2 py-1.5"><dt class="text-slate-500">+7d</dt><dd class="font-semibold tabular-nums text-slate-900">{{ overview.mdc_virtual.last7_fmt }}</dd></div>
+        <div class="rounded-lg bg-slate-50 px-2 py-1.5 min-w-0 sm:col-span-2"><dt class="text-slate-500">Top city</dt><dd class="font-semibold text-slate-900 truncate">{{ overview.mdc_virtual.top_city }}</dd></div>
+        <div class="rounded-lg bg-slate-50 px-2 py-1.5 min-w-0 sm:col-span-2"><dt class="text-slate-500">Top state</dt><dd class="font-semibold text-slate-900 truncate">{{ overview.mdc_virtual.top_state }}</dd></div>
+      </dl>
+      <div class="flex flex-wrap gap-2 text-xs text-slate-600">
+        <span class="rounded-full bg-violet-50 px-2.5 py-1 font-medium text-violet-900">{{ overview.live_challenges_fmt }} live</span>
+        <span class="rounded-full bg-violet-50 px-2.5 py-1 font-medium text-violet-900">{{ overview.virtual_registrations_fmt }} in arena</span>
+        <span class="rounded-full bg-white border border-violet-100 px-2.5 py-1 font-medium text-violet-800">{{ overview.credits_fmt }} credits</span>
+      </div>
+      {% if vg.get("error") %}
+        <p class="text-xs text-rose-700">{{ vg.error }}</p>
+      {% else %}
+        <div class="rounded-xl border border-violet-100 bg-violet-50/40 p-md">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-violet-800 mb-2">Global import scores</p>
+          <p class="text-[10px] text-slate-500 mb-2">{{ "{:,}".format(vg.row_n|int) }} rows · {{ "{:,}".format(vg.scored_n|int) }} scored</p>
+          <dl class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+            <div><dt class="text-slate-600">Min score</dt><dd class="font-semibold tabular-nums">{{ vg.min_score_fmt }}</dd></div>
+            <div><dt class="text-slate-600">Max score</dt><dd class="font-semibold tabular-nums">{{ vg.max_score_fmt }}</dd></div>
+            <div><dt class="text-slate-600">Average</dt><dd class="font-semibold tabular-nums">{{ vg.avg_score_fmt }}</dd></div>
+            <div><dt class="text-slate-600">Std dev</dt><dd class="font-semibold tabular-nums">{{ vg.stddev_score_fmt }}</dd></div>
+          </dl>
+        </div>
+      {% endif %}
+      {% if vc.get("error") %}
+        <p class="text-xs text-rose-700">{{ vc.error }}</p>
+      {% else %}
+        <div class="rounded-xl border border-violet-200 bg-white p-md">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-violet-900 mb-2 flex flex-wrap items-center gap-2">
+            <span>{{ ch_title }}</span>
+            <span class="rounded-full bg-violet-100 px-2 py-0.5 text-[9px] font-bold text-violet-800">Challenge {{ overview.get("overview_arena_challenge_id", challenge_id) }}</span>
+          </p>
+          <p class="text-[10px] text-slate-500 mb-2">{{ "{:,}".format(vc.row_n|int) }} rows · {{ "{:,}".format(vc.scored_n|int) }} scored</p>
+          <dl class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+            <div><dt class="text-slate-600">Min score</dt><dd class="font-semibold tabular-nums">{{ vc.min_score_fmt }}</dd></div>
+            <div><dt class="text-slate-600">Max score</dt><dd class="font-semibold tabular-nums">{{ vc.max_score_fmt }}</dd></div>
+            <div><dt class="text-slate-600">Average</dt><dd class="font-semibold tabular-nums">{{ vc.avg_score_fmt }}</dd></div>
+            <div><dt class="text-slate-600">Std dev</dt><dd class="font-semibold tabular-nums">{{ vc.stddev_score_fmt }}</dd></div>
+          </dl>
+        </div>
+      {% endif %}
+      <div>
+        <p class="text-[10px] font-bold uppercase text-violet-800 mb-2">Mean score · top 3 (all arenas)</p>
+        {% if v_glb.get("error") %}
+          <p class="text-xs text-rose-700">{{ v_glb.error }}</p>
+        {% elif (v_glb.get("rows") or [])|length %}
+          <ol class="space-y-1.5 text-sm">
+            {% for r in (v_glb.rows or [])[:3] %}
+              <li class="flex items-center gap-2 min-w-0">
+                <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100 text-xs font-bold text-violet-900 tabular-nums">{{ r.rank }}</span>
+                <span class="flex-1 min-w-0 truncate font-medium text-slate-900" title="{{ r.team_name }}">{{ r.team_name }}</span>
+                <span class="font-semibold tabular-nums text-violet-800 shrink-0">{% if r.average_score is not none %}{{ "{:g}".format(r.average_score|float) }}{% else %}—{% endif %}</span>
+              </li>
+            {% endfor %}
+          </ol>
+        {% else %}
+          <p class="text-xs text-slate-500">No virtual rows yet.</p>
+        {% endif %}
+      </div>
     </div>
-    <div class="flex flex-col">
-      <div class="flex justify-between items-center py-2.5">
-        <span class="text-sm text-slate-600">Total PW registrations</span>
-        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.mdc_virtual.total_fmt }}</span>
-      </div>
-      <div class="h-px bg-slate-100"></div>
-      <div class="flex justify-between items-center py-2.5">
-        <span class="text-sm text-slate-600">New (last 7 days)</span>
-        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.mdc_virtual.last7_fmt }}</span>
-      </div>
-      <div class="h-px bg-slate-100"></div>
-      <div class="flex justify-between items-center py-2.5">
-        <span class="text-sm text-slate-600">Top residence city</span>
-        <span class="text-sm font-semibold text-slate-900">{{ overview.mdc_virtual.top_city }} <span class="text-xs text-slate-500 font-normal">({{ overview.mdc_virtual.top_city_count_fmt }})</span></span>
-      </div>
-      <div class="h-px bg-slate-100"></div>
-      <div class="flex justify-between items-center py-2.5">
-        <span class="text-sm text-slate-600">Top state</span>
-        <span class="text-sm font-semibold text-slate-900">{{ overview.mdc_virtual.top_state }} <span class="text-xs text-slate-500 font-normal">({{ overview.mdc_virtual.top_state_count_fmt }})</span></span>
-      </div>
-      <div class="h-px bg-slate-100"></div>
-      <div class="flex justify-between items-center py-2.5">
-        <span class="text-sm text-slate-600">Arena participants</span>
-        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.virtual_registrations_fmt }}</span>
-      </div>
-      <div class="h-px bg-slate-100"></div>
-      <div class="flex justify-between items-center py-2.5">
-        <span class="text-sm text-slate-600">Live challenges</span>
-        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.live_challenges_fmt }}</span>
-      </div>
-      <div class="h-px bg-slate-100"></div>
-      <div class="flex justify-between items-center py-2.5">
-        <span class="text-sm text-slate-600">Credit pool (sum balances)</span>
-        <span class="text-lg font-semibold text-slate-900 tabular-nums">{{ overview.credits_fmt }}</span>
-      </div>
-    </div>
-    <a href="{{ url_for('virtual_page', virtualEventId=virtual_event_id, challengeId=challenge_id) }}"
-       class="inline-flex items-center gap-1 text-sm font-medium text-violet-700 hover:underline mt-1 no-underline">
-      Open virtual dashboard <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
-    </a>
   </div>
 </div>
+
+<div id="pw-overview-leaderboards" class="grid grid-cols-1 lg:grid-cols-2 gap-lg mt-lg scroll-mt-24 md:scroll-mt-28">
+  {# In-person leaderboard: scope Global vs City & session #}
+  <div class="bg-white rounded-2xl border border-lime-200 p-lg shadow-sm flex flex-col min-w-0">
+    <div class="border-b border-slate-100 pb-md mb-md">
+      <h3 class="font-display text-headline-md text-slate-900">In-person · Top 10</h3>
+    </div>
+    {% set lb_track = 'in_person' %}
+    {% set lb_select_name = 'inPersonOverview' %}
+    {% set lb_options = ip_overview_options %}
+    {% set lb_selected = in_person_overview_value %}
+    {% set lb_reset_href = (url_for('main_dashboard', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, challengeId=challenge_id, virtualOverview=virtual_overview_value) ~ '#pw-overview-leaderboards') if in_person_overview_value != 'global' else '' %}
+    {% include 'partials/main_dashboard_lb_overview_form.html' %}
+    {% if ip_lb_scope == 'global' %}
+      <p class="text-xs text-slate-500 mb-md">Warm-up excluded.</p>
+      {% if ip_glb.get('error') %}
+        <p class="text-sm text-rose-700">{{ ip_glb.error }}</p>
+      {% elif ip_glb.get('rows') %}
+        <ol class="space-y-2 text-sm flex-1">
+          {% for r in ip_glb.rows %}
+            <li class="flex items-center gap-2 min-w-0 border-b border-slate-50 pb-2">
+              <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-lime-100 text-xs font-bold text-lime-900 tabular-nums">{{ r.rank }}</span>
+              <span class="flex-1 min-w-0 truncate font-medium text-slate-900" title="{{ r.team_name }}">{{ r.team_name }}</span>
+              <span class="text-xs text-slate-500 truncate max-w-[5rem] shrink-0" title="{{ r.attendance_city or '' }}">{{ r.attendance_city or "—" }}</span>
+              <span class="font-semibold tabular-nums text-lime-800 shrink-0">{% if r.total_score is not none %}{{ "{:g}".format(r.total_score|float) }}{% else %}—{% endif %}</span>
+            </li>
+          {% endfor %}
+        </ol>
+      {% else %}
+        <p class="text-sm text-slate-500">No main-challenge rows yet.</p>
+      {% endif %}
+      <a href="{{ url_for('in_person_leaderboard', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, challengeId=challenge_id) }}" class="inline-flex items-center gap-1 text-xs font-semibold text-lime-700 hover:underline mt-md no-underline">Full in-person leaderboard <span class="material-symbols-outlined text-[14px]">arrow_forward</span></a>
+    {% else %}
+      {% if in_person_ac_focus_lb %}
+        {% if in_person_ac_focus_lb.get('error') %}
+          <p class="text-sm text-rose-700">{{ in_person_ac_focus_lb.error }}</p>
+        {% elif in_person_ac_focus_lb.get('rows') %}
+          <p class="text-xs text-slate-600 mb-2">Showing <strong>{{ in_person_ac_focus_session_display or in_person_ac_focus_city }}</strong></p>
+          <ol class="space-y-2 text-sm flex-1">
+            {% for r in in_person_ac_focus_lb.rows %}
+              <li class="flex items-center gap-2 min-w-0 border-b border-slate-50 pb-2">
+                <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-lime-100 text-xs font-bold text-lime-900 tabular-nums">{{ r.rank }}</span>
+                <span class="flex-1 min-w-0 truncate font-medium text-slate-900">{{ r.team_name }}</span>
+                <span class="font-semibold tabular-nums text-lime-800 shrink-0">{% if r.total_score is not none %}{{ "{:g}".format(r.total_score|float) }}{% else %}—{% endif %}</span>
+              </li>
+            {% endfor %}
+          </ol>
+          {% if ip_per_city_leaderboard_url %}
+          <a href="{{ ip_per_city_leaderboard_url }}" class="inline-flex items-center gap-1 text-xs font-semibold text-lime-700 hover:underline mt-md no-underline">Open this view on leaderboard <span class="material-symbols-outlined text-[14px]">arrow_forward</span></a>
+          {% endif %}
+        {% elif in_person_ac_focus_city %}
+          <p class="text-sm text-slate-500">No teams for this session yet.</p>
+        {% endif %}
+      {% else %}
+        <p class="text-sm text-slate-500">Pick a city and session from the overview list above.</p>
+      {% endif %}
+      <a href="{{ url_for('in_person_page', inPersonEventId=in_person_event_id) }}" class="inline-flex items-center gap-1 text-xs font-semibold text-lime-700/90 hover:underline mt-2 no-underline">In-person dashboard <span class="material-symbols-outlined text-[14px]">arrow_forward</span></a>
+    {% endif %}
+  </div>
+
+  {# Virtual leaderboard: scope Global vs Selected arena #}
+  <div class="bg-white rounded-2xl border border-violet-200 p-lg shadow-sm flex flex-col min-w-0">
+    <div class="border-b border-slate-100 pb-md mb-md">
+      <h3 class="font-display text-headline-md text-slate-900">Virtual · Top 10</h3>
+    </div>
+    {% set lb_track = 'virtual' %}
+    {% set lb_select_name = 'virtualOverview' %}
+    {% set lb_options = virtual_overview_options %}
+    {% set lb_selected = virtual_overview_value %}
+    {% set lb_reset_href = (url_for('main_dashboard', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, challengeId=challenge_id, inPersonOverview=in_person_overview_value, virtualOverview='global') ~ '#pw-overview-leaderboards') if virtual_overview_value != 'global' else '' %}
+    {% include 'partials/main_dashboard_lb_overview_form.html' %}
+    {% if v_lb_scope == 'global' %}
+      {% if v_glb.get('error') %}
+        <p class="text-sm text-rose-700">{{ v_glb.error }}</p>
+      {% elif v_glb.get('rows') %}
+        <ol class="space-y-2 text-sm flex-1">
+          {% for r in v_glb.rows %}
+            <li class="flex items-center gap-2 min-w-0 border-b border-slate-50 pb-2">
+              <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100 text-xs font-bold text-violet-900 tabular-nums">{{ r.rank }}</span>
+              <span class="flex-1 min-w-0 truncate font-medium text-slate-900" title="{{ r.team_name }}">{{ r.team_name }}</span>
+              <span class="text-xs text-slate-500 tabular-nums shrink-0">{{ r.arena_count }} ch.</span>
+              <span class="font-semibold tabular-nums text-violet-800 shrink-0">{% if r.average_score is not none %}{{ "{:g}".format(r.average_score|float) }}{% else %}—{% endif %}</span>
+            </li>
+          {% endfor %}
+        </ol>
+      {% else %}
+        <p class="text-sm text-slate-500">No virtual submission rows yet.</p>
+      {% endif %}
+      <a href="{{ url_for('virtual_submission_leaderboard', virtualEventId=virtual_event_id, global=1) }}" class="inline-flex items-center gap-1 text-xs font-semibold text-violet-700 hover:underline mt-md no-underline">Full global leaderboard <span class="material-symbols-outlined text-[14px]">arrow_forward</span></a>
+    {% else %}
+      {% if vtop.get("error") %}
+        <p class="text-sm text-rose-700">{{ vtop.error }}</p>
+      {% elif (vtop.get("rows") or [])|length %}
+        <ol class="space-y-2 text-sm flex-1">
+          {% for r in vtop.rows %}
+            <li class="flex items-center gap-2 min-w-0 border-b border-slate-50 pb-2">
+              <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-200 text-xs font-bold text-violet-950 tabular-nums">{{ r.rank }}</span>
+              <span class="flex-1 min-w-0 truncate font-medium text-slate-900" title="{{ r.team_name }}">{{ r.team_name }}</span>
+              <span class="font-semibold tabular-nums text-violet-900 shrink-0">{% if r.total_score is not none %}{{ "{:g}".format(r.total_score|float) }}{% else %}—{% endif %}</span>
+            </li>
+          {% endfor %}
+        </ol>
+      {% else %}
+        <p class="text-sm text-slate-500">No rows for this challenge yet.</p>
+      {% endif %}
+      <a href="{{ url_for('virtual_submission_leaderboard', virtualEventId=virtual_event_id, arenaChallengeId=challenge_id, inPersonEventId=in_person_event_id) }}" class="inline-flex items-center gap-1 text-xs font-semibold text-violet-700 hover:underline mt-md no-underline">Full challenge leaderboard <span class="material-symbols-outlined text-[14px]">arrow_forward</span></a>
+    {% endif %}
+  </div>
+</div>
+<script>
+(function () {
+  function pwScrollToOverviewLeaderboards() {
+    try {
+      var el = document.getElementById("pw-overview-leaderboards");
+      if (!el) return;
+      var fromStorage = sessionStorage.getItem("pw-scroll-leaderboards") === "1";
+      if (fromStorage) sessionStorage.removeItem("pw-scroll-leaderboards");
+      var fromHash = window.location.hash === "#pw-overview-leaderboards";
+      if (!fromStorage && !fromHash) return;
+      requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+          el.scrollIntoView({ block: "start", behavior: "auto" });
+        });
+      });
+    } catch (e) {}
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", pwScrollToOverviewLeaderboards);
+  } else {
+    pwScrollToOverviewLeaderboards();
+  }
+})();
+</script>
 {% endblock %}

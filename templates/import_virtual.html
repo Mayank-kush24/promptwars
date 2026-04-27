@@ -3,26 +3,23 @@
 {% block content %}
 <div class="flex flex-col gap-sm">
   <h1 class="font-display text-headline-lg text-slate-900">Virtual · Import</h1>
-  <p class="font-body-md text-slate-600 max-w-3xl">
-    Import marketing registrations into <code class="rounded bg-slate-100 px-1 text-sm">virtual_main_data_center_registrations</code> (Vision export, same column layout as in-person Main Data Center). Challenge credits still use the JSON API below.
-  </p>
+  <p class="font-body-md text-slate-600 max-w-3xl">Registrations → <code class="rounded bg-slate-100 px-1 text-sm">virtual_main_data_center_registrations</code>.</p>
 </div>
 
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-lg">
   <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm lg:col-span-2">
     <h2 class="font-display text-headline-md text-slate-900 mb-sm">Challenge submissions (XLSX)</h2>
-    <div class="rounded-xl border border-violet-100 bg-violet-50/60 p-md text-sm text-slate-700 mb-md">
-      <p class="font-semibold text-violet-900 mb-1.5">How this import works</p>
-      <ul class="list-disc pl-5 space-y-1.5 text-slate-600">
-        <li><span class="font-medium text-slate-800">Destination table:</span> <code class="rounded bg-white/90 px-1.5 py-0.5 text-xs border border-violet-100">virtual_challenge_submission_rows</code> (one row per team per challenge, linked to <code class="rounded bg-white/90 px-1 text-xs">challenges</code> and Virtual MDC).</li>
-        <li><span class="font-medium text-slate-800">Upsert:</span> same challenge + same team name → existing row is <strong>updated</strong>; new team names → <strong>inserted</strong>. Nothing is deleted.</li>
-        <li><span class="font-medium text-slate-800">Sheets:</span> every tab must look like <strong>Submission …</strong> (optional <code class="rounded bg-white/90 px-1 text-xs">1.</code> / <code class="rounded bg-white/90 px-1 text-xs">2)</code> prefix is ignored). The suffix must match the challenge title or the optional sheet suffix in <a href="{{ url_for('virtual_challenges') }}" class="text-violet-700 font-semibold underline-offset-2 hover:underline">Manage challenges</a>.</li>
-        <li><span class="font-medium text-slate-800">Gate:</span> each <strong>Leader email</strong> must already exist in <code class="rounded bg-white/90 px-1 text-xs">virtual_main_data_center_registrations</code> for event <strong>{{ virtual_event_id }}</strong>. If any email is missing, <strong>no rows are written</strong> (fix MDC, then retry).</li>
-      </ul>
-    </div>
-    <p class="text-sm text-slate-600 mb-md">
-      Only <strong>.xlsx</strong> is supported. After you run an import, the panel below shows whether the database was updated, which tabs were matched, and row counts.
-    </p>
+    <details class="mb-md rounded-xl border border-violet-100 bg-violet-50/60 text-sm text-slate-700">
+      <summary class="cursor-pointer px-4 py-3 font-semibold text-violet-900">How this import works</summary>
+      <div class="px-4 pb-3 pt-0">
+        <ul class="list-disc pl-5 space-y-1.5 text-slate-600">
+          <li><span class="font-medium text-slate-800">Table:</span> <code class="rounded bg-white/90 px-1.5 py-0.5 text-xs border border-violet-100">virtual_challenge_submission_rows</code> (per team per challenge).</li>
+          <li><span class="font-medium text-slate-800">Upsert:</span> same challenge + team name → update; new name → insert.</li>
+          <li><span class="font-medium text-slate-800">Sheets:</span> <strong>Submission …</strong> tabs; suffix matches title or <a href="{{ url_for('virtual_challenges') }}" class="text-violet-700 font-semibold underline-offset-2 hover:underline">Manage challenges</a> sheet suffix.</li>
+          <li><span class="font-medium text-slate-800">Gate:</span> leader emails must exist in Virtual MDC (event <strong>{{ virtual_event_id }}</strong>) or nothing is written.</li>
+        </ul>
+      </div>
+    </details>
     <form id="vcsr-import-form" action="{{ url_for('admin_import_virtual_challenge_submissions') }}" method="post" enctype="multipart/form-data" class="flex flex-col gap-md max-w-xl">
       <label class="flex flex-col gap-xs">
         <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Submissions workbook</span>
@@ -40,11 +37,9 @@
     </div>
   </div>
 
-  <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
+  <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm lg:col-span-2">
     <h2 class="font-display text-headline-md text-slate-900 mb-sm">Virtual Main Data Center</h2>
-    <p class="text-sm text-slate-600 mb-md">
-      Upload a <strong>.csv</strong>, <strong>.xlsx</strong>, or <strong>.xls</strong> export. Rows are upserted by email for the default virtual event (<strong>{{ virtual_event_id }}</strong>).
-    </p>
+    <p class="text-sm text-slate-600 mb-md"><strong>.csv</strong> / <strong>.xlsx</strong> / <strong>.xls</strong> — upsert by email (event <strong>{{ virtual_event_id }}</strong>).</p>
     <form id="vmdc-import-form" action="{{ url_for('admin_import_virtual_main_data_center') }}" method="post" enctype="multipart/form-data" class="flex flex-col gap-md">
       <label class="flex flex-col gap-xs">
         <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Registration file</span>
@@ -58,32 +53,6 @@
     </form>
     <p id="vmdc-import-status" class="text-sm text-slate-600 mt-md hidden" aria-live="polite"></p>
   </div>
-
-  <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
-    <h2 class="font-display text-headline-md text-slate-900 mb-sm">Credit grant API</h2>
-    <p class="text-sm text-slate-600 mb-md">Default challenge id: <strong>{{ challenge_id }}</strong> · virtual event <strong>{{ virtual_event_id }}</strong>.</p>
-    <pre class="text-xs leading-relaxed bg-slate-900 text-slate-100 rounded-lg p-md overflow-x-auto">POST /api/credits/grant
-Content-Type: application/json
-
-{
-  "participant_id": 1,
-  "delta": 10,
-  "reason": "bonus",
-  "challenge_id": {{ challenge_id }},
-  "idempotency_key": "optional-unique-key"
-}</pre>
-    <p class="text-xs text-slate-500 mt-md">Requires the <strong>Virtual · Import</strong> permission from the CDI portal.</p>
-  </div>
-</div>
-
-<div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm flex flex-col gap-md mt-lg">
-  <h2 class="font-display text-headline-md text-slate-900">Data Ops</h2>
-  <p class="text-sm text-slate-600">Full engine health, import jobs, and in-person CSV pipeline live in Data Ops.</p>
-  <a href="{{ url_for('admin_page') }}"
-     class="inline-flex items-center gap-2 self-start rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-800 hover:bg-slate-50 no-underline">
-    <span class="material-symbols-outlined text-[20px] text-violet-600">open_in_new</span>
-    Open Data Ops
-  </a>
 </div>
 
 <div class="flex justify-end">
@@ -188,10 +157,8 @@ Content-Type: application/json
     panel.classList.remove("hidden");
     head.className =
       "px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-600 bg-slate-100 border-b border-slate-200";
-    head.textContent = "Working…";
-    body.innerHTML =
-      "<p class=\"text-slate-600\">Uploading file and parsing sheets…</p>" +
-      "<p class=\"text-xs text-slate-500 mt-1\">Nothing is written to the database until leader emails pass the Virtual MDC check.</p>";
+    head.textContent = "Uploading…";
+    body.innerHTML = "<p class=\"text-slate-600\">Uploading…</p>";
     if (submitBtn) submitBtn.disabled = true;
     fetch(apiUrl, { method: "POST", body: fd, credentials: "same-origin" })
       .then(function (r) {
@@ -285,7 +252,7 @@ Content-Type: application/json
         showPanel("ok", "Import succeeded", okParts.join(""));
       })
       .catch(function () {
-        showPanel("err", "Network error", "<p>Could not reach the server. Check your connection and try again.</p>");
+        showPanel("err", "Network error", "<p>Could not reach the server.</p>");
       })
       .finally(function () {
         if (submitBtn) submitBtn.disabled = false;

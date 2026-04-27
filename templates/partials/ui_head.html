@@ -95,6 +95,9 @@
         }
     </script>
 <style>
+        html {
+            overflow-x: clip;
+        }
         html, body {
             font-family: "Google Sans", ui-sans-serif, system-ui, sans-serif;
             margin: 0;
@@ -248,6 +251,12 @@
             transform: translate3d(-100%, 0, 0);
             will-change: transform;
             pointer-events: none;
+            padding-left: env(safe-area-inset-left, 0px);
+            padding-bottom: env(safe-area-inset-bottom, 0px);
+        }
+        .pw-scroll-x-touch {
+            -webkit-overflow-scrolling: touch;
+            overflow-x: auto;
         }
         body.pw-mobile-nav-open #pw-mobile-nav {
             transform: translate3d(0, 0, 0);

@@ -7,6 +7,7 @@ DROP TABLE IF EXISTS credit_ledger CASCADE;
 DROP TABLE IF EXISTS participant_balances CASCADE;
 DROP TABLE IF EXISTS registrations CASCADE;
 DROP TABLE IF EXISTS virtual_challenge_submission_rows CASCADE;
+DROP TABLE IF EXISTS in_person_challenge_submission_rows CASCADE;
 DROP TABLE IF EXISTS challenges CASCADE;
 DROP TABLE IF EXISTS submissions CASCADE;
 DROP TABLE IF EXISTS rsvps CASCADE;
@@ -35,7 +36,12 @@ CREATE INDEX idx_events_kind ON events (kind);
 
 CREATE TABLE import_jobs (
   id SERIAL PRIMARY KEY,
-  module TEXT NOT NULL CHECK (module IN ('in_person', 'virtual')),
+  module TEXT NOT NULL CHECK (module IN (
+    'in_person',
+    'virtual',
+    'virtual_challenge_submissions',
+    'in_person_challenge_submissions'
+  )),
   status TEXT NOT NULL,
   started_at TIMESTAMPTZ,
   finished_at TIMESTAMPTZ,
@@ -88,6 +94,7 @@ CREATE TABLE in_person_main_data_center_registrations (
   portfolio TEXT,
   domain TEXT,
   designation TEXT,
+  designation_years_experience INTEGER,
   founded_info TEXT,
   degree TEXT,
   profile_name TEXT,
@@ -130,6 +137,7 @@ CREATE TABLE virtual_main_data_center_registrations (
   portfolio TEXT,
   domain TEXT,
   designation TEXT,
+  designation_years_experience INTEGER,
   founded_info TEXT,
   degree TEXT,
   profile_name TEXT,
@@ -294,6 +302,88 @@ CREATE TRIGGER vcsr_touch_updated_at
 BEFORE UPDATE ON virtual_challenge_submission_rows
 FOR EACH ROW
 EXECUTE FUNCTION fn_vcsr_touch_updated_at();
+
+-- In-person Action Center workbook: one row per team per PW session (city + date + optional label) per sheet kind.
+CREATE TABLE in_person_challenge_submission_rows (
+  id BIGSERIAL PRIMARY KEY,
+  event_id INTEGER NOT NULL REFERENCES events (id) ON DELETE CASCADE,
+  import_job_id INTEGER REFERENCES import_jobs (id) ON DELETE SET NULL,
+  in_person_mdc_registration_id BIGINT REFERENCES in_person_main_data_center_registrations (id) ON DELETE SET NULL,
+  attendance_city TEXT NOT NULL,
+  attendance_city_normalized TEXT GENERATED ALWAYS AS (lower(btrim(attendance_city))) STORED,
+  prompt_war_on DATE NOT NULL DEFAULT DATE '1970-01-01',
+  session_label TEXT NOT NULL DEFAULT '',
+  session_label_normalized TEXT GENERATED ALWAYS AS (lower(btrim(session_label))) STORED,
+  sheet_kind TEXT NOT NULL CHECK (sheet_kind IN ('warmup', 'main')),
+  source_sheet_name TEXT NOT NULL,
+  team_name TEXT NOT NULL,
+  team_name_normalized TEXT GENERATED ALWAYS AS (lower(btrim(team_name))) STORED,
+  leader_name TEXT,
+  leader_email TEXT NOT NULL,
+  leader_email_normalized TEXT GENERATED ALWAYS AS (lower(trim(leader_email))) STORED,
+  leader_phone TEXT,
+  team_size INTEGER,
+  problem_statements TEXT,
+  total_score NUMERIC(14, 4),
+  deployed_link TEXT,
+  deployed_changes_notes TEXT,
+  github_repository_link TEXT,
+  export_created_at TIMESTAMPTZ,
+  export_created_by_name TEXT,
+  export_created_by_email TEXT,
+  export_updated_at TIMESTAMPTZ,
+  export_updated_by_name TEXT,
+  export_updated_by_email TEXT,
+  imported_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_ipcsr_event ON in_person_challenge_submission_rows (event_id);
+CREATE INDEX idx_ipcsr_leader_email ON in_person_challenge_submission_rows (leader_email_normalized);
+CREATE UNIQUE INDEX uq_ipcsr_event_city_session_kind_team
+  ON in_person_challenge_submission_rows (
+    event_id,
+    attendance_city_normalized,
+    prompt_war_on,
+    session_label_normalized,
+    sheet_kind,
+    team_name_normalized
+  );
+
+CREATE INDEX idx_ipcsr_event_kind_score ON in_person_challenge_submission_rows (
+  event_id,
+  sheet_kind,
+  total_score DESC NULLS LAST,
+  export_created_at ASC NULLS LAST,
+  id ASC
+);
+
+CREATE INDEX idx_ipcsr_event_city_session_kind_score ON in_person_challenge_submission_rows (
+  event_id,
+  attendance_city_normalized,
+  prompt_war_on,
+  session_label_normalized,
+  sheet_kind,
+  total_score DESC NULLS LAST,
+  export_created_at ASC NULLS LAST,
+  id ASC
+);
+
+CREATE OR REPLACE FUNCTION fn_ipcsr_touch_updated_at()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.updated_at := now();
+  RETURN NEW;
+END
+$$;
+
+DROP TRIGGER IF EXISTS ipcsr_touch_updated_at ON in_person_challenge_submission_rows;
+CREATE TRIGGER ipcsr_touch_updated_at
+BEFORE UPDATE ON in_person_challenge_submission_rows
+FOR EACH ROW
+EXECUTE FUNCTION fn_ipcsr_touch_updated_at();
 
 CREATE TABLE registrations (
   id SERIAL PRIMARY KEY,

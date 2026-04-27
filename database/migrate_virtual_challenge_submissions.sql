@@ -51,7 +51,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_challenges_event_import_sheet_suffix_lower
 -- 2) import_jobs: allow virtual_challenge_submissions module label
 ALTER TABLE import_jobs DROP CONSTRAINT IF EXISTS import_jobs_module_check;
 ALTER TABLE import_jobs ADD CONSTRAINT import_jobs_module_check
-  CHECK (module IN ('in_person', 'virtual', 'virtual_challenge_submissions'));
+  CHECK (module IN (
+    'in_person',
+    'virtual',
+    'virtual_challenge_submissions',
+    'in_person_challenge_submissions'
+  ));
 
 -- 3) Main data table
 CREATE TABLE IF NOT EXISTS virtual_challenge_submission_rows (

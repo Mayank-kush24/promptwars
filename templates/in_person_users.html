@@ -8,16 +8,12 @@
 {% endblock %}
 {% block content %}
 {% macro page_href(p) -%}
-{{- url_for('in_person_users', page=p, per_page=users.per_page) -}}
-{%- if users.search %}&q={{ users.search | urlencode }}{% endif %}
-{%- if users.attendance_city %}&attendance_city={{ users.attendance_city | urlencode }}{% endif %}
+{{- url_for('in_person_users', page=p) -}}
+{%- if users.preserve_query_str %}&{{ users.preserve_query_str }}{% endif %}
 {%- endmacro %}
 <div class="flex flex-col gap-md">
   <div class="flex flex-col gap-sm">
     <h1 class="font-display text-headline-lg text-slate-900 leading-tight">{{ title }}</h1>
-    <p class="font-body-md text-slate-600 max-w-3xl">
-      Main Data Center registrations for your Vision program (same scope as import). Use search to filter by name, email, profile name, or mobile; use attendance city to match the dashboard chart (trimmed <code class="rounded bg-slate-100 px-1">attendance_city</code>).
-    </p>
   </div>
 
   {% if users.error %}
@@ -52,7 +48,7 @@
       <div class="flex flex-wrap gap-2 items-center">
         <input type="hidden" name="per_page" value="{{ users.per_page }}" />
         <button type="submit" class="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">Apply filters</button>
-        {% if users.search or users.attendance_city %}
+        {% if users.search or users.attendance_city or users.advanced_active %}
           <a href="{{ url_for('in_person_users', per_page=users.per_page) }}" class="inline-flex items-center px-4 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">Clear</a>
         {% endif %}
         <a href="{{ url_for('in_person_users_export_csv') }}{% if users.export_query %}?{{ users.export_query }}{% endif %}"
@@ -63,6 +59,8 @@
         </a>
       </div>
     </div>
+    {% set pw_adv_input_focus = 'focus:outline-none focus:ring-2 focus:ring-emerald-400/50' %}
+    {% include "partials/mdc_users_advanced_filters.html" %}
   </form>
 
   <div class="flex flex-wrap items-center justify-between gap-sm text-sm text-slate-600">
@@ -79,8 +77,9 @@
       {% endif %}
     </span>
     <form method="get" class="flex items-center gap-2">
-      {% if users.search %}<input type="hidden" name="q" value="{{ users.search }}" />{% endif %}
-      {% if users.attendance_city %}<input type="hidden" name="attendance_city" value="{{ users.attendance_city }}" />{% endif %}
+      {% for k, v in users.preserve_items %}
+        <input type="hidden" name="{{ k }}" value="{{ v }}" />
+      {% endfor %}
       <input type="hidden" name="page" value="1" />
       <label class="text-xs text-slate-500">Per page</label>
       <select name="per_page" onchange="this.form.submit()"
@@ -94,7 +93,7 @@
 
   <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
     <div class="overflow-x-auto">
-      <table class="w-full text-left text-sm min-w-[720px]">
+      <table class="w-full text-left text-sm min-w-[900px]">
         <thead>
           <tr class="border-b border-slate-200 bg-slate-50 text-slate-500">
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Name</th>
@@ -102,6 +101,8 @@
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Location</th>
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Promptathon city</th>
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Occupation</th>
+            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Designation</th>
+            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-right tabular-nums">Yrs exp.</th>
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Registered at</th>
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-right w-16">View</th>
           </tr>
@@ -136,6 +137,16 @@
               <td class="py-3 px-4 max-w-[140px]">
                 <span class="truncate block" title="{{ row.occupation or '—' }}">{{ row.occupation or '—' }}</span>
               </td>
+              <td class="py-3 px-4 max-w-[160px]">
+                <span class="truncate block text-slate-700" title="{{ row.designation or '—' }}">{{ row.designation or '—' }}</span>
+              </td>
+              <td class="py-3 px-4 text-right tabular-nums text-slate-700">
+                {% if row.designation_years_experience is not none %}
+                  {{ row.designation_years_experience }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
               <td class="py-3 px-4 whitespace-nowrap text-slate-600 text-xs">
                 {% if row.form_timestamp %}
                   {{ row.form_timestamp.strftime('%d-%m-%Y %H:%M:%S') }}
@@ -154,7 +165,7 @@
             </tr>
           {% else %}
             <tr>
-              <td colspan="7" class="py-16 text-center text-slate-500">
+              <td colspan="9" class="py-16 text-center text-slate-500">
                 No registrations found. Import a file from
                 <a href="{{ url_for('in_person_import') }}" class="text-emerald-600 hover:underline">In-person · Import</a>.
               </td>
@@ -292,7 +303,10 @@
     return parts.join("");
   }
 
-  var FIELD_LABEL_OVERRIDES = { form_timestamp: "Registered at" };
+  var FIELD_LABEL_OVERRIDES = {
+    form_timestamp: "Registered at",
+    designation_years_experience: "Years of experience",
+  };
 
   function labelKey(k) {
     if (Object.prototype.hasOwnProperty.call(FIELD_LABEL_OVERRIDES, k)) {
@@ -314,6 +328,7 @@
         "portfolio",
         "domain",
         "designation",
+        "designation_years_experience",
         "founded_info",
         "degree",
       ],
@@ -353,7 +368,7 @@
   }
 
   function renderDetail(data) {
-    var skip = { email_normalized: true, error: true };
+    var skip = { email_normalized: true, error: true, team_submissions: true, team_submissions_error: true };
     var used = {};
     var parts = [];
 
@@ -376,6 +391,42 @@
         "</section>"
       );
     });
+
+    if (data.team_submissions && data.team_submissions.length) {
+      var subRows = data.team_submissions.map(function (s) {
+        var score = s.total_score != null ? String(s.total_score) : "—";
+        var dep = s.deployed_link
+          ? "<a href=\"" + esc(s.deployed_link) + "\" class=\"text-emerald-600 underline\" target=\"_blank\" rel=\"noopener\">link</a>"
+          : "—";
+        var gh = s.github_repository_link
+          ? "<a href=\"" + esc(s.github_repository_link) + "\" class=\"text-emerald-600 underline\" target=\"_blank\" rel=\"noopener\">repo</a>"
+          : "—";
+        return (
+          "<tr class=\"border-b border-slate-100 last:border-b-0\">" +
+          "<td class=\"py-2 px-2 text-xs capitalize\">" + esc(s.sheet_kind || "") + "</td>" +
+          "<td class=\"py-2 px-2 text-xs\">" + esc(s.attendance_city || "") + "</td>" +
+          "<td class=\"py-2 px-2 text-sm font-medium\">" + esc(s.team_name || "") + "</td>" +
+          "<td class=\"py-2 px-2 tabular-nums text-sm\">" + esc(score) + "</td>" +
+          "<td class=\"py-2 px-2\">" + dep + "</td>" +
+          "<td class=\"py-2 px-2\">" + gh + "</td></tr>"
+        );
+      }).join("");
+      parts.push(
+        "<section class=\"mb-5 last:mb-0\">" +
+          "<h3 class=\"text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2\">Team submissions</h3>" +
+          (data.team_submissions_error
+            ? "<p class=\"text-xs text-amber-800 mb-2\">" + esc(data.team_submissions_error) + "</p>"
+            : "") +
+          "<div class=\"overflow-x-auto border border-slate-200 rounded-lg\">" +
+          "<table class=\"w-full text-left text-sm\">" +
+          "<thead><tr class=\"bg-slate-50 text-[11px] font-semibold text-slate-500\">" +
+          "<th class=\"px-2 py-2\">Kind</th><th class=\"px-2 py-2\">PW city</th><th class=\"px-2 py-2\">Team</th>" +
+          "<th class=\"px-2 py-2\">Score</th><th class=\"px-2 py-2\">Deployed</th><th class=\"px-2 py-2\">GitHub</th>" +
+          "</tr></thead><tbody>" +
+          subRows +
+          "</tbody></table></div></section>"
+      );
+    }
 
     var otherKeys = Object.keys(data)
       .filter(function (k) {

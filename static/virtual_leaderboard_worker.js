@@ -1,7 +1,5 @@
 /**
- * Dedicated worker for Virtual arena submission leaderboard polling.
- * Runs fetch + JSON.parse off the main thread so heavy dashboard UI (charts, tables)
- * stays responsive during 4s refresh intervals.
+ * Web worker: polls virtual submission leaderboard JSON off the main thread.
  */
 /* eslint-disable no-restricted-globals */
 self.onmessage = function (ev) {

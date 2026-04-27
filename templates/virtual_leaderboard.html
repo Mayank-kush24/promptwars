@@ -1,21 +1,38 @@
 {% extends "layouts/base_app.html" %}
 {% block title %}PromptWars — {{ title }}{% endblock %}
+{% set is_global = is_global_leaderboard|default(false) %}
+{% set first_arena = (virtual_challenges or [])|first %}
+{% set arena_for_links = challenge_id or (first_arena.id if first_arena else none) %}
 {% block content %}
 <div class="flex flex-col gap-md">
   <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-sm">
     <div>
       <h1 class="font-display text-headline-lg text-slate-900">Submission leaderboard</h1>
       <p class="font-body-md text-slate-600 max-w-3xl mt-1">
-        Ranks teams from <code class="rounded bg-slate-100 px-1 text-sm">virtual_challenge_submission_rows</code> for the selected challenge:
-        <strong>highest score first</strong>, then <strong>earliest submission</strong> (<code class="text-xs">export_created_at</code>) when scores tie.
+        {% if is_global %}Top teams across all virtual arenas.{% else %}Teams for this challenge.{% endif %}
       </p>
+      <span class="sr-only">virtual_challenge_submission_rows</span>
     </div>
-    <a href="{% if challenge_id %}{{ url_for('virtual_page', virtualEventId=virtual_event_id, arenaChallengeId=challenge_id) }}{% else %}{{ url_for('virtual_page', virtualEventId=virtual_event_id) }}{% endif %}"
+    <a href="{% if challenge_id and not is_global %}{{ url_for('virtual_page', virtualEventId=virtual_event_id, arenaChallengeId=challenge_id) }}{% else %}{{ url_for('virtual_page', virtualEventId=virtual_event_id) }}{% endif %}"
        class="inline-flex items-center gap-1 text-sm font-semibold text-violet-700 hover:underline no-underline shrink-0">
       <span class="material-symbols-outlined text-[18px]">arrow_back</span> Virtual dashboard
     </a>
   </div>
 
+  <div class="flex flex-wrap gap-2">
+    <a href="{{ url_for('virtual_submission_leaderboard', virtualEventId=virtual_event_id, arenaChallengeId=arena_for_links) }}"
+       class="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold no-underline border transition-colors
+         {% if not is_global %}bg-violet-600 text-white border-violet-600{% else %}bg-white text-slate-700 border-slate-200 hover:border-violet-200{% endif %}">
+      Per challenge
+    </a>
+    <a href="{{ url_for('virtual_submission_leaderboard', virtualEventId=virtual_event_id, global=1) }}"
+       class="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold no-underline border transition-colors
+         {% if is_global %}bg-violet-600 text-white border-violet-600{% else %}bg-white text-slate-700 border-slate-200 hover:border-violet-200{% endif %}">
+      <span class="material-symbols-outlined text-[18px]">public</span> Global (all arenas)
+    </a>
+  </div>
+
+  {% if not is_global %}
   <form method="get" action="{{ url_for('virtual_submission_leaderboard') }}"
         class="bg-white rounded-2xl border border-violet-200 p-md shadow-sm flex flex-col lg:flex-row flex-wrap gap-md lg:items-end">
     <input type="hidden" name="virtualEventId" value="{{ virtual_event_id }}" />
@@ -41,6 +58,24 @@
     <input type="hidden" name="page" value="{{ page }}" />
     <noscript><button type="submit" class="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold">Apply</button></noscript>
   </form>
+  {% else %}
+  <form method="get" action="{{ url_for('virtual_submission_leaderboard') }}"
+        class="bg-white rounded-2xl border border-violet-200 p-md shadow-sm flex flex-col sm:flex-row flex-wrap gap-md sm:items-end">
+    <input type="hidden" name="virtualEventId" value="{{ virtual_event_id }}" />
+    <input type="hidden" name="global" value="1" />
+    <label class="flex flex-col gap-xs w-full sm:w-36">
+      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Per page</span>
+      <select name="per_page" onchange="this.form.querySelector('input[name=page]') && (this.form.querySelector('input[name=page]').value='1'); this.form.submit();"
+              class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400/50">
+        {% for n in (10, 25, 50, 100) %}
+          <option value="{{ n }}" {% if per_page == n %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <input type="hidden" name="page" value="{{ page }}" />
+    <noscript><button type="submit" class="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold">Apply</button></noscript>
+  </form>
+  {% endif %}
 
   {% if submission_leaderboard.error %}
     <div class="rounded-xl border border-rose-200 bg-rose-50 text-rose-800 px-4 py-3 text-sm">
@@ -49,21 +84,25 @@
   {% else %}
     <div class="flex items-center justify-between text-sm text-slate-600">
       <span><strong>{{ submission_leaderboard.total }}</strong> team(s) · page <strong>{{ page }}</strong> of <strong>{{ total_pages }}</strong></span>
-      {% if submission_leaderboard.challenge %}
+      {% if is_global %}
+        <span class="text-violet-700 font-medium truncate max-w-[55%]">Global · all arena challenges</span>
+      {% elif submission_leaderboard.challenge %}
         <span class="text-slate-500 truncate max-w-[50%]" title="{{ submission_leaderboard.challenge.title }}">{{ submission_leaderboard.challenge.title }}</span>
       {% endif %}
     </div>
 
     <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
       <div class="overflow-x-auto">
-        <table class="w-full text-left text-sm min-w-[720px]">
+        <table class="w-full text-left text-sm min-w-[780px]">
           <thead class="bg-slate-50 border-b border-slate-200 text-slate-500 text-[11px] font-semibold uppercase tracking-wider">
             <tr>
               <th class="py-3 px-4 w-16">Rank</th>
               <th class="py-3 px-4">Team</th>
               <th class="py-3 px-4">Leader</th>
               <th class="py-3 px-4">Email</th>
-              <th class="py-3 px-4 text-right">Score</th>
+              {% if is_global %}<th class="py-3 px-4 text-right">Arenas</th>{% endif %}
+              <th class="py-3 px-4 text-right"
+                  title="{% if is_global %}Tie-break: higher average score, then earliest first submission across arenas. Missing arena scores count as 0.{% else %}Tie-break: higher score, then earliest submission (export_created_at).{% endif %}">{% if is_global %}Avg score{% else %}Score{% endif %}</th>
               <th class="py-3 px-4 whitespace-nowrap">Submitted</th>
             </tr>
           </thead>
@@ -74,13 +113,14 @@
                 <td class="py-2.5 px-4 font-medium">{{ r.team_name }}</td>
                 <td class="py-2.5 px-4">{{ r.leader_name or "—" }}</td>
                 <td class="py-2.5 px-4 font-mono text-xs">{{ r.leader_email }}</td>
-                <td class="py-2.5 px-4 text-right tabular-nums">{% if r.total_score is not none %}{{ "{:g}".format(r.total_score|float) }}{% else %}—{% endif %}</td>
+                {% if is_global %}<td class="py-2.5 px-4 text-right tabular-nums text-slate-600">{{ r.arena_count }}</td>{% endif %}
+                <td class="py-2.5 px-4 text-right tabular-nums">{% if is_global %}{% if r.average_score is not none %}{{ "{:g}".format(r.average_score|float) }}{% else %}—{% endif %}{% elif r.total_score is not none %}{{ "{:g}".format(r.total_score|float) }}{% else %}—{% endif %}</td>
                 <td class="py-2.5 px-4 text-xs text-slate-600 whitespace-nowrap">
-                  {% if r.submitted_at %}{{ r.submitted_at.strftime('%d-%m-%Y %H:%M') if r.submitted_at.strftime is defined else r.submitted_at }}{% else %}—{% endif %}
+                  {{ r.submitted_at|pw_submitted_at }}
                 </td>
               </tr>
             {% else %}
-              <tr><td colspan="6" class="py-xl text-center text-slate-500">No submission rows for this challenge yet. Import an XLSX from Virtual → Import.</td></tr>
+              <tr><td colspan="{% if is_global %}7{% else %}6{% endif %}" class="py-xl text-center text-slate-500">{% if is_global %}No submission rows across virtual challenges yet.{% else %}No submission rows for this challenge yet. Import an XLSX from Virtual → Import.{% endif %}</td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -92,11 +132,11 @@
         <div class="flex gap-2">
           {% if page > 1 %}
             <a class="inline-flex items-center rounded-lg border border-slate-200 px-3 py-2 font-semibold text-slate-700 hover:bg-slate-50 no-underline"
-               href="{{ url_for('virtual_submission_leaderboard', virtualEventId=virtual_event_id, arenaChallengeId=challenge_id, per_page=per_page, page=page-1) }}">Previous</a>
+               href="{% if is_global %}{{ url_for('virtual_submission_leaderboard', virtualEventId=virtual_event_id, global=1, per_page=per_page, page=page-1) }}{% else %}{{ url_for('virtual_submission_leaderboard', virtualEventId=virtual_event_id, arenaChallengeId=arena_for_links, per_page=per_page, page=page-1) }}{% endif %}">Previous</a>
           {% endif %}
           {% if page < total_pages %}
             <a class="inline-flex items-center rounded-lg border border-slate-200 px-3 py-2 font-semibold text-slate-700 hover:bg-slate-50 no-underline"
-               href="{{ url_for('virtual_submission_leaderboard', virtualEventId=virtual_event_id, arenaChallengeId=challenge_id, per_page=per_page, page=page+1) }}">Next</a>
+               href="{% if is_global %}{{ url_for('virtual_submission_leaderboard', virtualEventId=virtual_event_id, global=1, per_page=per_page, page=page+1) }}{% else %}{{ url_for('virtual_submission_leaderboard', virtualEventId=virtual_event_id, arenaChallengeId=arena_for_links, per_page=per_page, page=page+1) }}{% endif %}">Next</a>
           {% endif %}
         </div>
         <span class="text-slate-500">Showing {{ (page - 1) * per_page + 1 }}–{{ [page * per_page, submission_leaderboard.total] | min }} of {{ submission_leaderboard.total }}</span>

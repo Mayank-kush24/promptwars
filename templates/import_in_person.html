@@ -27,67 +27,21 @@
 {% block content %}
 <div class="flex flex-col gap-sm">
   <h1 class="font-display text-headline-lg text-slate-900">In-person · Import</h1>
-  <p class="font-body-md text-slate-600 max-w-3xl">
-    Upload funnel CSVs (RSVP + submission), or a Main Data Center export (CSV / XLSX) from your registration form.
-    Funnel rows join on <code class="rounded bg-slate-100 px-1">user_id</code> +
-    <code class="rounded bg-slate-100 px-1">city_id</code>. Main Data Center rows upsert on
-    <code class="rounded bg-slate-100 px-1">Email</code> for your single Vision program.
-  </p>
-</div>
-
-<div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
-  <div class="flex flex-col gap-sm mb-md">
-    <h2 class="font-display text-headline-md text-slate-900">CSV import</h2>
-    <p class="text-sm text-slate-600">
-      Required columns: <code class="rounded bg-slate-100 px-1">user_id</code>,
-      <code class="rounded bg-slate-100 px-1">city_id</code>. Optional:
-      <code class="rounded bg-slate-100 px-1">display_name</code>,
-      <code class="rounded bg-slate-100 px-1">rsvped_at</code> /
-      <code class="rounded bg-slate-100 px-1">submitted_at</code>.
-    </p>
-  </div>
-  <form action="{{ url_for('admin_import_in_person') }}" method="post" enctype="multipart/form-data" class="grid grid-cols-1 md:grid-cols-3 gap-md">
-    <label class="flex flex-col gap-xs">
-      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">In-person event id</span>
-      <input name="event_id" type="number" value="{{ in_person_event_id }}" min="1" required
-             class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-blue-400/50" />
-    </label>
-    <label class="flex flex-col gap-xs">
-      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">RSVPs CSV</span>
-      <input name="rsvps" type="file" accept=".csv,text/csv" required
-             class="text-sm file:mr-3 file:px-3 file:py-2 file:rounded-lg file:border-0 file:bg-emerald-600 file:text-white file:cursor-pointer hover:file:bg-emerald-700" />
-    </label>
-    <label class="flex flex-col gap-xs">
-      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Submissions CSV</span>
-      <input name="submissions" type="file" accept=".csv,text/csv" required
-             class="text-sm file:mr-3 file:px-3 file:py-2 file:rounded-lg file:border-0 file:bg-emerald-600 file:text-white file:cursor-pointer hover:file:bg-emerald-700" />
-    </label>
-    <div class="md:col-span-3 flex justify-end gap-3">
-      <a href="{{ url_for('in_person_page') }}" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">Cancel</a>
-      <button type="submit" class="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition-colors">
-        Run import
-      </button>
-    </div>
-  </form>
+  <p class="font-body-md text-slate-600 max-w-3xl">Main Data Center CSV / XLSX and Action Center XLSX from Vision.</p>
 </div>
 
 <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm mt-lg relative overflow-hidden" id="mdc-card">
   <div id="mdc-overlay" class="hidden absolute inset-0 z-20 flex flex-col items-center justify-center gap-md bg-white/90 backdrop-blur-sm px-md" aria-live="polite">
     <div class="pw-mdc-spinner" role="status" aria-label="Loading"></div>
-    <p id="mdc-status" class="text-sm font-medium text-slate-700 text-center max-w-sm">Preparing import…</p>
+    <p id="mdc-status" class="text-sm font-medium text-slate-700 text-center max-w-sm">Importing…</p>
     <div class="w-full max-w-xs pw-mdc-progress-track">
       <div class="pw-mdc-progress-bar"></div>
     </div>
-    <p class="text-xs text-slate-500 text-center">Do not close this page until the import finishes.</p>
   </div>
 
   <div class="flex flex-col gap-sm mb-md">
     <h2 class="font-display text-headline-md text-slate-900">Main Data Center · CSV or XLSX</h2>
-    <p class="text-sm text-slate-600">
-      Export from your Vision form with the standard headers (Timestamp, UTM fields, profile fields, etc.).
-      Imports always attach to your configured in-person program in the database.
-      <strong>Email</strong> is required and is the primary key for each person (re-import updates the same row).
-    </p>
+    <p class="text-sm text-slate-600">CSV / XLSX from Vision. <strong>Email</strong> is the primary key (re-import updates).</p>
   </div>
   <form id="mdc-import-form" action="{{ url_for('admin_import_in_person_data_center') }}" method="post" enctype="multipart/form-data" class="grid grid-cols-1 gap-md">
     <label class="flex flex-col gap-xs">
@@ -104,6 +58,59 @@
   </form>
 
   <div id="mdc-inline-result" class="hidden mt-lg pt-lg border-t border-slate-200"></div>
+</div>
+
+<div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm mt-lg lg:col-span-2">
+  <h2 class="font-display text-headline-md text-slate-900 mb-sm">Action Center · XLSX</h2>
+  <details class="mb-md rounded-xl border border-emerald-100 bg-emerald-50/60 text-sm text-slate-700">
+    <summary class="cursor-pointer px-4 py-3 font-semibold text-emerald-900">How this import works</summary>
+    <div class="px-4 pb-3 pt-0">
+      <ul class="list-disc pl-5 space-y-1.5 text-slate-600">
+        <li><span class="font-medium text-slate-800">Destination:</span> <code class="rounded bg-white/90 px-1.5 py-0.5 text-xs border border-emerald-100">in_person_challenge_submission_rows</code> (warmup + main challenge tabs).</li>
+        <li><span class="font-medium text-slate-800">Prompt War:</span> pick <strong>attendance city</strong> (event <strong>{{ in_person_event_id|default(1) }}</strong>), <strong>date</strong>, optional <strong>session label</strong> if two sessions same day.</li>
+        <li><span class="font-medium text-slate-800">Sheets:</span> <strong>Warm Up Challenge</strong> and <strong>Main Challenge Submission</strong> (optional <code class="rounded bg-white/90 px-1 text-xs">1.</code> / <code class="rounded bg-white/90 px-1 text-xs">2)</code> prefix ignored).</li>
+        <li><span class="font-medium text-slate-800">Gate:</span> each <strong>Leader email</strong> must exist in In-person MDC or <strong>no rows are written</strong>.</li>
+      </ul>
+    </div>
+  </details>
+  <form id="ip-ac-import-form" class="flex flex-col gap-md max-w-xl">
+    <label class="flex flex-col gap-xs">
+      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Prompt War (attendance city)</span>
+      <select name="attendance_city" required class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/50">
+        <option value="" disabled selected>— Select city —</option>
+        {% for c in (action_center_attendance_cities or []) %}
+          <option value="{{ c }}">{{ c }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="flex flex-col gap-xs">
+      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Prompt War date</span>
+      <input name="prompt_war_on" type="date" required
+             class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
+    </label>
+    <label class="flex flex-col gap-xs">
+      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Session label (optional)</span>
+      <input name="session_label" type="text" maxlength="64" placeholder="e.g. morning — only if same city, same day"
+             class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
+      <span class="text-[11px] text-slate-500">Only if two sessions same city, same day.</span>
+    </label>
+    {% if not (action_center_attendance_cities or []) %}
+      <p class="text-xs text-amber-800">No attendance cities in MDC yet. Import Main Data Center first so cities appear here.</p>
+    {% endif %}
+    <label class="flex flex-col gap-xs">
+      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Action Center workbook</span>
+      <input name="in_person_action_center" type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required
+             class="text-sm file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-emerald-600 file:text-white file:font-semibold file:text-sm" />
+    </label>
+    <div class="flex flex-wrap gap-2">
+      <button type="submit" id="ip-ac-import-submit" class="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 disabled:pointer-events-none">Import Action Center</button>
+      <a href="{{ url_for('in_person_page') }}" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">Cancel</a>
+    </div>
+  </form>
+  <div id="ip-ac-import-panel" class="hidden mt-lg rounded-xl border border-slate-200 overflow-hidden shadow-sm" aria-live="polite">
+    <div id="ip-ac-import-panel-header" class="px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-600 bg-slate-100 border-b border-slate-200"></div>
+    <div id="ip-ac-import-panel-body" class="p-4 text-sm text-slate-700 bg-white"></div>
+  </div>
 </div>
 
 <div class="flex justify-end">
@@ -123,11 +130,7 @@
   if (!form || !overlay || !statusEl || !inline || !submitBtn) return;
 
   var apiUrl = {{ url_for("api_import_in_person_main_data_center")|tojson }};
-  var messages = [
-    "Reading file and parsing rows…",
-    "Writing rows to the database…",
-    "Still working — large files can take a minute…"
-  ];
+  var messages = ["Importing…", "Still working…", "Almost done…"];
   var msgTimer = null;
   var msgIndex = 0;
 
@@ -140,28 +143,28 @@
     var u = s.rows_updated != null ? s.rows_updated : 0;
     var sk = s.rows_skipped != null ? s.rows_skipped : 0;
     return (
-      '<div class="rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 text-sm font-medium px-4 py-3 mb-md">Import completed successfully.</div>' +
+      '<div class="rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 text-sm font-medium px-4 py-3 mb-md">Done.</div>' +
       '<div class="grid grid-cols-1 sm:grid-cols-3 gap-md mb-md">' +
         '<div class="bg-slate-50 rounded-2xl border border-slate-200 p-lg">' +
           '<p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Created</p>' +
           '<p class="font-display text-3xl text-slate-900 tabular-nums mt-1">' + fmt(c) + '</p>' +
-          '<p class="text-xs text-slate-500 mt-2">New emails in the database</p></div>' +
+          '<p class="text-xs text-slate-500 mt-2">New</p></div>' +
         '<div class="bg-slate-50 rounded-2xl border border-slate-200 p-lg">' +
           '<p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Updated</p>' +
           '<p class="font-display text-3xl text-slate-900 tabular-nums mt-1">' + fmt(u) + '</p>' +
-          '<p class="text-xs text-slate-500 mt-2">Existing rows refreshed from file</p></div>' +
+          '<p class="text-xs text-slate-500 mt-2">Refreshed</p></div>' +
         '<div class="bg-slate-50 rounded-2xl border border-slate-200 p-lg">' +
           '<p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Skipped</p>' +
           '<p class="font-display text-3xl text-slate-900 tabular-nums mt-1">' + fmt(sk) + '</p>' +
-          '<p class="text-xs text-slate-500 mt-2">Rows with no usable email</p></div>' +
+          '<p class="text-xs text-slate-500 mt-2">Skipped (no email)</p></div>' +
       '</div>' +
       '<div class="bg-slate-50 rounded-2xl border border-slate-200 p-lg text-sm text-slate-600">' +
-        '<h3 class="font-display text-headline-md text-slate-900 mb-sm">File processing</h3>' +
+        '<h3 class="font-display text-headline-md text-slate-900 mb-sm">Details</h3>' +
         '<ul class="space-y-1 list-none pl-0">' +
-          '<li class="flex justify-between gap-4 border-b border-slate-200 py-2"><span>Rows read from file</span><span class="tabular-nums font-medium text-slate-900">' + fmt(s.rows_read) + '</span></li>' +
-          '<li class="flex justify-between gap-4 border-b border-slate-200 py-2"><span>Rows written (created + updated)</span><span class="tabular-nums font-medium text-slate-900">' + fmt(s.rows_written) + '</span></li>' +
-          '<li class="flex justify-between gap-4 border-b border-slate-200 py-2"><span>Rows after dedupe</span><span class="tabular-nums font-medium text-slate-900">' + fmt(s.rows_after_dedupe) + '</span></li>' +
-          '<li class="flex justify-between gap-4 py-2"><span>Duplicate emails in file (last kept)</span><span class="tabular-nums font-medium text-slate-900">' + fmt(s.duplicate_emails_collapsed) + '</span></li>' +
+          '<li class="flex justify-between gap-4 border-b border-slate-200 py-2"><span>Read</span><span class="tabular-nums font-medium text-slate-900">' + fmt(s.rows_read) + '</span></li>' +
+          '<li class="flex justify-between gap-4 border-b border-slate-200 py-2"><span>Written</span><span class="tabular-nums font-medium text-slate-900">' + fmt(s.rows_written) + '</span></li>' +
+          '<li class="flex justify-between gap-4 border-b border-slate-200 py-2"><span>After dedupe</span><span class="tabular-nums font-medium text-slate-900">' + fmt(s.rows_after_dedupe) + '</span></li>' +
+          '<li class="flex justify-between gap-4 py-2"><span>Duplicate emails (last kept)</span><span class="tabular-nums font-medium text-slate-900">' + fmt(s.duplicate_emails_collapsed) + '</span></li>' +
         '</ul></div>' +
       '<div class="flex flex-wrap gap-3 mt-md">' +
         '<a href="' + {{ url_for("in_person_page")|tojson }} + '" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">In-person dashboard</a>' +
@@ -219,7 +222,152 @@
         overlay.classList.add("hidden");
         submitBtn.disabled = false;
         inline.classList.remove("hidden");
-        inline.innerHTML = renderError({ error: "Network error — check your connection and try again." });
+        inline.innerHTML = renderError({ error: "Network error." });
+      });
+  });
+})();
+(function () {
+  var form = document.getElementById("ip-ac-import-form");
+  var panel = document.getElementById("ip-ac-import-panel");
+  var head = document.getElementById("ip-ac-import-panel-header");
+  var body = document.getElementById("ip-ac-import-panel-body");
+  var submitBtn = document.getElementById("ip-ac-import-submit");
+  if (!form || !panel || !head || !body) return;
+  var apiUrl = {{ url_for("api_import_in_person_action_center")|tojson }};
+
+  function esc(s) {
+    if (s == null) return "";
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function renderSheetsTable(sheets, label) {
+    if (!sheets || typeof sheets !== "object") return "";
+    var keys = Object.keys(sheets);
+    if (!keys.length) return "<p class=\"text-slate-500 text-xs\">No sheets in workbook.</p>";
+    var rows = keys.map(function (tab) {
+      var inf = sheets[tab] || {};
+      var sk = inf.sheet_kind_label || inf.sheet_kind || "—";
+      var rw = inf.rows_written != null ? esc(String(inf.rows_written)) : "0";
+      var skp = inf.rows_skipped != null ? esc(String(inf.rows_skipped)) : "";
+      var skipPart = skp ? " · skipped " + skp : "";
+      return (
+        "<tr class=\"border-b border-slate-100\">" +
+        "<td class=\"py-2 pr-3 font-mono text-xs align-top\">" + esc(tab) + "</td>" +
+        "<td class=\"py-2 text-xs align-top\">" + esc(sk) + "</td>" +
+        "<td class=\"py-2 text-xs tabular-nums text-right align-top\">" + rw + skipPart + "</td>" +
+        "</tr>"
+      );
+    }).join("");
+    return (
+      "<p class=\"font-semibold text-slate-800 mb-2\">" + esc(label) + "</p>" +
+      "<div class=\"overflow-x-auto rounded-lg border border-slate-200\">" +
+      "<table class=\"w-full text-left text-sm\">" +
+      "<thead><tr class=\"bg-slate-50 text-[11px] font-semibold uppercase text-slate-500\">" +
+      "<th class=\"px-3 py-2\">Excel tab</th><th class=\"px-3 py-2\">Kind</th><th class=\"px-3 py-2 text-right\">Rows</th>" +
+      "</tr></thead><tbody>" + rows + "</tbody></table></div>"
+    );
+  }
+
+  function showPanel(kind, titleHtml, innerHtml) {
+    panel.classList.remove("hidden");
+    head.className =
+      "px-4 py-2.5 text-xs font-semibold uppercase tracking-wide border-b " +
+      (kind === "ok"
+        ? "text-emerald-800 bg-emerald-50 border-emerald-200"
+        : "text-rose-800 bg-rose-50 border-rose-200");
+    head.innerHTML = titleHtml;
+    body.innerHTML = innerHtml;
+  }
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var fd = new FormData(form);
+    if (!fd.get("attendance_city")) {
+      showPanel("err", "Missing city", "<p class=\"text-rose-800\">Select a Prompt War (attendance city).</p>");
+      return;
+    }
+    if (!fd.get("prompt_war_on")) {
+      showPanel("err", "Missing date", "<p class=\"text-rose-800\">Choose the Prompt War date for this workbook.</p>");
+      return;
+    }
+    panel.classList.remove("hidden");
+    head.className =
+      "px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-600 bg-slate-100 border-b border-slate-200";
+    head.textContent = "Uploading…";
+    body.innerHTML = "<p class=\"text-slate-600\">Uploading…</p>";
+    if (submitBtn) submitBtn.disabled = true;
+    fetch(apiUrl, { method: "POST", body: fd, credentials: "same-origin" })
+      .then(function (r) {
+        return r.json().then(function (j) {
+          return { ok: r.ok, body: j, status: r.status };
+        });
+      })
+      .then(function (res) {
+        var p = res.body || {};
+        if (!res.ok) {
+          var err = (p && p.error) ? String(p.error) : "Import failed.";
+          var parts = [];
+          parts.push("<p class=\"text-rose-800 font-medium\">" + esc(err) + "</p>");
+          if (p.nothing_written) {
+            parts.push(
+              "<div class=\"mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950\">" +
+              "<strong>No rows were written</strong> to <code class=\"text-xs bg-amber-100/80 rounded px-1\">in_person_challenge_submission_rows</code>.</div>"
+            );
+          }
+          if (p.parse_stats && p.parse_stats.sheets) {
+            parts.push("<div class=\"mt-4\">" + renderSheetsTable(p.parse_stats.sheets, "Sheets recognized") + "</div>");
+          }
+          if (p.missing_emails && p.missing_emails.length) {
+            var lis = p.missing_emails.map(function (em) {
+              return "<li class=\"font-mono text-xs\">" + esc(em) + "</li>";
+            }).join("");
+            parts.push(
+              "<div class=\"mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3\">" +
+              "<p class=\"font-semibold text-slate-800 text-sm mb-1\">Leader emails missing from In-person MDC</p>" +
+              "<p class=\"text-xs text-slate-600 mb-2\">Import registrations via <strong>Main Data Center</strong> above, then retry.</p>" +
+              "<ul class=\"list-disc pl-5 max-h-40 overflow-y-auto\">" + lis + "</ul></div>"
+            );
+          }
+          if (p.archive_path) {
+            parts.push("<p class=\"mt-3 text-xs text-slate-500\">Archived: <code class=\"break-all\">" + esc(p.archive_path) + "</code></p>");
+          }
+          showPanel("err", "Import blocked", parts.join(""));
+          return;
+        }
+        var okParts = [];
+        okParts.push(
+          "<div class=\"rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-950 text-sm\">" +
+          "<strong>Database updated.</strong> Upserted <strong>" + esc(String(p.rows_written || 0)) +
+          "</strong> row(s).</div>"
+        );
+        if (p.merge_policy) okParts.push("<p class=\"mt-2 text-xs text-slate-600\">" + esc(p.merge_policy) + "</p>");
+        if (p.attendance_city) {
+          okParts.push("<p class=\"mt-2 text-xs text-slate-600\">Prompt War (city): <strong>" + esc(p.attendance_city) + "</strong></p>");
+        }
+        if (p.parse_stats && p.parse_stats.mismatched_attendance_city) {
+          okParts.push(
+            "<p class=\"mt-2 text-xs text-amber-800\">MDC city mismatch for " +
+            esc(String(p.parse_stats.mismatched_attendance_city)) +
+            " leader row(s) (still imported).</p>"
+          );
+        }
+        if (p.parse_stats && p.parse_stats.sheets) {
+          okParts.push("<div class=\"mt-4\">" + renderSheetsTable(p.parse_stats.sheets, "Sheets in this run") + "</div>");
+        }
+        if (p.archive_path) {
+          okParts.push("<p class=\"mt-3 text-xs text-slate-500\">Archived: <code class=\"break-all\">" + esc(p.archive_path) + "</code></p>");
+        }
+        showPanel("ok", "Import succeeded", okParts.join(""));
+      })
+      .catch(function () {
+        showPanel("err", "Network error", "<p>Could not reach the server.</p>");
+      })
+      .finally(function () {
+        if (submitBtn) submitBtn.disabled = false;
       });
   });
 })();

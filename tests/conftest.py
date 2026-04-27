@@ -66,6 +66,11 @@ MDC_PAGE_STUB: dict = {
     "city_pivot": [{"city": "Mumbai", "count": 18}, {"city": "Delhi", "count": 12}],
     "gender_breakdown": [{"gender": "Male", "count": 25}, {"gender": "Female", "count": 17}],
     "top_occupations": [{"occupation": "Student", "count": 10}, {"occupation": "Professional", "count": 8}],
+    "chart_date_min": "2026-04-20",
+    "chart_date_max": "2026-04-22",
+    "mdc_date_from": None,
+    "mdc_date_to": None,
+    "mdc_filter_by_registration_date": False,
 }
 
 
@@ -105,6 +110,22 @@ def overview_stub(monkeypatch, app_mod):
         "average_age": None,
         "error": None,
     }
+    _score_stub = {
+        "error": None,
+        "row_n": 12,
+        "scored_n": 10,
+        "min_score": 0.0,
+        "max_score": 99.5,
+        "avg_score": 55.25,
+        "stddev_score": 12.0,
+        "challenge_id": None,
+        "challenge_title": None,
+        "min_score_fmt": "0",
+        "max_score_fmt": "99.5",
+        "avg_score_fmt": "55.25",
+        "stddev_score_fmt": "12",
+    }
+    _score_stub_ch = dict(_score_stub, challenge_id=1, challenge_title="Sprint Alpha")
     payload = {
         "total_registrations_fmt": "120",
         "submissions_fmt": "45",
@@ -118,6 +139,22 @@ def overview_stub(monkeypatch, app_mod):
         "mdc_last7_fmt": "12",
         "mdc_in_person": dict(_mdc_brief, total_fmt="100", last7_fmt="10", top_city="Pune", top_state="Maharashtra"),
         "mdc_virtual": dict(_mdc_brief, total_fmt="20", last7_fmt="2", top_city="Bengaluru", top_state="Karnataka"),
+        "in_person_ac_global_top10": {"rows": [], "total": 0, "error": None, "scope": {}},
+        "virtual_ac_global_top10": {"rows": [], "total": 0, "error": None, "challenge": None, "scope": {}},
+        "in_person_ac_cities": [],
+        "virtual_score_stats_global": dict(_score_stub),
+        "virtual_score_stats_challenge": dict(_score_stub_ch),
+        "in_person_action_score_stats": dict(_score_stub),
+        "virtual_arena_top3": {
+            "rows": [
+                {"rank": i, "team_name": f"Team {i}", "total_score": 100.0 - i}
+                for i in range(1, 11)
+            ],
+            "total": 10,
+            "error": None,
+            "challenge": {"id": 1, "title": "Sprint Alpha", "event_id": 2},
+        },
+        "overview_arena_challenge_id": 1,
     }
     monkeypatch.setattr(app_mod, "_fetch_overview_stats", lambda *_a, **_k: dict(payload))
     return payload
@@ -126,7 +163,25 @@ def overview_stub(monkeypatch, app_mod):
 @pytest.fixture
 def funnel_stub(monkeypatch, app_mod):
     """Stubs Main Data Center stats for /in-person page tests."""
-    monkeypatch.setattr(app_mod, "_load_mdc_stats", lambda _eid, *, mode="in_person": dict(MDC_PAGE_STUB))
+    monkeypatch.setattr(
+        app_mod,
+        "_load_mdc_stats",
+        lambda _eid, *args, mode="in_person", **kwargs: dict(MDC_PAGE_STUB),
+    )
+    monkeypatch.setattr(
+        app_mod,
+        "_in_person_submission_leaderboard",
+        lambda *_a, **_k: {
+            "rows": [],
+            "total": 0,
+            "error": None,
+            "scope": {},
+            "page": 1,
+            "per_page": 50,
+            "total_pages": 1,
+        },
+    )
+    monkeypatch.setattr(app_mod, "_in_person_pw_options", lambda *_a, **_k: [])
 
 
 @pytest.fixture
@@ -165,7 +220,7 @@ def virtual_stub(monkeypatch, app_mod):
         "_load_virtual_bundle",
         lambda *_a, **_k: (dict(leaderboard), dict(distribution), list(bins)),
     )
-    def _mdc_for_mode(_eid, *, mode="in_person"):
+    def _mdc_for_mode(_eid, *args, mode="in_person", **kwargs):
         d = dict(MDC_PAGE_STUB)
         if mode == "virtual":
             d["with_attendance_city"] = 0
@@ -229,6 +284,27 @@ def virtual_stub(monkeypatch, app_mod):
     )
     monkeypatch.setattr(
         app_mod,
+        "_virtual_global_submission_leaderboard",
+        lambda **kw: {
+            "rows": [
+                {
+                    "rank": 1,
+                    "team_name": "Alice",
+                    "leader_name": "Lead A",
+                    "leader_email": "a@example.com",
+                    "average_score": 90.0,
+                    "submitted_at": None,
+                    "arena_count": 2,
+                },
+            ],
+            "total": 1,
+            "error": None,
+            "challenge": None,
+            "scope": {"virtual_event_id": int(kw.get("event_id") or 1), "global": True},
+        },
+    )
+    monkeypatch.setattr(
+        app_mod,
         "_virtual_arena_challenge_stats",
         lambda **kw: {
             "error": None,
@@ -242,24 +318,6 @@ def virtual_stub(monkeypatch, app_mod):
             "registrations_at_close": 42,
             "total_submissions": 2,
             "unique_mdc_submissions": 2,
-            "top_400_rows": [
-                {
-                    "rank": 1,
-                    "team_name": "Alice",
-                    "leader_name": "Lead A",
-                    "leader_email": "a@example.com",
-                    "total_score": 100.0,
-                    "submitted_at": "2026-04-24T10:00:00+00:00",
-                },
-                {
-                    "rank": 2,
-                    "team_name": "Bob",
-                    "leader_name": "Lead B",
-                    "leader_email": "b@example.com",
-                    "total_score": 80.0,
-                    "submitted_at": "2026-04-24T11:00:00+00:00",
-                },
-            ],
         },
     )
     return leaderboard, distribution, bins

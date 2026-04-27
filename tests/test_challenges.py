@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import urlencode
 
 
 # ---------- /virtual/challenges (manager UI) -----------------------------
@@ -221,6 +222,7 @@ def test_virtual_users_filter_threads_challenge_id(
     def fake_load(eid, page, per_page, search, attendance_city=None, **kwargs):
         captured.update(kwargs)
         captured["event_id"] = eid
+        preserve = {"challengeId": "5", "per_page": str(per_page)}
         return {
             "error": None,
             "rows": [],
@@ -232,7 +234,14 @@ def test_virtual_users_filter_threads_challenge_id(
             "attendance_city_options": [],
             "total_pages": 1,
             "export_query": "challengeId=5",
+            "preserve_query_str": urlencode(preserve),
             "challenge_id": kwargs.get("challenge_id"),
+            "advanced": None,
+            "advanced_active": False,
+            "advanced_form_fields": app_mod.MDC_USERS_ADVANCED_FORM_FIELDS,
+            "advanced_text": {},
+            "advanced_raw": {},
+            "preserve_items": [("challengeId", "5")],
         }
 
     monkeypatch.setattr(app_mod, "_load_mdc_users_page", fake_load)
@@ -283,6 +292,143 @@ def test_mdc_users_build_filter_skips_for_in_person(app_mod):
     )
     assert "form_timestamp" not in where
     assert "cid" not in params
+
+
+def test_mdc_users_build_filter_advanced_text_and_dates(app_mod):
+    adv = app_mod._parse_mdc_users_advanced_from_request(
+        {
+            "af_city": "Mumbai",
+            "af_country": "IN",
+            "form_ts_from": "2024-01-15T10:00",
+            "form_ts_to": "2024-01-20",
+            "dob_from": "1990-01-01",
+            "dob_to": "2000-12-31",
+        }
+    )
+    assert adv is not None
+    where, params = app_mod._mdc_users_build_filter(
+        1, "", None, mode="in_person", advanced=adv
+    )
+    assert "lower(btrim(COALESCE(city" in where
+    assert "lower(btrim(COALESCE(country" in where
+    assert "email ILIKE" not in where
+    assert "country ILIKE" not in where
+    assert "form_timestamp >=" in where
+    assert "form_timestamp <=" in where
+    assert "dob >=" in where
+    assert "dob <=" in where
+    assert params.get("adv_city") == "Mumbai"
+    assert params.get("adv_country") == "IN"
+    assert "adv_fts_from" in params and "adv_fts_to" in params
+    assert "adv_dob_from" in params and "adv_dob_to" in params
+
+
+def test_mdc_users_build_filter_designation_uses_exact_match(app_mod):
+    adv = app_mod._parse_mdc_users_advanced_from_request({"af_designation": "  Senior Dev  "})
+    assert adv is not None
+    where, params = app_mod._mdc_users_build_filter(1, "", None, mode="in_person", advanced=adv)
+    assert "lower(btrim(COALESCE(designation" in where
+    assert "ILIKE" not in where
+    assert params.get("adv_designation") == "Senior Dev"
+
+
+def test_parse_mdc_users_advanced_empty(app_mod):
+    assert app_mod._parse_mdc_users_advanced_from_request({}) is None
+    assert app_mod._parse_mdc_users_advanced_from_request({"af_country": "  "}) is None
+
+
+def test_parse_mdc_users_advanced_years_only(app_mod):
+    adv = app_mod._parse_mdc_users_advanced_from_request({"designation_years_min": "1"})
+    assert adv is not None
+    assert adv["designation_years_min"] == 1
+    assert adv["designation_years_max"] is None
+
+
+def test_parse_mdc_users_advanced_swaps_inverted_year_range(app_mod):
+    adv = app_mod._parse_mdc_users_advanced_from_request(
+        {"designation_years_min": "9", "designation_years_max": "2"}
+    )
+    assert adv is not None
+    assert adv["designation_years_min"] == 2
+    assert adv["designation_years_max"] == 9
+
+
+def test_mdc_users_build_filter_designation_years_range(app_mod):
+    adv = app_mod._parse_mdc_users_advanced_from_request(
+        {"designation_years_min": "2", "designation_years_max": "5"}
+    )
+    where, params = app_mod._mdc_users_build_filter(1, "", None, mode="in_person", advanced=adv)
+    assert "designation_years_experience >=" in where
+    assert "designation_years_experience <=" in where
+    assert params["adv_dyoe_min"] == 2
+    assert params["adv_dyoe_max"] == 5
+
+
+def test_mdc_users_active_chips_emits_one_per_filter_with_remove_qs(app_mod):
+    adv = app_mod._parse_mdc_users_advanced_from_request(
+        {
+            "af_city": "Pune",
+            "af_country": "IN",
+            "form_ts_from": "2024-01-15T10:00",
+            "dob_to": "2000-12-31",
+        }
+    )
+    assert adv is not None
+    preserve = app_mod._mdc_users_preserve_query_dict("alice", "Mumbai", None, adv)
+    chips = app_mod._mdc_users_active_chips(adv, preserve=preserve, per_page=25)
+
+    by_key = {c["key"]: c for c in chips}
+    assert set(by_key) == {"af_city", "af_country", "form_ts_from", "dob_to"}
+    assert by_key["af_city"]["value"] == "Pune"
+    assert by_key["af_country"]["label"] == "Country"
+    assert by_key["form_ts_from"]["label"] == "Registered from"
+    assert by_key["dob_to"]["label"] == "DOB to"
+
+    city_chip = by_key["af_city"]
+    assert "af_city" not in city_chip["remove_qs"]
+    assert "af_country=IN" in city_chip["remove_qs"]
+    assert "q=alice" in city_chip["remove_qs"]
+    assert "attendance_city=Mumbai" in city_chip["remove_qs"]
+    assert "per_page=25" in city_chip["remove_qs"]
+
+
+def test_mdc_users_active_chips_returns_empty_when_no_advanced(app_mod):
+    assert app_mod._mdc_users_active_chips(None, preserve={}, per_page=25) == []
+    assert (
+        app_mod._mdc_users_active_chips(
+            {"text": {}, "raw": {}}, preserve={"q": "x"}, per_page=25
+        )
+        == []
+    )
+
+
+def test_mdc_users_reset_advanced_qs_keeps_basic_filters(app_mod):
+    qs = app_mod._mdc_users_reset_advanced_qs(
+        search_s="alice", attendance_city="Mumbai", challenge_id=None, per_page=50
+    )
+    assert "per_page=50" in qs
+    assert "q=alice" in qs
+    assert "attendance_city=Mumbai" in qs
+    assert "af_" not in qs and "form_ts_" not in qs and "dob_" not in qs
+    assert "designation_years" not in qs
+
+
+def test_mdc_users_reset_advanced_qs_includes_challenge_id(app_mod):
+    qs = app_mod._mdc_users_reset_advanced_qs(
+        search_s="", attendance_city=None, challenge_id=7, per_page=25
+    )
+    assert "challengeId=7" in qs
+    assert "q=" not in qs
+    assert "attendance_city=" not in qs
+
+
+def test_mdc_users_advanced_field_groups_cover_every_text_column(app_mod):
+    text_cols_in_groups: set[str] = set()
+    for group in app_mod.MDC_USERS_ADVANCED_FIELD_GROUPS:
+        for item in group["fields"]:
+            if item.get("kind") == "select_distinct":
+                text_cols_in_groups.add(item["col"])
+    assert text_cols_in_groups == set(app_mod.MDC_USERS_ADVANCED_TEXT_COLUMNS)
 
 
 def test_virtual_dashboard_shows_eligibility_pill(client, virtual_stub, monkeypatch, app_mod):

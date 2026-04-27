@@ -1,0 +1,126 @@
+{% if data_center.chart_date_min and data_center.chart_date_max %}
+<div
+  id="mdcDateRangePanel"
+  class="mdc-date-range-panel flex w-full min-w-0 items-start border bg-white shadow-sm {% if wide|default(false) %}mdc-date-range--wide gap-3 rounded-2xl px-4 py-2.5{% else %}gap-2 rounded-full px-2.5 sm:px-3 py-2{% endif %} {% if virtual_mdc|default(false) %}border-violet-200{% else %}border-sky-200{% endif %}"
+  data-min="{{ data_center.chart_date_min }}"
+  data-max="{{ data_center.chart_date_max }}"
+>
+  <span
+    class="material-symbols-outlined shrink-0 leading-none mt-0.5 {% if wide|default(false) %}text-[22px]{% else %}text-[20px]{% endif %} {% if virtual_mdc|default(false) %}text-violet-600{% else %}text-sky-600{% endif %}"
+    aria-hidden="true"
+    >date_range</span>
+  <div class="min-w-0 flex-1 flex flex-col {% if wide|default(false) %}gap-1{% else %}gap-0.5{% endif %}">
+    <div class="flex items-center justify-between gap-2 min-w-0">
+      <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500 truncate">Registration date</p>
+      <div class="flex items-center gap-1 shrink-0">
+        <span
+          id="mdcRangeLoading"
+          class="hidden text-[9px] font-medium {% if virtual_mdc|default(false) %}text-violet-700{% else %}text-sky-700{% endif %}"
+          aria-hidden="true"
+          >…</span>
+        <button
+          type="button"
+          id="mdcDateRangeReset"
+          class="rounded-full border border-slate-200 bg-white py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-50 {% if wide|default(false) %}px-2.5{% else %}px-2{% endif %}"
+        >
+          All
+        </button>
+      </div>
+    </div>
+    <div class="flex items-center {% if wide|default(false) %}gap-3{% else %}gap-2{% endif %} min-w-0">
+      <input
+        type="date"
+        id="mdcDateFrom"
+        name="mdc_date_from_ui"
+        min="{{ data_center.chart_date_min }}"
+        max="{{ data_center.chart_date_max }}"
+        class="mdc-date-input min-w-0 flex-1 rounded-md border border-slate-300 bg-white text-slate-900 outline-none hover:border-slate-400 {% if virtual_mdc|default(false) %}focus:border-violet-500 focus:ring-1 focus:ring-violet-200{% else %}focus:border-sky-500 focus:ring-1 focus:ring-sky-200{% endif %} {% if wide|default(false) %}px-2 py-1 text-xs{% else %}max-w-[7.25rem] px-1 py-0.5 text-[10px] leading-tight w-0{% endif %}"
+        autocomplete="off"
+        title="Start (IST day)"
+      />
+      <span class="shrink-0 text-slate-400 {% if wide|default(false) %}text-xs px-0.5{% else %}text-[9px] px-0.5{% endif %}" aria-hidden="true">–</span>
+      <input
+        type="date"
+        id="mdcDateTo"
+        name="mdc_date_to_ui"
+        min="{{ data_center.chart_date_min }}"
+        max="{{ data_center.chart_date_max }}"
+        class="mdc-date-input min-w-0 flex-1 rounded-md border border-slate-300 bg-white text-slate-900 outline-none hover:border-slate-400 {% if virtual_mdc|default(false) %}focus:border-violet-500 focus:ring-1 focus:ring-violet-200{% else %}focus:border-sky-500 focus:ring-1 focus:ring-sky-200{% endif %} {% if wide|default(false) %}px-2 py-1 text-xs{% else %}max-w-[7.25rem] px-1 py-0.5 text-[10px] leading-tight w-0{% endif %}"
+        autocomplete="off"
+        title="End (IST day)"
+      />
+    </div>
+    <div class="relative w-full min-w-0 {% if wide|default(false) %}h-5{% else %}h-4{% endif %}">
+      <div
+        class="pointer-events-none absolute left-0 right-0 {% if wide|default(false) %}top-2.5 h-0.5{% else %}top-2 h-px{% endif %} -translate-y-1/2 rounded-full bg-slate-300"
+      ></div>
+      <div
+        id="mdcRangeFill"
+        class="pointer-events-none absolute {% if wide|default(false) %}top-2.5 h-0.5{% else %}top-2 h-px{% endif %} -translate-y-1/2 rounded-full bg-slate-600"
+        style="left: 0%; width: 100%"
+      ></div>
+      <input
+        type="range"
+        id="mdcRangeLo"
+        class="absolute inset-x-0 top-0 z-[2] m-0 w-full cursor-pointer appearance-none bg-transparent p-0 {% if wide|default(false) %}h-5{% else %}h-4{% endif %}"
+        min="0"
+        max="1"
+        value="0"
+        aria-label="Range start (registration day)"
+      />
+      <input
+        type="range"
+        id="mdcRangeHi"
+        class="absolute inset-x-0 top-0 z-[3] m-0 w-full cursor-pointer appearance-none bg-transparent p-0 {% if wide|default(false) %}h-5{% else %}h-4{% endif %}"
+        min="0"
+        max="1"
+        value="1"
+        aria-label="Range end (registration day)"
+      />
+    </div>
+    <p id="mdcRangeFilterHint" class="sr-only" aria-live="polite"></p>
+  </div>
+  <style>
+    #mdcRangeLo::-webkit-slider-thumb,
+    #mdcRangeHi::-webkit-slider-thumb {
+      appearance: none;
+      height: 10px;
+      width: 10px;
+      border-radius: 9999px;
+      background: #ffffff;
+      border: 1.5px solid #334155;
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9);
+      pointer-events: auto;
+    }
+    #mdcRangeLo::-moz-range-thumb,
+    #mdcRangeHi::-moz-range-thumb {
+      height: 10px;
+      width: 10px;
+      border-radius: 9999px;
+      background: #ffffff;
+      border: 1.5px solid #334155;
+      pointer-events: auto;
+    }
+    .mdc-date-range--wide #mdcRangeLo::-webkit-slider-thumb,
+    .mdc-date-range--wide #mdcRangeHi::-webkit-slider-thumb {
+      height: 14px;
+      width: 14px;
+    }
+    .mdc-date-range--wide #mdcRangeLo::-moz-range-thumb,
+    .mdc-date-range--wide #mdcRangeHi::-moz-range-thumb {
+      height: 14px;
+      width: 14px;
+    }
+    #mdcRangeLo::-webkit-slider-runnable-track,
+    #mdcRangeHi::-webkit-slider-runnable-track {
+      height: 6px;
+      background: transparent;
+    }
+    #mdcRangeLo::-moz-range-track,
+    #mdcRangeHi::-moz-range-track {
+      height: 6px;
+      background: transparent;
+    }
+  </style>
+</div>
+{% endif %}

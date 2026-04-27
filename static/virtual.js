@@ -113,7 +113,7 @@ function buildListRowHtml(r) {
 
 function buildLeaderboardDom(rows) {
   if (!rows.length) {
-    return '<div class="py-14 text-center text-sm text-slate-500">No submission rows yet for this challenge.</div>';
+    return '<div class="py-14 text-center text-sm text-slate-500">No teams yet.</div>';
   }
   var html = buildPodiumHtml(rows);
   var rest = rows.slice(3);
@@ -136,10 +136,10 @@ function showSubmissionLbError(challengeId, status, detail) {
   if (!board) return;
   var msg =
     status === 404
-      ? "No virtual challenge with id <strong>#" +
+      ? "No challenge <strong>#" +
         escapeHtml(String(challengeId)) +
-        "</strong> for this event. Choose another challenge from <strong>Challenge eligibility</strong> below or open <strong>Manage challenges</strong>."
-      : escapeHtml(detail || "Could not load submission leaderboard.");
+        "</strong> for this event. Pick another challenge or open <strong>Manage challenges</strong>."
+      : escapeHtml(detail || "Could not load leaderboard.");
   board.innerHTML =
     '<div class="rounded-xl border border-rose-200 bg-rose-50/80 text-rose-800 px-4 py-3 text-sm leading-relaxed">' +
     msg +
@@ -296,6 +296,7 @@ window.addEventListener("DOMContentLoaded", function () {
   var baseUrl = cfg.submissionLeaderboardUrl || "/api/virtual/submission-leaderboard";
   var workerUrl = cfg.leaderboardWorkerUrl || "";
   var useWorker = cfg.useLeaderboardWorker !== false;
+  if (!document.getElementById("slbBoard")) return;
   if (!challengeId || virtualEventId == null) return;
 
   var pollMs = 4000;

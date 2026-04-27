@@ -58,29 +58,28 @@
     box-shadow: 0 10px 30px -10px rgba(167, 139, 250, 0.6);
   }
   .pw-glyph { line-height: 1; }
-  .pw-lb-podium-slot { transition: transform 0.2s ease, box-shadow 0.2s ease; }
-  .pw-lb-podium-slot:hover { transform: translateY(-2px); }
-  .pw-lb-champion-glow {
+  /* Standings podium / list — light pink / violet (Virtual UI) */
+  .pw-vw-lb-podium-slot { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+  .pw-vw-lb-podium-slot:hover { transform: translateY(-2px); }
+  .pw-vw-lb-champion-glow {
     box-shadow:
-      0 0 0 1px rgba(167, 139, 250, 0.35),
-      0 16px 48px -14px rgba(109, 40, 217, 0.4),
-      0 8px 24px -8px rgba(99, 102, 241, 0.25);
+      0 0 0 1px rgba(192, 132, 252, 0.45),
+      0 16px 48px -14px rgba(147, 51, 234, 0.28),
+      0 8px 24px -8px rgba(236, 72, 153, 0.15);
   }
-  .pw-lb-list-row { transition: background-color 0.15s ease; }
-  .pw-lb-list-row:hover { background-color: rgba(245, 243, 255, 0.5); }
+  .pw-vw-lb-list-row:hover { background-color: rgba(250, 245, 255, 0.85); }
   .pw-arena-chip-active {
     border-color: rgba(167, 139, 250, 0.95);
     background: linear-gradient(180deg, rgba(245, 243, 255, 0.95), rgba(255, 255, 255, 0.98));
     color: #5b21b6;
     box-shadow: 0 0 0 1px rgba(167, 139, 250, 0.2);
   }
-  .pw-top400-row-zebra:nth-child(even) { background-color: rgba(248, 250, 252, 0.65); }
 </style>
 {% endblock %}
 
 {% block hero %}
-<section id="hero" class="pw-sidebar-offset pl-0 md:pl-[var(--pw-sidebar-current)]">
-  <div class="mx-margin rounded-3xl overflow-hidden relative pw-hero-virtual mt-0 border border-slate-800/40 shadow-lg">
+<section id="hero" class="pw-sidebar-offset min-w-0 pl-0 md:pl-[var(--pw-sidebar-current)]">
+  <div class="mx-4 sm:mx-6 md:mx-margin rounded-3xl overflow-hidden relative pw-hero-virtual mt-0 border border-slate-800/40 shadow-lg">
     <div class="pw-binary-floor"></div>
     <span aria-hidden="true" class="pw-glyph absolute left-[4%] top-1/2 -translate-y-1/2 hidden lg:inline-block opacity-50">
       <svg xmlns="http://www.w3.org/2000/svg" width="72" height="72" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
@@ -88,10 +87,10 @@
         <line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/>
       </svg>
     </span>
-    <div class="relative z-10 px-margin py-10 sm:py-12 lg:py-14 min-h-[260px] flex flex-col justify-center">
-      <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-center">
-        <div class="lg:col-span-7 text-center lg:text-left">
-          <h1 class="font-display text-white font-black tracking-tight leading-[0.95] text-[52px] sm:text-[72px] lg:text-[88px]">
+    <div class="relative z-10 px-4 sm:px-6 md:px-margin py-10 sm:py-12 lg:py-14 min-h-[260px] flex flex-col justify-center">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-10 items-center min-w-0">
+        <div class="lg:col-span-7 min-w-0 text-center lg:text-left">
+          <h1 class="font-display text-white font-black tracking-tight leading-[0.95] text-[clamp(2rem,10vw,3.25rem)] sm:text-[72px] lg:text-[88px] break-words">
             PromptWars
           </h1>
           <div class="pw-virtual-pill mt-3 inline-flex px-8 sm:px-10 py-2 sm:py-2.5 rounded-full text-slate-900 font-display font-bold text-xl sm:text-2xl">
@@ -103,21 +102,17 @@
             </svg>
             <span class="font-display text-base sm:text-lg md:text-xl">Build, deploy &amp; win from anywhere</span>
           </div>
-          <div class="mt-2 flex items-center gap-2 text-white/80 justify-center lg:justify-start text-sm">
-            <span class="material-symbols-outlined text-[18px]">location_on</span>
-            <span>India only</span>
-          </div>
         </div>
         <div class="lg:col-span-5">
           <div class="glass-panel-elevated rounded-2xl p-5 sm:p-6 text-left max-w-md mx-auto lg:ml-auto lg:mr-0 border border-white/50">
-            {% if submission_leaderboard.challenge and submission_leaderboard.challenge.title %}
+            {% if arena_challenge_title %}
             <p class="mt-3 text-sm font-semibold text-slate-800 leading-snug">
-              Arena · {{ submission_leaderboard.challenge.title }}
+              Arena · {{ arena_challenge_title }}
             </p>
             {% elif challenge_id %}
             <p class="mt-3 text-sm font-semibold text-slate-800">Arena · Challenge #{{ challenge_id }}</p>
             {% else %}
-            <p class="mt-3 text-sm text-slate-600">Select a challenge below to load standings.</p>
+            <p class="mt-3 text-sm text-slate-600">Select a challenge below for arena context and KPIs.</p>
             {% endif %}
             {% if challenge_id and arena_stats and not arena_stats.error and arena_stats.closes_at_display %}
             <p class="mt-2 flex items-center gap-1.5 text-xs text-slate-500">
@@ -134,26 +129,33 @@
 {% endblock %}
 
 {% block content %}
-<div class="pw-virtual-page-skin -mx-margin px-margin -mt-2 sm:-mt-0 rounded-2xl">
+<div class="pw-virtual-page-skin -mx-4 px-4 sm:-mx-6 sm:px-6 md:-mx-margin md:px-margin -mt-2 sm:-mt-0 rounded-2xl min-w-0">
 
 {% macro _lb_initials(name) -%}
 {%- set t = (name or '')|trim -%}
 {%- if t|length == 0 -%}?{%- elif t|length == 1 -%}{{ t|upper }}{%- else -%}{{ t[0:2]|upper }}{%- endif -%}
 {%- endmacro %}
 
-{% macro _lb_podium_slot(entry, rank, champion) %}
+{% macro _vw_lb_podium_slot(entry, rank, champion, is_global) %}
 {% if entry %}
-<div class="pw-lb-podium-slot relative flex flex-col items-center text-center rounded-2xl overflow-hidden border
-  {% if champion %}pw-lb-champion-glow border-violet-300 bg-gradient-to-b from-violet-50/90 to-white shadow-lg shadow-violet-500/15 py-7 sm:py-9 min-h-[158px] sm:min-h-[178px] -mt-0.5 sm:-mt-2 z-[1]{% else %}border-slate-100/80 bg-gradient-to-b from-slate-50/40 to-white py-5 sm:py-6 min-h-[128px] sm:min-h-[142px]{% endif %}">
+<div class="pw-vw-lb-podium-slot relative flex flex-col items-center text-center rounded-2xl overflow-hidden border
+  {% if champion %}pw-vw-lb-champion-glow border-fuchsia-200/90 bg-gradient-to-b from-fuchsia-50/80 via-violet-50/50 to-white shadow-lg py-7 sm:py-9 min-h-[158px] sm:min-h-[178px] -mt-0.5 sm:-mt-2 z-[1]{% else %}border-slate-100/80 bg-gradient-to-b from-violet-50/35 to-white py-5 sm:py-6 min-h-[128px] sm:min-h-[142px]{% endif %}">
   <span class="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 text-[4rem] sm:text-[5rem] font-black leading-none tracking-tighter select-none
-    {% if rank == 1 %}text-amber-200{% elif rank == 2 %}text-sky-200{% else %}text-orange-200{% endif %}" aria-hidden="true">{{ rank }}</span>
-  <div class="relative mt-5 sm:mt-6 flex h-12 w-12 sm:h-14 sm:w-14 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 text-sm sm:text-base font-bold text-white shadow-md ring-2 ring-white/80">
+    {% if rank == 1 %}text-fuchsia-100{% elif rank == 2 %}text-violet-100{% else %}text-purple-100{% endif %}" aria-hidden="true">{{ rank }}</span>
+  <div class="relative mt-5 sm:mt-6 flex h-12 w-12 sm:h-14 sm:w-14 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 via-fuchsia-500 to-pink-500 text-sm sm:text-base font-bold text-white shadow-md ring-2 ring-white/90">
     {{ _lb_initials(entry.team_name) }}
   </div>
   <p class="relative mt-2.5 px-1 text-sm font-semibold text-slate-900 truncate max-w-full w-full">{{ entry.team_name }}</p>
-  <p class="relative text-[11px] text-slate-500 truncate max-w-full w-full px-1">{{ entry.leader_name or "—" }}</p>
+  <p class="relative text-[11px] text-slate-500 truncate max-w-full w-full px-1">
+    {{ entry.leader_name or "—" }}
+    {% if is_global and entry.arena_count %}<span class="text-slate-400"> · {{ entry.arena_count }} arena(s)</span>{% endif %}
+  </p>
   <p class="relative mt-1 text-base sm:text-lg font-bold tabular-nums tracking-tight text-slate-900">
-    {% if entry.total_score is not none %}{{ "{:g}".format(entry.total_score|float) }} <span class="text-xs font-semibold text-violet-600">pts</span>{% else %}—{% endif %}
+    {% if is_global %}
+      {% if entry.average_score is not none %}{{ "{:g}".format(entry.average_score|float) }} <span class="text-xs font-semibold text-fuchsia-600">avg</span>{% else %}—{% endif %}
+    {% else %}
+      {% if entry.total_score is not none %}{{ "{:g}".format(entry.total_score|float) }} <span class="text-xs font-semibold text-fuchsia-600">pts</span>{% else %}—{% endif %}
+    {% endif %}
   </p>
 </div>
 {% else %}
@@ -165,22 +167,122 @@
   <div class="glass-panel p-md rounded-xl text-rose-700 text-sm mb-md border border-rose-200/80">{{ leaderboard.error }}</div>
 {% endif %}
 
-<section id="about" class="flex flex-col gap-sm mb-sm pt-2">
-  <h2 class="font-display text-headline-lg text-slate-900 leading-tight">Virtual arena</h2>
-  <p class="font-body-md text-on-surface-variant text-sm max-w-3xl">
-    Imported team scores and live standings.
-  </p>
+<section id="virtual-standings-intro" class="flex flex-col gap-sm mb-lg pt-2">
+  <h2 class="font-display text-headline-lg text-slate-900 leading-tight">Virtual · Standings</h2>
+  <p class="font-body-md text-on-surface-variant text-sm max-w-3xl">Top 400 by imported score.</p>
+</section>
+
+{% set slb = standings_leaderboard %}
+{% if not slb.is_global and slb.challenge %}
+{% set _vw_lb_full_href = url_for('virtual_submission_leaderboard', virtualEventId=virtual_event_id, inPersonEventId=in_person_event_id, arenaChallengeId=slb.challenge.id) %}
+{% else %}
+{% set _vw_lb_full_href = url_for('virtual_submission_leaderboard', virtualEventId=virtual_event_id, inPersonEventId=in_person_event_id, global=1) %}
+{% endif %}
+<section id="virtual-standings" class="flex justify-center mb-8 lg:mb-10">
+  <div class="bg-white rounded-2xl border border-violet-200/80 shadow-sm w-full max-w-6xl overflow-hidden flex flex-col">
+    <div class="px-4 sm:px-6 pt-5 sm:pt-6 pb-4 border-b border-violet-100/80 bg-gradient-to-r from-fuchsia-50/35 via-white to-violet-50/40">
+      <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div class="min-w-0 flex-1">
+          <p class="text-[10px] font-bold uppercase tracking-widest text-violet-800/90 mb-1">Live standings (imported)</p>
+          <h3 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight leading-tight">
+            {% if slb.is_global %}Global (all arenas){% elif slb.challenge and slb.challenge.title %}{{ slb.challenge.title }}{% else %}Standings{% endif %}
+          </h3>
+          <p class="text-sm text-slate-500 mt-2">
+            <span class="font-semibold text-slate-800 tabular-nums">
+              {% if slb.error %}—{% else %}{{ slb.total }} team(s){% endif %}
+            </span>
+            <span class="text-slate-400 text-xs font-normal"> · Top 400</span>
+          </p>
+        </div>
+        <form method="get" action="{{ url_for('virtual_page') }}" class="flex flex-col gap-2 shrink-0 w-full max-w-md lg:max-w-xs lg:pt-1">
+          <input type="hidden" name="virtualEventId" value="{{ virtual_event_id }}" />
+          <input type="hidden" name="inPersonEventId" value="{{ in_person_event_id }}" />
+          {% if challenge_id %}<input type="hidden" name="arenaChallengeId" value="{{ challenge_id }}" />{% endif %}
+          {% if active_challenge_id %}<input type="hidden" name="challengeId" value="{{ active_challenge_id }}" />{% endif %}
+          {% if not data_center.error and data_center.mdc_date_from and data_center.mdc_date_to %}
+          <input type="hidden" name="mdc_date_from" value="{{ data_center.mdc_date_from }}" />
+          <input type="hidden" name="mdc_date_to" value="{{ data_center.mdc_date_to }}" />
+          {% endif %}
+          <label class="flex flex-col gap-1">
+            <span class="text-[10px] font-bold uppercase tracking-widest text-violet-800/90">View</span>
+            <select name="standingsView" onchange="this.form.submit()"
+                    class="px-3 py-2.5 rounded-xl border border-violet-200/90 bg-white text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-400/40 w-full">
+              <option value="global" {% if slb.is_global %}selected{% endif %}>Global (all arenas)</option>
+              {% for ch in (virtual_challenges or []) %}
+              <option value="{{ ch.id }}" {% if not slb.is_global and slb.challenge and slb.challenge.id == ch.id %}selected{% endif %}>{{ ch.title }} ({{ ch.status }})</option>
+              {% endfor %}
+            </select>
+          </label>
+          <div class="flex justify-end w-full pt-1">
+            <a href="{{ _vw_lb_full_href }}"
+               class="font-semibold text-violet-700 hover:text-violet-900 hover:underline no-underline text-sm shrink-0 text-right">Full leaderboard →</a>
+          </div>
+        </form>
+      </div>
+    </div>
+    <div class="px-4 sm:px-6 py-5 sm:py-6 flex-1 min-h-0 overflow-y-auto max-h-[min(34rem,68vh)] bg-white/80">
+      {% if slb.error %}
+        <div class="rounded-xl border border-rose-200 bg-rose-50/80 text-rose-800 px-4 py-3 text-sm">{{ slb.error }}</div>
+      {% elif slb.rows %}
+        <div class="grid grid-cols-3 gap-2 sm:gap-3 items-end mb-8 max-w-md sm:max-w-lg mx-auto" aria-label="Top three teams">
+          {{ _vw_lb_podium_slot(slb.rows[1] if slb.rows|length > 1 else none, 2, false, slb.is_global) }}
+          {{ _vw_lb_podium_slot(slb.rows[0], 1, true, slb.is_global) }}
+          {{ _vw_lb_podium_slot(slb.rows[2] if slb.rows|length > 2 else none, 3, false, slb.is_global) }}
+        </div>
+        {% if slb.rows|length > 3 %}
+        <div class="rounded-xl border border-violet-100/90 divide-y divide-violet-100/60 overflow-hidden bg-white">
+          {% for r in slb.rows[3:] %}
+          <div class="pw-vw-lb-list-row flex items-center gap-3 sm:gap-4 py-3.5 sm:py-4 px-3 sm:px-4">
+            <span class="w-7 sm:w-8 shrink-0 text-center text-sm font-semibold text-slate-400 tabular-nums">{{ r.rank }}</span>
+            <div class="flex h-10 w-10 sm:h-11 sm:w-11 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-100 to-fuchsia-100 text-xs sm:text-sm font-bold text-violet-800 ring-1 ring-violet-200/70">
+              {{ _lb_initials(r.team_name) }}
+            </div>
+            <div class="flex-1 min-w-0">
+              <p class="font-semibold text-slate-900 truncate text-sm sm:text-base">{{ r.team_name }}</p>
+              <p class="text-xs text-slate-500 truncate">
+                {% if r.leader_email %}<span class="font-mono">{{ r.leader_email }}</span>
+                {% elif r.leader_name %}<span>{{ r.leader_name }}</span>
+                {% else %}—{% endif %}
+                {% if slb.is_global and r.arena_count %}<span class="text-slate-400"> · {{ r.arena_count }} arena(s)</span>{% endif %}
+              </p>
+            </div>
+            <div class="shrink-0 text-right">
+              {% if slb.is_global %}
+              <p class="text-sm sm:text-base font-bold tabular-nums text-slate-900">
+                {% if r.average_score is not none %}{{ "{:g}".format(r.average_score|float) }}{% else %}—{% endif %}
+              </p>
+              <p class="text-[10px] sm:text-[11px] font-medium text-fuchsia-600">avg</p>
+              {% else %}
+              <p class="text-sm sm:text-base font-bold tabular-nums text-slate-900">
+                {% if r.total_score is not none %}{{ "{:g}".format(r.total_score|float) }}{% else %}—{% endif %}
+              </p>
+              <p class="text-[10px] sm:text-[11px] font-medium text-fuchsia-600">pts</p>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      {% else %}
+        <div class="py-14 text-center text-sm text-slate-500">
+          {% if slb.is_global %}No imported virtual submissions yet.{% else %}No submission rows for this challenge yet.{% endif %}
+          Import via <a href="{{ url_for('virtual_import') }}" class="text-violet-700 hover:text-violet-900 hover:underline font-semibold">Virtual · Import</a>.
+        </div>
+      {% endif %}
+    </div>
+  </div>
 </section>
 
 {% set n_arena_ch = (virtual_challenges or [])|length %}
-<div class="sticky top-16 z-30 -mx-1 sm:mx-0 mb-6 rounded-2xl border border-slate-200/80 bg-white/85 backdrop-blur-md px-3 sm:px-4 py-3 shadow-sm">
+<div class="sticky top-16 z-30 -mx-1 min-w-0 sm:mx-0 mb-6 rounded-2xl border border-slate-200/80 bg-white/85 backdrop-blur-md px-3 sm:px-4 py-3 shadow-sm">
   <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
     <div class="flex flex-col gap-2 min-w-0 flex-1">
-      <span class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Arena challenge</span>
+      <span class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Arena</span>
       {% if n_arena_ch > 5 %}
       <form method="get" action="{{ url_for('virtual_page') }}" class="flex flex-wrap items-end gap-3">
         <input type="hidden" name="virtualEventId" value="{{ virtual_event_id }}" />
         <input type="hidden" name="inPersonEventId" value="{{ in_person_event_id }}" />
+        <input type="hidden" name="standingsView" value="{{ standings_view_value }}" />
         {% if active_challenge_id %}<input type="hidden" name="challengeId" value="{{ active_challenge_id }}" />{% endif %}
         <label class="flex flex-col gap-1 flex-1 min-w-[200px]">
           <select name="arenaChallengeId" onchange="this.form.submit()"
@@ -197,9 +299,9 @@
       <div class="flex flex-wrap gap-2">
         {% for ch in (virtual_challenges or []) %}
           {% if active_challenge_id %}
-            {% set chip_href = url_for('virtual_page', virtualEventId=virtual_event_id, inPersonEventId=in_person_event_id, arenaChallengeId=ch.id, challengeId=active_challenge_id) %}
+            {% set chip_href = url_for('virtual_page', virtualEventId=virtual_event_id, inPersonEventId=in_person_event_id, arenaChallengeId=ch.id, challengeId=active_challenge_id, standingsView=standings_view_value) %}
           {% else %}
-            {% set chip_href = url_for('virtual_page', virtualEventId=virtual_event_id, inPersonEventId=in_person_event_id, arenaChallengeId=ch.id) %}
+            {% set chip_href = url_for('virtual_page', virtualEventId=virtual_event_id, inPersonEventId=in_person_event_id, arenaChallengeId=ch.id, standingsView=standings_view_value) %}
           {% endif %}
           <a href="{{ chip_href }}"
              class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold border transition-colors no-underline
@@ -220,81 +322,6 @@
         {{ arena_stats.closes_at_display }}
       </span>
       {% endif %}
-      {% if challenge_id %}
-      <a href="{{ url_for('virtual_submission_leaderboard', virtualEventId=virtual_event_id, arenaChallengeId=challenge_id) }}"
-         class="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold text-white bg-violet-600 hover:bg-violet-700 shadow-sm no-underline transition-colors">
-        Full leaderboard <span class="material-symbols-outlined text-[18px]">arrow_forward</span>
-      </a>
-      {% endif %}
-    </div>
-  </div>
-</div>
-
-<div class="flex justify-center mb-6 lg:mb-8">
-  <div id="submission-leaderboard" class="glass-panel-elevated pw-bento-elevated w-full max-w-6xl overflow-hidden flex flex-col border border-white/70">
-    <div class="px-4 sm:px-6 pt-5 sm:pt-6 pb-4 border-b border-slate-100/90 bg-gradient-to-r from-violet-50/40 via-white to-sky-50/30">
-      <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
-        <div>
-          <p class="text-[10px] font-bold uppercase tracking-widest text-violet-700/90 mb-1">Live standings</p>
-          <h3 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight leading-tight">
-            {% if submission_leaderboard.challenge and submission_leaderboard.challenge.title %}
-              {{ submission_leaderboard.challenge.title }}
-            {% elif challenge_id %}
-              Challenge #{{ challenge_id }}
-            {% else %}
-              Leaderboard
-            {% endif %}
-          </h3>
-          <p class="text-sm text-slate-500 mt-2 flex flex-wrap items-baseline gap-x-1.5 gap-y-0">
-            <span id="slbCount" class="font-semibold text-slate-800 tabular-nums">
-              {% if submission_leaderboard.error %}—{% else %}{{ submission_leaderboard.total }} team(s){% endif %}
-            </span>
-            <span class="text-slate-300">·</span>
-            <span>Top 50 on this page · ties → earlier submission</span>
-          </p>
-        </div>
-      </div>
-    </div>
-    <div class="px-4 sm:px-6 py-5 sm:py-6 flex-1 min-h-0 overflow-y-auto max-h-[min(34rem,68vh)] bg-white/60">
-      <div id="slbBoard">
-        {% if submission_leaderboard.error %}
-          <div class="rounded-xl border border-rose-200 bg-rose-50/80 text-rose-800 px-4 py-3 text-sm">{{ submission_leaderboard.error }}</div>
-        {% elif submission_leaderboard.rows %}
-          <div class="grid grid-cols-3 gap-2 sm:gap-3 items-end mb-8 max-w-md sm:max-w-lg mx-auto" id="slbPodium" aria-label="Top three teams">
-            {{ _lb_podium_slot(submission_leaderboard.rows[1] if submission_leaderboard.rows|length > 1 else none, 2, false) }}
-            {{ _lb_podium_slot(submission_leaderboard.rows[0], 1, true) }}
-            {{ _lb_podium_slot(submission_leaderboard.rows[2] if submission_leaderboard.rows|length > 2 else none, 3, false) }}
-          </div>
-          {% if submission_leaderboard.rows|length > 3 %}
-          <div id="slbList" class="rounded-xl border border-slate-100 divide-y divide-slate-100 overflow-hidden bg-white">
-            {% for r in submission_leaderboard.rows[3:] %}
-            <div class="pw-lb-list-row flex items-center gap-3 sm:gap-4 py-3.5 sm:py-4 px-3 sm:px-4">
-              <span class="w-7 sm:w-8 shrink-0 text-center text-sm font-semibold text-slate-400 tabular-nums">{{ r.rank }}</span>
-              <div class="flex h-10 w-10 sm:h-11 sm:w-11 shrink-0 items-center justify-center rounded-full bg-violet-100 text-xs sm:text-sm font-bold text-violet-700 ring-1 ring-violet-200/60">
-                {{ _lb_initials(r.team_name) }}
-              </div>
-              <div class="flex-1 min-w-0">
-                <p class="font-semibold text-slate-900 truncate text-sm sm:text-base">{{ r.team_name }}</p>
-                <p class="text-xs text-slate-500 truncate">
-                  {% if r.leader_email %}<span class="font-mono">{{ r.leader_email }}</span>
-                  {% elif r.leader_name %}<span>{{ r.leader_name }}</span>
-                  {% else %}—{% endif %}
-                </p>
-              </div>
-              <div class="shrink-0 text-right">
-                <p class="text-sm sm:text-base font-bold tabular-nums text-slate-900">
-                  {% if r.total_score is not none %}{{ "{:g}".format(r.total_score|float) }}{% else %}—{% endif %}
-                </p>
-                <p class="text-[10px] sm:text-[11px] font-medium text-violet-600">pts</p>
-              </div>
-            </div>
-            {% endfor %}
-          </div>
-          {% endif %}
-        {% else %}
-          <div class="py-14 text-center text-sm text-slate-500">No submission rows yet for this challenge.</div>
-        {% endif %}
-      </div>
     </div>
   </div>
 </div>
@@ -335,7 +362,6 @@
       <span class="material-symbols-outlined text-slate-400 text-[20px] shrink-0">leaderboard</span>
     </div>
     <p class="font-display text-2xl text-slate-900 tabular-nums leading-tight mt-2">{{ "{:,}".format(arena_stats.total_submissions or 0) }}</p>
-    <p class="text-[11px] text-slate-500 mt-1">Imported submission sheet</p>
   </div>
   <div class="glass-panel pw-bento p-4 sm:p-5 border border-[var(--pw-accent-border)] bg-[var(--pw-accent-soft)]">
     <div class="flex justify-between items-start gap-2">
@@ -343,68 +369,25 @@
       <span class="material-symbols-outlined text-violet-600 text-[20px] shrink-0">link</span>
     </div>
     <p class="font-display text-2xl text-violet-950 tabular-nums leading-tight mt-2">{{ "{:,}".format(arena_stats.unique_mdc_submissions or 0) }}</p>
-    <p class="text-[11px] text-violet-800/80 mt-1">Distinct registration ids</p>
   </div>
-</div>
-
-<div class="glass-panel-elevated pw-bento-elevated rounded-2xl border border-white/70 overflow-hidden mb-8 lg:mb-10">
-  <div class="px-4 sm:px-6 py-4 border-b border-slate-100 bg-white/70 flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
-    <h4 class="font-display text-lg sm:text-xl font-bold text-slate-900">Top 400 teams · same tie-break as standings</h4>
-    <span class="text-xs text-slate-500">Ranks 1–3 medals · 4–10 highlighted</span>
-  </div>
-  {% if arena_stats.top_400_rows %}
-  <div class="max-h-[min(28rem,52vh)] overflow-y-auto overflow-x-auto bg-white/50">
-    <table class="w-full text-left text-sm min-w-[640px]">
-      <thead class="sticky top-0 z-[1] bg-slate-50/95 backdrop-blur-sm border-b border-slate-100">
-        <tr class="text-slate-600">
-          <th class="py-3 pl-3 pr-2 text-[11px] font-semibold uppercase tracking-wider w-24">Rank</th>
-          <th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider">Team</th>
-          <th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider">Leader</th>
-          <th class="py-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-right">Score</th>
-          <th class="py-3 pr-3 pl-2 text-[11px] font-semibold uppercase tracking-wider whitespace-nowrap hidden sm:table-cell">Submitted</th>
-        </tr>
-      </thead>
-      <tbody class="text-slate-800">
-        {% for r in arena_stats.top_400_rows %}
-        <tr class="pw-top400-row-zebra border-b border-slate-100/80 {% if r.rank <= 10 %}border-l-[3px] border-l-violet-500{% endif %}">
-          <td class="py-2.5 pl-3 pr-2 align-middle">
-            {% if r.rank == 1 %}
-            <span class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-amber-300 to-amber-600 text-white text-xs font-black shadow-sm" title="1st">1</span>
-            {% elif r.rank == 2 %}
-            <span class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-slate-300 to-slate-500 text-white text-xs font-black shadow-sm" title="2nd">2</span>
-            {% elif r.rank == 3 %}
-            <span class="inline-flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-orange-300 to-orange-700 text-white text-xs font-black shadow-sm" title="3rd">3</span>
-            {% elif r.rank <= 10 %}
-            <span class="inline-flex min-w-[2rem] h-8 px-1.5 items-center justify-center rounded-full bg-violet-100 text-violet-800 text-xs font-bold border border-violet-200/80">{{ r.rank }}</span>
-            {% else %}
-            <span class="inline-flex min-w-[2rem] justify-center text-sm font-semibold tabular-nums text-slate-500">{{ r.rank }}</span>
-            {% endif %}
-          </td>
-          <td class="py-2.5 px-2 font-medium max-w-[200px] truncate align-middle" title="{{ r.team_name or '' }}">{{ r.team_name or "—" }}</td>
-          <td class="py-2.5 px-2 max-w-[220px] align-middle">
-            <span class="truncate block text-xs font-medium" title="{{ r.leader_name or r.leader_email or '' }}">{{ r.leader_name or "—" }}</span>
-            {% if r.leader_email %}<span class="truncate block font-mono text-[10px] text-slate-500">{{ r.leader_email }}</span>{% endif %}
-          </td>
-          <td class="py-2.5 px-2 font-bold tabular-nums text-violet-900 text-right align-middle">{% if r.total_score is not none %}{{ "{:g}".format(r.total_score|float) }}{% else %}—{% endif %}</td>
-          <td class="py-2.5 pr-3 pl-2 text-[11px] text-slate-500 whitespace-nowrap font-mono align-middle hidden sm:table-cell">{{ r.submitted_at[:19] if r.submitted_at else "—" }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  {% else %}
-  <div class="py-12 text-center text-sm text-slate-500">No imported team rows for this challenge yet.</div>
-  {% endif %}
 </div>
 {% endif %}
 {% endif %}
 
 <section id="main-data-center-virtual" class="flex flex-col gap-sm mb-2">
-  <h2 class="font-display text-headline-lg text-slate-900 leading-tight">Virtual Main Data Center</h2>
-  <p class="font-body-md text-on-surface-variant max-w-3xl">
-    Vision export analytics for the virtual program (one row per email). Registration times use <strong>IST</strong> for day/hour charts.
-  </p>
-  <p id="mdcTzNote" class="text-xs text-slate-500"></p>
+  <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-8">
+    <div class="min-w-0 flex-1 max-w-3xl">
+      <h2 class="font-display text-headline-lg text-slate-900 leading-tight">Virtual Main Data Center</h2>
+      <p id="mdcTzNote" class="text-xs text-slate-500"></p>
+    </div>
+    {% if not data_center.error and data_center.chart_date_min and data_center.chart_date_max %}
+    <div class="w-full max-w-md shrink-0 max-lg:mx-auto lg:max-w-none lg:mx-0 lg:min-w-[22rem] lg:w-[min(36rem,42%)]">
+      {% with wide=true, virtual_mdc=true %}
+        {% include "partials/mdc_date_range_control.html" %}
+      {% endwith %}
+    </div>
+    {% endif %}
+  </div>
 </section>
 
 {% if data_center.error %}
@@ -419,41 +402,40 @@
         <span class="material-symbols-outlined shrink-0 text-violet-600 text-[22px]">groups</span>
         <div class="min-w-0">
           <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total registrations</p>
-          <p class="font-display text-lg text-slate-900 tabular-nums leading-tight">{{ "{:,}".format(data_center.total_registrations or 0) }}</p>
+          <p id="mdcPillTotalReg" class="font-display text-lg text-slate-900 tabular-nums leading-tight">{{ "{:,}".format(data_center.total_registrations or 0) }}</p>
         </div>
       </div>
       <div class="flex flex-1 min-w-0 items-center gap-3 px-4 py-3">
         <span class="material-symbols-outlined shrink-0 text-fuchsia-600 text-[22px]">pin_drop</span>
         <div class="min-w-0">
           <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Top city</p>
-          <p class="font-display text-lg text-slate-900 truncate" title="{{ data_center.pill_top_city or '—' }}">{{ data_center.pill_top_city or "—" }}</p>
-          {% if data_center.pill_top_city_count %}<p class="text-[10px] text-slate-500 tabular-nums truncate">{{ "{:,}".format(data_center.pill_top_city_count) }} in top bucket</p>{% endif %}
+          <p id="mdcPillTopCity" class="font-display text-lg text-slate-900 truncate" title="{{ data_center.pill_top_city or '—' }}">{{ data_center.pill_top_city or "—" }}</p>
+          {% if data_center.pill_top_city_count %}<p id="mdcPillTopCityMeta" class="text-[10px] text-slate-500 tabular-nums truncate">{{ "{:,}".format(data_center.pill_top_city_count) }} in top bucket</p>{% else %}<p id="mdcPillTopCityMeta" class="text-[10px] text-slate-500 tabular-nums truncate hidden"></p>{% endif %}
         </div>
       </div>
       <div class="flex flex-1 min-w-0 items-center gap-3 px-4 py-3">
         <span class="material-symbols-outlined shrink-0 text-indigo-600 text-[22px]">map</span>
         <div class="min-w-0">
           <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Top state</p>
-          <p class="font-display text-lg text-slate-900 truncate" title="{{ data_center.pill_top_state or '—' }}">{{ data_center.pill_top_state or "—" }}</p>
-          {% if data_center.pill_top_state_count %}<p class="text-[10px] text-slate-500 tabular-nums truncate">{{ "{:,}".format(data_center.pill_top_state_count) }} in top bucket</p>{% endif %}
+          <p id="mdcPillTopState" class="font-display text-lg text-slate-900 truncate" title="{{ data_center.pill_top_state or '—' }}">{{ data_center.pill_top_state or "—" }}</p>
+          {% if data_center.pill_top_state_count %}<p id="mdcPillTopStateMeta" class="text-[10px] text-slate-500 tabular-nums truncate">{{ "{:,}".format(data_center.pill_top_state_count) }} in top bucket</p>{% else %}<p id="mdcPillTopStateMeta" class="text-[10px] text-slate-500 tabular-nums truncate hidden"></p>{% endif %}
         </div>
       </div>
       <div class="flex flex-1 min-w-0 items-center gap-3 px-4 py-3">
         <span class="material-symbols-outlined shrink-0 text-violet-600 text-[22px]">cake</span>
         <div class="min-w-0">
           <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Average age</p>
-          <p class="font-display text-lg text-slate-900 tabular-nums truncate">
+          <p id="mdcPillAvgAge" class="font-display text-lg text-slate-900 tabular-nums truncate">
             {% if data_center.average_age is not none %}{{ data_center.average_age }} yrs{% else %}—{% endif %}
           </p>
-          {% if data_center.with_dob_count %}<p class="text-[10px] text-slate-500 truncate">{{ "{:,}".format(data_center.with_dob_count) }} with DOB</p>{% endif %}
+          {% if data_center.with_dob_count %}<p id="mdcPillDobMeta" class="text-[10px] text-slate-500 truncate">{{ "{:,}".format(data_center.with_dob_count) }} with DOB</p>{% else %}<p id="mdcPillDobMeta" class="text-[10px] text-slate-500 truncate hidden"></p>{% endif %}
         </div>
       </div>
       <div class="flex flex-1 min-w-0 items-center gap-3 px-4 py-3">
         <span class="material-symbols-outlined shrink-0 text-sky-600 text-[22px]">trending_up</span>
         <div class="min-w-0">
           <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Last 7 days</p>
-          <p class="font-display text-lg text-slate-900 tabular-nums truncate">{{ "{:,}".format(data_center.registrations_last_7_days or 0) }}</p>
-          <p class="text-[10px] text-slate-500 truncate">New timestamps</p>
+          <p id="mdcPillLast7" class="font-display text-lg text-slate-900 tabular-nums truncate">{{ "{:,}".format(data_center.registrations_last_7_days or 0) }}</p>
         </div>
       </div>
     </div>
@@ -461,16 +443,14 @@
 
   <div class="grid grid-cols-1 xl:grid-cols-12 gap-md mb-md">
     <div class="glass-panel pw-bento xl:col-span-8 border border-slate-100/90 p-lg">
-      <h3 class="font-display text-headline-md text-slate-900 mb-sm">Registration timeline</h3>
-      <p class="text-xs text-slate-500 mb-md">Daily counts from form timestamp (last 120 days, IST date).</p>
-      <div class="relative h-[280px] w-full">
+      <h3 class="font-display text-headline-md text-slate-900 mb-md">Registration timeline</h3>
+      <div id="mdcTimelineChartWrap" class="relative h-[280px] w-full">
         <canvas id="mdcTimelineChart"></canvas>
       </div>
     </div>
     <div class="glass-panel pw-bento xl:col-span-4 border border-slate-100/90 p-lg">
-      <h3 class="font-display text-headline-md text-slate-900 mb-sm">Registrations by hour</h3>
-      <p class="text-xs text-slate-500 mb-md">24-hour profile in IST (one bar per hour).</p>
-      <div class="relative h-[280px] w-full">
+      <h3 class="font-display text-headline-md text-slate-900 mb-md">Registrations by hour</h3>
+      <div id="mdcHourlyChartWrap" class="relative h-[280px] w-full">
         <canvas id="mdcHourlyChart"></canvas>
       </div>
     </div>
@@ -478,13 +458,11 @@
 
   <div class="grid grid-cols-1 xl:grid-cols-12 gap-md mb-md">
     <div class="glass-panel pw-bento xl:col-span-7 border border-slate-100/90 p-lg overflow-hidden">
-      <h3 class="font-display text-headline-md text-slate-900 mb-sm">India map (registrations)</h3>
-      <p class="text-xs text-slate-500 mb-md">State heat map from export <code class="rounded bg-slate-100 px-1">state</code>.</p>
+      <h3 class="font-display text-headline-md text-slate-900 mb-md">India map (registrations)</h3>
       <div id="mdcIndiaMap" class="w-full h-[320px]"></div>
     </div>
     <div class="glass-panel pw-bento xl:col-span-5 border border-slate-100/90 p-lg overflow-x-auto">
-      <h3 class="font-display text-headline-md text-slate-900 mb-sm">City pivot</h3>
-      <p class="text-xs text-slate-500 mb-md">Residence city from the Vision export (<code class="rounded bg-slate-100 px-1">city</code>).</p>
+      <h3 class="font-display text-headline-md text-slate-900 mb-md">City pivot</h3>
       <div class="max-h-[320px] overflow-y-auto">
         <table class="w-full text-left text-sm min-w-[320px]">
           <thead class="sticky top-0 bg-white/95 backdrop-blur-sm z-[1]">
@@ -493,7 +471,7 @@
               <th class="py-2 text-[11px] font-semibold uppercase tracking-wider text-right">Registrations</th>
             </tr>
           </thead>
-          <tbody class="text-slate-800">
+          <tbody id="mdcCityPivotTbody" class="text-slate-800">
             {% for r in data_center.city_pivot or [] %}
               <tr class="border-b border-slate-100">
                 <td class="py-2 pr-4 font-medium">{{ r.city }}</td>
@@ -510,22 +488,19 @@
 
   <div class="grid grid-cols-1 lg:grid-cols-3 xl:grid-cols-12 gap-md mb-xl">
     <div class="glass-panel pw-bento lg:col-span-1 xl:col-span-4 border border-slate-100/90 p-lg min-w-0">
-      <h3 class="font-display text-headline-md text-slate-900 mb-sm">UTM source breakdown</h3>
-      <p class="text-xs text-slate-500 mb-md">Share of registrations by <code class="rounded bg-slate-100 px-1">utm_source</code>.</p>
+      <h3 class="font-display text-headline-md text-slate-900 mb-md">UTM source breakdown</h3>
       <div id="mdcUtmChartHost" class="relative h-[280px] w-full max-w-[340px] mx-auto">
         <canvas id="mdcUtmDonut"></canvas>
       </div>
     </div>
     <div class="glass-panel pw-bento lg:col-span-1 xl:col-span-4 border border-slate-100/90 p-lg min-w-0">
-      <h3 class="font-display text-headline-md text-slate-900 mb-sm">Gender mix</h3>
-      <p class="text-xs text-slate-500 mb-md">Share of registrations by gender.</p>
+      <h3 class="font-display text-headline-md text-slate-900 mb-md">Gender mix</h3>
       <div id="mdcGenderChartHost" class="relative h-[280px] w-full max-w-[340px] mx-auto">
         <canvas id="mdcGenderDonut"></canvas>
       </div>
     </div>
     <div class="glass-panel pw-bento lg:col-span-1 xl:col-span-4 border border-slate-100/90 p-lg min-w-0">
-      <h3 class="font-display text-headline-md text-slate-900 mb-sm">Top occupations</h3>
-      <p class="text-xs text-slate-500 mb-md">Share among top occupation buckets.</p>
+      <h3 class="font-display text-headline-md text-slate-900 mb-md">Top occupations</h3>
       <div id="mdcOccupationChartHost" class="relative h-[280px] w-full max-w-[340px] mx-auto">
         <canvas id="mdcOccupationDonut"></canvas>
       </div>
@@ -539,6 +514,11 @@
     <input type="hidden" name="inPersonEventId" value="{{ in_person_event_id }}" />
     {% if challenge_id %}
     <input type="hidden" name="arenaChallengeId" value="{{ challenge_id }}" />
+    {% endif %}
+    <input type="hidden" name="standingsView" value="{{ standings_view_value }}" />
+    {% if not data_center.error and data_center.mdc_date_from and data_center.mdc_date_to %}
+    <input type="hidden" name="mdc_date_from" value="{{ data_center.mdc_date_from }}" />
+    <input type="hidden" name="mdc_date_to" value="{{ data_center.mdc_date_to }}" />
     {% endif %}
     <label class="flex flex-col gap-1.5 flex-1 min-w-[200px] max-w-xl">
       <span class="text-[10px] font-bold uppercase tracking-widest text-violet-700">Challenge eligibility</span>
@@ -565,7 +545,7 @@
          class="inline-flex items-center gap-1 text-sm font-semibold text-violet-700 hover:underline no-underline">
         View eligible users <span class="material-symbols-outlined text-[16px]">arrow_forward</span>
       </a>
-      <a href="{{ url_for('virtual_page', virtualEventId=virtual_event_id, arenaChallengeId=challenge_id) if challenge_id else url_for('virtual_page', virtualEventId=virtual_event_id) }}"
+      <a href="{{ url_for('virtual_page', virtualEventId=virtual_event_id, arenaChallengeId=challenge_id, standingsView=standings_view_value) if challenge_id else url_for('virtual_page', virtualEventId=virtual_event_id, standingsView=standings_view_value) }}"
          class="inline-flex items-center gap-1 text-xs text-slate-500 hover:text-slate-800 no-underline">
         <span class="material-symbols-outlined text-[14px]">close</span> Clear
       </a>
@@ -586,11 +566,6 @@
   {% endif %}
 </div>
 
-<p id="faqs" class="text-center text-xs text-slate-500 max-w-3xl mx-auto mb-2 leading-relaxed px-2">
-  <span class="font-semibold text-slate-600">About PromptWars Virtual:</span>
-  team standings use <strong>imported submission scores</strong> (Virtual → Import); bonus points via the credit ledger API for registered participants.
-</p>
-
 </div>
 {% endblock %}
 
@@ -600,13 +575,12 @@
   window.__PW_ROUTES__ = {
     mdcUsersUrl: {{ url_for("virtual_users") | tojson }},
     indiaGeoUrl: {{ url_for("static", filename="geo/in-all-claimed.geo.json") | tojson }},
+    mdcStatsApiUrl: {{ url_for("api_virtual_mdc_stats", virtualEventId=virtual_event_id) | tojson }},
+    virtualEventId: {{ virtual_event_id | tojson }},
   };
   window.__PW__ = {
     challengeId: {{ challenge_id|tojson }},
     virtualEventId: {{ virtual_event_id|tojson }},
-    submissionLeaderboardUrl: {{ url_for("api_virtual_submission_leaderboard")|tojson }},
-    leaderboardWorkerUrl: {{ url_for("static", filename="virtual_leaderboard_worker.js")|tojson }},
-    useLeaderboardWorker: true,
   };
 </script>
 <script src="{{ url_for('static', filename='mdc_dashboard.js') }}" defer></script>

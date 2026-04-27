@@ -1,0 +1,40 @@
+{# Shared GET form + overview dropdown for main dashboard leaderboards (in-person | virtual).
+   Expects: lb_track ('in_person' | 'virtual'), lb_select_name, lb_options, lb_selected, lb_reset_href (or '')
+   Uses: in_person_event_id, virtual_event_id, challenge_id, in_person_overview_value, virtual_overview_value from parent context.
+#}
+<form method="get" action="{{ url_for('main_dashboard') }}"
+      class="pw-lb-overview-form flex flex-col gap-2 mb-md rounded-xl border border-slate-200/90 bg-slate-50/50 p-2.5 sm:p-3 shadow-sm ring-1 ring-inset ring-slate-200/60 min-w-0"
+      onsubmit="try{sessionStorage.setItem('pw-scroll-leaderboards','1')}catch(e){}">
+  {% if lb_track == 'in_person' %}
+  <input type="hidden" name="inPersonEventId" value="{{ in_person_event_id }}" />
+  <input type="hidden" name="virtualEventId" value="{{ virtual_event_id }}" />
+  <input type="hidden" name="challengeId" value="{{ challenge_id }}" />
+  <input type="hidden" name="virtualOverview" value="{{ virtual_overview_value }}" />
+  {% else %}
+  <input type="hidden" name="inPersonEventId" value="{{ in_person_event_id }}" />
+  <input type="hidden" name="virtualEventId" value="{{ virtual_event_id }}" />
+  <input type="hidden" name="inPersonOverview" value="{{ in_person_overview_value }}" />
+  <input type="hidden" name="challengeId" value="{{ challenge_id }}" />
+  {% endif %}
+  <label class="flex flex-col gap-1.5 min-w-0">
+    <span class="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+      <span class="material-symbols-outlined text-[16px] text-slate-400 shrink-0" aria-hidden="true">filter_alt</span>
+      Leaderboard overview
+    </span>
+    <div class="relative min-w-0">
+      <select name="{{ lb_select_name }}"
+              class="pw-lb-overview-select w-full min-w-0 cursor-pointer appearance-none rounded-lg border border-slate-200 bg-white py-2.5 pl-3 pr-10 text-sm font-medium text-slate-800 shadow-sm transition-colors hover:border-slate-300 focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-200/80"
+              onchange="this.form.submit()">
+        {% for opt in (lb_options or []) %}
+          <option value="{{ opt.value }}" {% if opt.value == lb_selected %}selected{% endif %}>{{ opt.label }}</option>
+        {% endfor %}
+      </select>
+      <span class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2 text-slate-500" aria-hidden="true">
+        <span class="material-symbols-outlined text-[22px]">expand_more</span>
+      </span>
+    </div>
+  </label>
+  {% if lb_reset_href %}
+  <a href="{{ lb_reset_href }}" class="text-xs font-medium text-slate-600 hover:text-slate-900 no-underline self-start">Reset to global</a>
+  {% endif %}
+</form>

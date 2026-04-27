@@ -1,0 +1,241 @@
+{# Shared advanced filters for In-person · Users and Virtual · Users (Main Data Center roster).
+   Caller should set `pw_adv_input_focus` to a track-tinted focus class
+   (e.g. 'focus:outline-none focus:ring-2 focus:ring-emerald-400/50') before include. #}
+{% set pw_adv_count = users.get('advanced_count', 0) %}
+{% set pw_adv_chips = users.get('advanced_chips', []) %}
+{% set pw_adv_groups = users.get('advanced_field_groups', ()) %}
+{% set pw_adv_select_options = users.get('advanced_select_options', {}) %}
+{% set pw_adv_text = users.get('advanced_text', {}) %}
+{% set pw_adv_raw = users.get('advanced_raw', {}) %}
+{% set pw_adv_reset_qs = users.get('reset_advanced_qs', '') %}
+{% set pw_adv_active = users.get('advanced_active') %}
+{% set pw_adv_sel_class = 'min-h-[44px] w-full max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm ' ~ pw_adv_input_focus %}
+
+{% if pw_adv_chips %}
+  <div class="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
+    <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Active filters</span>
+    {% for chip in pw_adv_chips %}
+      <span class="inline-flex max-w-full items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs text-slate-700">
+        <span class="font-semibold text-slate-600">{{ chip.label }}:</span>
+        <span class="truncate max-w-[14rem]" title="{{ chip.value }}">{{ chip.value }}</span>
+        <a href="{{ url_for(request.endpoint) }}{% if chip.remove_qs %}?{{ chip.remove_qs }}{% endif %}"
+           class="ml-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full text-slate-400 hover:bg-slate-200 hover:text-slate-700 no-underline"
+           aria-label="Remove filter {{ chip.label }}"
+           title="Remove">
+          <span class="material-symbols-outlined text-[14px] leading-none">close</span>
+        </a>
+      </span>
+    {% endfor %}
+    {% if pw_adv_count > 1 %}
+      <a href="{{ url_for(request.endpoint) }}{% if pw_adv_reset_qs %}?{{ pw_adv_reset_qs }}{% endif %}"
+         class="ml-auto inline-flex items-center gap-1 rounded-full border border-rose-200 bg-rose-50 px-2.5 py-1 text-xs font-semibold text-rose-700 no-underline hover:bg-rose-100">
+        <span class="material-symbols-outlined text-[14px]" aria-hidden="true">filter_alt_off</span>
+        Reset advanced
+      </a>
+    {% endif %}
+  </div>
+{% endif %}
+
+<details class="mt-2 rounded-xl border border-slate-200 bg-slate-50/60 open:pb-1"
+         {% if pw_adv_active %}open{% endif %}
+         data-pw-adv-panel>
+  <summary class="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-semibold text-slate-800 [&::-webkit-details-marker]:hidden">
+    <span class="material-symbols-outlined text-[20px] text-slate-500" aria-hidden="true">tune</span>
+    Advanced filters
+    {% if pw_adv_count %}
+      <span class="inline-flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-slate-800 px-1.5 text-[11px] font-semibold leading-none text-white">{{ pw_adv_count }}</span>
+    {% endif %}
+  </summary>
+  <div class="border-t border-slate-100/80 px-4 pb-4 pt-3">
+    <div class="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+      <label class="relative inline-flex w-full max-w-xs items-center sm:ml-auto">
+        <span class="material-symbols-outlined pointer-events-none absolute left-2.5 text-[18px] text-slate-400" aria-hidden="true">search</span>
+        <input type="search"
+               data-pw-adv-search
+               placeholder="Find a field..."
+               aria-label="Filter advanced fields by label"
+               class="w-full rounded-lg border border-slate-200 bg-white py-2 pl-8 pr-3 text-sm {{ pw_adv_input_focus }}" />
+      </label>
+    </div>
+
+    {% for group in pw_adv_groups %}
+      <fieldset class="mt-4 first:mt-0" data-pw-adv-group="{{ group.id }}">
+        <legend class="mb-2 inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+          <span class="material-symbols-outlined text-[16px] text-slate-400" aria-hidden="true">{{ group.icon }}</span>
+          {{ group.title }}
+        </legend>
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {% for item in group['fields'] %}
+            {% if item.kind == 'select_distinct' %}
+              {% set col_opts = pw_adv_select_options.get(item.col, []) %}
+              {% set cur_val = pw_adv_text.get(item.col, '') %}
+              <label class="flex min-w-0 flex-col gap-1" data-pw-adv-field="{{ item.label|lower }}">
+                <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{{ item.label }}</span>
+                <select name="af_{{ item.col }}"
+                        class="{{ pw_adv_sel_class }}">
+                  <option value="">Any</option>
+                  {% if cur_val and cur_val not in col_opts %}
+                    <option value="{{ cur_val }}" selected>{{ cur_val }}</option>
+                  {% endif %}
+                  {% for v in col_opts %}
+                    <option value="{{ v }}" {% if cur_val == v %}selected{% endif %}>{{ v }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+            {% elif item.kind == 'years_range_select' %}
+              {% set raw_min = pw_adv_raw.get(item.min_key, '') %}
+              {% set raw_max = pw_adv_raw.get(item.max_key, '') %}
+              <label class="flex min-w-0 flex-col gap-1" data-pw-adv-field="{{ item.label|lower }} min">
+                <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{{ item.label }} (min)</span>
+                <select name="{{ item.min_key }}"
+                        class="{{ pw_adv_sel_class }} tabular-nums">
+                  <option value="">Any</option>
+                  {% for n in range(100) %}
+                    <option value="{{ n }}" {% if (raw_min ~ '') == (n ~ '') %}selected{% endif %}>{{ n }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label class="flex min-w-0 flex-col gap-1" data-pw-adv-field="{{ item.label|lower }} max">
+                <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{{ item.label }} (max)</span>
+                <select name="{{ item.max_key }}"
+                        class="{{ pw_adv_sel_class }} tabular-nums">
+                  <option value="">Any</option>
+                  {% for n in range(100) %}
+                    <option value="{{ n }}" {% if (raw_max ~ '') == (n ~ '') %}selected{% endif %}>{{ n }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+            {% elif item.kind == 'date_range' %}
+              <label class="flex min-w-0 flex-col gap-1" data-pw-adv-field="{{ item.label|lower }} from">
+                <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{{ item.label }} from</span>
+                <input type="date"
+                       name="{{ item.from_key }}"
+                       value="{{ pw_adv_raw.get(item.from_key, '') }}"
+                       class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm {{ pw_adv_input_focus }}" />
+              </label>
+              <label class="flex min-w-0 flex-col gap-1" data-pw-adv-field="{{ item.label|lower }} to">
+                <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{{ item.label }} to</span>
+                <input type="date"
+                       name="{{ item.to_key }}"
+                       value="{{ pw_adv_raw.get(item.to_key, '') }}"
+                       class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm {{ pw_adv_input_focus }}" />
+              </label>
+            {% elif item.kind == 'datetime_range' %}
+              <label class="flex min-w-0 flex-col gap-1" data-pw-adv-field="{{ item.label|lower }} from">
+                <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{{ item.label }} from</span>
+                <input type="datetime-local"
+                       data-pw-adv-dt-from="{{ item.from_key }}"
+                       name="{{ item.from_key }}"
+                       value="{{ pw_adv_raw.get(item.from_key, '') }}"
+                       class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm {{ pw_adv_input_focus }}" />
+              </label>
+              <label class="flex min-w-0 flex-col gap-1" data-pw-adv-field="{{ item.label|lower }} to">
+                <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{{ item.label }} to</span>
+                <input type="datetime-local"
+                       data-pw-adv-dt-to="{{ item.to_key }}"
+                       name="{{ item.to_key }}"
+                       value="{{ pw_adv_raw.get(item.to_key, '') }}"
+                       class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm {{ pw_adv_input_focus }}" />
+              </label>
+              <div class="flex flex-wrap items-end gap-1.5 sm:col-span-2 lg:col-span-1"
+                   data-pw-adv-field="{{ item.label|lower }} preset"
+                   data-pw-adv-dt-presets="{{ item.from_key }}|{{ item.to_key }}">
+                <span class="w-full text-[11px] font-semibold uppercase tracking-wide text-slate-500">Quick range</span>
+                <button type="button" data-preset="today" class="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50">Today</button>
+                <button type="button" data-preset="7d" class="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50">Last 7d</button>
+                <button type="button" data-preset="30d" class="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50">Last 30d</button>
+                <button type="button" data-preset="month" class="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50">This month</button>
+                <button type="button" data-preset="clear" class="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700">Clear</button>
+              </div>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </fieldset>
+    {% endfor %}
+
+    <div class="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100/80 pt-3">
+      <span class="text-[11px] text-slate-500" data-pw-adv-empty-msg hidden>No fields match.</span>
+      {% if pw_adv_active %}
+        <a href="{{ url_for(request.endpoint) }}{% if pw_adv_reset_qs %}?{{ pw_adv_reset_qs }}{% endif %}"
+           class="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700 no-underline hover:bg-rose-100">
+          <span class="material-symbols-outlined text-[16px]" aria-hidden="true">filter_alt_off</span>
+          Reset advanced filters
+        </a>
+      {% endif %}
+    </div>
+  </div>
+</details>
+
+<script>
+(function () {
+  var panel = document.querySelector('[data-pw-adv-panel]');
+  if (!panel || panel.__pwAdvBound) return;
+  panel.__pwAdvBound = true;
+
+  var search = panel.querySelector('[data-pw-adv-search]');
+  var fields = panel.querySelectorAll('[data-pw-adv-field]');
+  var groups = panel.querySelectorAll('[data-pw-adv-group]');
+  var emptyMsg = panel.querySelector('[data-pw-adv-empty-msg]');
+
+  if (search) {
+    search.addEventListener('input', function (e) {
+      var q = (e.target.value || '').trim().toLowerCase();
+      var anyVisible = false;
+      fields.forEach(function (el) {
+        var label = (el.getAttribute('data-pw-adv-field') || '').toLowerCase();
+        var match = !q || label.indexOf(q) !== -1;
+        el.style.display = match ? '' : 'none';
+        if (match) anyVisible = true;
+      });
+      groups.forEach(function (g) {
+        var visible = g.querySelectorAll('[data-pw-adv-field]:not([style*="display: none"])');
+        g.style.display = visible.length ? '' : 'none';
+      });
+      if (emptyMsg) {
+        if (anyVisible) {
+          emptyMsg.setAttribute('hidden', '');
+        } else {
+          emptyMsg.removeAttribute('hidden');
+        }
+      }
+    });
+  }
+
+  function fmtDtLocal(d) {
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+           'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
+  panel.querySelectorAll('[data-pw-adv-dt-presets]').forEach(function (group) {
+    var keys = (group.getAttribute('data-pw-adv-dt-presets') || '').split('|');
+    var fromKey = keys[0];
+    var toKey = keys[1];
+    var fromInput = panel.querySelector('[data-pw-adv-dt-from="' + fromKey + '"]');
+    var toInput = panel.querySelector('[data-pw-adv-dt-to="' + toKey + '"]');
+    group.addEventListener('click', function (ev) {
+      var btn = ev.target.closest('button[data-preset]');
+      if (!btn) return;
+      ev.preventDefault();
+      var kind = btn.getAttribute('data-preset');
+      var now = new Date();
+      var start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+      var end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 0, 0);
+      if (kind === 'clear') {
+        if (fromInput) fromInput.value = '';
+        if (toInput) toInput.value = '';
+        return;
+      }
+      if (kind === '7d') {
+        start = new Date(start.getTime() - 6 * 24 * 60 * 60 * 1000);
+      } else if (kind === '30d') {
+        start = new Date(start.getTime() - 29 * 24 * 60 * 60 * 1000);
+      } else if (kind === 'month') {
+        start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+      }
+      if (fromInput) fromInput.value = fmtDtLocal(start);
+      if (toInput) toInput.value = fmtDtLocal(end);
+    });
+  });
+})();
+</script>

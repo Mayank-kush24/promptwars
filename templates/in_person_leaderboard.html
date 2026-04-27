@@ -1,0 +1,128 @@
+{% extends "layouts/base_app.html" %}
+{% block title %}PromptWars — {{ title }}{% endblock %}
+{% block content %}
+<div class="flex flex-col gap-md">
+  <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-sm">
+    <div>
+      <h1 class="font-display text-headline-lg text-slate-900">Action Center · Full leaderboard</h1>
+      <p class="font-body-md text-slate-600 max-w-3xl mt-1">Main challenge teams for this session.</p>
+    </div>
+    <a href="{{ url_for('in_person_page', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, challengeId=challenge_id, ipActionCenterCity=ip_action_center_city or none, ipPromptWarDate=ip_ac_pw_date_iso or none, ipPromptWarLabel=ip_ac_session_label or none) }}"
+       class="inline-flex items-center gap-1 text-sm font-semibold text-emerald-700 hover:underline no-underline shrink-0">
+      <span class="material-symbols-outlined text-[18px]">arrow_back</span> In-person dashboard
+    </a>
+  </div>
+
+  <div class="sticky top-16 z-30 -mx-1 sm:mx-0 rounded-2xl border border-slate-200/80 bg-white/90 backdrop-blur-md px-3 sm:px-4 py-3 shadow-sm">
+    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <span class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Prompt War (city · date · session)</span>
+      <div class="flex flex-wrap gap-2">
+        <a href="{{ url_for('in_person_leaderboard', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, challengeId=challenge_id) }}"
+           class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold border transition-colors no-underline
+             {% if not ip_action_center_city %}border-emerald-500 bg-emerald-50 text-emerald-900{% else %}border-slate-200 bg-white/90 text-slate-600 hover:border-emerald-200 hover:bg-emerald-50/50{% endif %}">
+          All PWs (global)
+        </a>
+        {% for pw in (in_person_action_pw_options or []) %}
+          {% set _chip_active = ip_action_center_city == pw.city and (ip_ac_pw_date_iso or '') == (pw.prompt_war_on_iso or '') and (ip_ac_session_label or '') == (pw.session_label or '') %}
+          <a href="{{ url_for('in_person_leaderboard', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, challengeId=challenge_id, ipActionCenterCity=pw.city, ipPromptWarDate=pw.prompt_war_on_iso, ipPromptWarLabel=pw.session_label) }}"
+             class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold border transition-colors no-underline max-w-[14rem] truncate
+               {% if _chip_active %}border-emerald-500 bg-emerald-50 text-emerald-900{% else %}border-slate-200 bg-white/90 text-slate-600 hover:border-emerald-200 hover:bg-emerald-50/50{% endif %}"
+             title="{{ pw.display }}">
+            <span class="truncate">{{ pw.display }}</span>
+            <span class="shrink-0 text-[10px] opacity-80 tabular-nums">({{ pw.team_count }})</span>
+          </a>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  <p class="text-sm text-slate-600">
+    <span class="font-semibold text-slate-900">{% if ip_ac_session_display %}{{ ip_ac_session_display }}{% elif ip_action_center_city %}{{ ip_action_center_city }}{% else %}All PWs (global){% endif %}</span>
+  </p>
+
+  {% set lb = in_person_action_lb %}
+  {% if lb.error %}
+    <div class="rounded-xl border border-rose-200 bg-rose-50 text-rose-800 px-4 py-3 text-sm">{{ lb.error }}</div>
+  {% else %}
+  <form method="get" action="{{ url_for('in_person_leaderboard') }}"
+        class="bg-white rounded-2xl border border-emerald-200/80 p-md shadow-sm flex flex-col lg:flex-row flex-wrap gap-md lg:items-end">
+    <input type="hidden" name="inPersonEventId" value="{{ in_person_event_id }}" />
+    <input type="hidden" name="virtualEventId" value="{{ virtual_event_id }}" />
+    <input type="hidden" name="challengeId" value="{{ challenge_id }}" />
+    {% if ip_action_center_city %}
+      <input type="hidden" name="ipActionCenterCity" value="{{ ip_action_center_city }}" />
+      <input type="hidden" name="ipPromptWarDate" value="{{ ip_ac_pw_date_iso }}" />
+      <input type="hidden" name="ipPromptWarLabel" value="{{ ip_ac_session_label }}" />
+    {% endif %}
+    <label class="flex flex-col gap-xs w-full sm:w-36">
+      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Per page</span>
+      <select name="per_page" onchange="this.form.querySelector('input[name=page]') && (this.form.querySelector('input[name=page]').value='1'); this.form.submit();"
+              class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-400/50">
+        {% for n in (25, 50, 100) %}
+          <option value="{{ n }}" {% if (lb.per_page or 50) == n %}selected{% endif %}>{{ n }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <input type="hidden" name="page" value="{{ lb.page or 1 }}" />
+    <noscript><button type="submit" class="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold">Apply</button></noscript>
+  </form>
+    <div class="flex items-center justify-between text-sm text-slate-600">
+      <span><strong>{{ lb.total }}</strong> team(s) · page <strong>{{ lb.page or 1 }}</strong> of <strong>{{ lb.total_pages or 1 }}</strong></span>
+    </div>
+
+    <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+      <div class="overflow-x-auto max-h-[min(70vh,48rem)] overflow-y-auto">
+        <table class="w-full text-left text-sm min-w-[720px]">
+          <thead class="sticky top-0 z-10 bg-emerald-50/95 border-b border-emerald-200 text-slate-600 text-[11px] font-semibold uppercase tracking-wider backdrop-blur-sm">
+            <tr>
+              <th class="py-3 px-4 w-16">Rank</th>
+              <th class="py-3 px-4">Team</th>
+              <th class="py-3 px-4">Leader</th>
+              <th class="py-3 px-4">Email</th>
+              <th class="py-3 px-4">City</th>
+              <th class="py-3 px-4 text-right" title="Tie-break: higher score first, then earliest export timestamp.">Score</th>
+              <th class="py-3 px-4 whitespace-nowrap">Submitted</th>
+            </tr>
+          </thead>
+          <tbody class="text-slate-800">
+            {% for r in lb.rows %}
+              <tr class="border-b border-slate-100 hover:bg-emerald-50/30">
+                <td class="py-2.5 px-4 tabular-nums font-medium">{{ r.rank }}</td>
+                <td class="py-2.5 px-4 font-medium">{{ r.team_name }}</td>
+                <td class="py-2.5 px-4">{{ r.leader_name or "—" }}</td>
+                <td class="py-2.5 px-4 font-mono text-xs">{{ r.leader_email or "—" }}</td>
+                <td class="py-2.5 px-4">{{ r.attendance_city or "—" }}</td>
+                <td class="py-2.5 px-4 text-right tabular-nums">{% if r.total_score is not none %}{{ "{:g}".format(r.total_score|float) }}{% else %}—{% endif %}</td>
+                <td class="py-2.5 px-4 text-xs text-slate-600 whitespace-nowrap">
+                  {{ r.submitted_at|pw_submitted_at }}
+                </td>
+              </tr>
+            {% else %}
+              <tr><td colspan="7" class="py-xl text-center text-slate-500">No main-challenge rows for this filter. Import from <a href="{{ url_for('in_person_import') }}" class="text-emerald-600 hover:underline font-semibold">In-person · Import</a>.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {% set tp = lb.total_pages or 1 %}
+    {% set pg = lb.page or 1 %}
+    {% set pper = lb.per_page or 50 %}
+    {% if tp > 1 %}
+      <nav class="flex flex-wrap items-center justify-between gap-3 text-sm" aria-label="Pagination">
+        <div class="flex gap-2">
+          {% if pg > 1 %}
+            <a class="inline-flex items-center rounded-lg border border-slate-200 px-3 py-2 font-semibold text-slate-700 hover:bg-slate-50 no-underline"
+               href="{{ url_for('in_person_leaderboard', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, challengeId=challenge_id, ipActionCenterCity=ip_action_center_city or none, ipPromptWarDate=ip_ac_pw_date_iso or none, ipPromptWarLabel=ip_ac_session_label or none, per_page=pper, page=pg-1) }}">Previous</a>
+          {% endif %}
+          {% if pg < tp %}
+            <a class="inline-flex items-center rounded-lg border border-slate-200 px-3 py-2 font-semibold text-slate-700 hover:bg-slate-50 no-underline"
+               href="{{ url_for('in_person_leaderboard', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, challengeId=challenge_id, ipActionCenterCity=ip_action_center_city or none, ipPromptWarDate=ip_ac_pw_date_iso or none, ipPromptWarLabel=ip_ac_session_label or none, per_page=pper, page=pg+1) }}">Next</a>
+          {% endif %}
+        </div>
+        <span class="text-slate-500">Showing {{ (pg - 1) * pper + 1 }}–{{ [pg * pper, lb.total] | min }} of {{ lb.total }}</span>
+      </nav>
+    {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

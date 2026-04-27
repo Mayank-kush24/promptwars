@@ -26,18 +26,18 @@
     </a>
     <span class="h-5 w-px shrink-0 bg-slate-200" aria-hidden="true"></span>
     <a href="{{ url_for('main_dashboard') }}"
-       class="flex min-w-0 flex-col leading-tight no-underline shrink-0"
+       class="flex min-w-0 items-center leading-tight no-underline shrink-0"
        aria-label="Prompt Wars home">
       <span class="font-display text-[12px] sm:text-[13px] md:text-[14px] font-semibold tracking-tight text-slate-900 whitespace-nowrap">
         Prompt <span class="bg-gradient-to-r from-indigo-600 to-violet-600 bg-clip-text text-transparent">Wars</span>
       </span>
-      <span class="text-[8px] sm:text-[8px] font-bold uppercase tracking-[0.16em] text-slate-400">Console</span>
     </a>
     <span class="h-5 w-px shrink-0 bg-slate-200 hidden sm:block" aria-hidden="true"></span>
     <a href="{{ portal_dashboard_url }}"
        rel="noopener"
-       class="hidden sm:inline-flex items-center text-[11px] md:text-xs font-semibold text-slate-500 hover:text-indigo-600 no-underline whitespace-nowrap">
-      Back to CDI dashboard
+       class="hidden sm:inline-flex items-center gap-1.5 shrink-0 rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1.5 md:px-3.5 md:py-2 text-[11px] md:text-xs font-semibold text-indigo-900 shadow-sm ring-1 ring-indigo-100/80 no-underline whitespace-nowrap transition-colors hover:border-indigo-300 hover:bg-indigo-100 hover:text-indigo-950 hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:ring-offset-2">
+      <span class="material-symbols-outlined text-[15px] md:text-[17px] text-indigo-600 leading-none" aria-hidden="true">arrow_back</span>
+      <span>Back to CDI dashboard</span>
     </a>
   </div>
 
@@ -97,7 +97,7 @@
         tabindex="-1"></button>
 
 <nav id="pw-mobile-nav"
-     class="md:hidden fixed top-16 left-0 bottom-0 z-[40] flex w-[min(20rem,90vw)] max-w-[340px] flex-col border-r border-slate-200 bg-white shadow-xl overflow-y-auto"
+     class="md:hidden fixed top-16 left-0 bottom-0 z-[40] flex w-[min(20rem,90vw)] max-w-[340px] min-h-0 flex-col overflow-hidden border-r border-slate-200 bg-white shadow-xl"
      aria-label="Mobile navigation">
   <div class="border-b border-slate-100 p-3">
     <p class="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Module</p>
@@ -117,7 +117,7 @@
       {% endfor %}
     </div>
   </div>
-  <ul class="flex flex-col gap-1 p-3">
+  <ul class="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-3">
     {% for item in pw_subnav %}
       <li>
         <a href="{{ item.href }}"
@@ -128,6 +128,14 @@
       </li>
     {% endfor %}
   </ul>
+  <div class="shrink-0 border-t border-slate-100 p-3">
+    <a href="{{ portal_dashboard_url }}"
+       rel="noopener"
+       class="flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-3 text-sm font-semibold text-indigo-900 shadow-sm no-underline transition-colors hover:border-indigo-300 hover:bg-indigo-100 hover:text-indigo-950">
+      <span class="material-symbols-outlined text-[20px] text-indigo-600 shrink-0" aria-hidden="true">arrow_back</span>
+      <span>Back to CDI dashboard</span>
+    </a>
+  </div>
 </nav>
 
 <script>

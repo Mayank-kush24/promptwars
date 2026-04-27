@@ -1,0 +1,121 @@
+{% extends "layouts/base_app.html" %}
+{% block title %}PromptWars — {{ title }}{% endblock %}
+{% block content %}
+<div class="flex flex-col gap-md max-w-4xl">
+  <h1 class="font-display text-headline-lg text-slate-900">{{ title }}</h1>
+
+  {% if ok %}
+    <div class="px-4 py-3 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 text-sm font-medium">
+      {{ message }}
+    </div>
+    {% if stats and stats.get('merge_policy') %}
+      <p class="text-xs text-slate-600 max-w-3xl">{{ stats.merge_policy }}</p>
+    {% endif %}
+
+    {% if stats %}
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-md">
+        <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
+          <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Rows written</p>
+          <p class="font-display text-3xl text-slate-900 tabular-nums mt-1">{{ "{:,}".format(stats.rows_written or 0) }}</p>
+        </div>
+        <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
+          <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Import job</p>
+          <p class="font-display text-3xl text-slate-900 tabular-nums mt-1">{{ stats.import_job_id or "—" }}</p>
+        </div>
+      </div>
+
+      {% if stats.get('attendance_city') %}
+        <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm text-sm text-slate-700">
+          <span class="font-semibold text-slate-800">Prompt War (attendance city):</span>
+          <span class="font-mono text-xs">{{ stats.attendance_city }}</span>
+        </div>
+      {% endif %}
+
+      {% if stats.parse_stats and stats.parse_stats.sheets %}
+        <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
+          <h2 class="font-display text-headline-md text-slate-900 mb-sm">Per sheet</h2>
+          <ul class="text-sm text-slate-600 space-y-1 list-none pl-0">
+            {% for name, info in stats.parse_stats.sheets.items() %}
+              <li class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1 border-b border-slate-100 py-2">
+                <span class="font-mono text-xs text-slate-800">{{ name }}</span>
+                <span class="tabular-nums text-xs">
+                  {{ info.sheet_kind_label or info.sheet_kind or "—" }}
+                  · {{ info.rows_written }} row(s) upserted
+                  {% if info.rows_skipped %} · {{ info.rows_skipped }} skipped{% endif %}
+                </span>
+              </li>
+            {% endfor %}
+          </ul>
+          {% if stats.parse_stats.mismatched_attendance_city is defined and stats.parse_stats.mismatched_attendance_city %}
+            <p class="text-xs text-amber-800 mt-2">
+              Leader MDC attendance city differed from selected PW for {{ stats.parse_stats.mismatched_attendance_city }} row(s) (import still applied).
+            </p>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      {% if stats.archive_path %}
+        <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
+          <h2 class="font-display text-headline-md text-slate-900 mb-sm">Archived copy</h2>
+          <p class="font-mono text-xs text-slate-700 break-all">{{ stats.archive_path }}</p>
+        </div>
+      {% endif %}
+    {% endif %}
+  {% else %}
+    <div class="px-4 py-3 rounded-xl bg-rose-50 text-rose-800 border border-rose-200 text-sm font-medium">
+      {{ message }}
+    </div>
+    {% if error_detail and error_detail.get('nothing_written') %}
+      <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+        <p class="font-semibold">No rows were written to the database.</p>
+        <p class="mt-1 text-amber-900/90">The workbook was parsed and archived, but the transaction did not insert or update <code class="rounded bg-amber-100/80 px-1 text-xs">in_person_challenge_submission_rows</code> because validation failed (see below).</p>
+      </div>
+    {% endif %}
+    {% if error_detail and error_detail.get('parse_stats') and error_detail.parse_stats.get('sheets') %}
+      <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
+        <h2 class="font-display text-headline-md text-slate-900 mb-sm">Sheets detected in your file</h2>
+        <ul class="text-sm text-slate-600 space-y-1 list-none pl-0">
+          {% for name, info in error_detail.parse_stats.sheets.items() %}
+            <li class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1 border-b border-slate-100 py-2">
+              <span class="font-mono text-xs text-slate-800">{{ name }}</span>
+              <span class="tabular-nums text-xs">
+                {{ info.sheet_kind_label or info.sheet_kind or "—" }}
+                · {{ info.rows_written }} row(s) parsed
+              </span>
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+    {% if error_detail and error_detail.get('missing_emails') %}
+      <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
+        <h2 class="font-display text-headline-md text-slate-900 mb-sm">Emails not in In-person Main Data Center</h2>
+        <p class="text-xs text-slate-500 mb-sm">Add these people via <strong>In-person · Import</strong> Main Data Center first (event #{{ error_detail.in_person_event_id or '—' }}), then re-run this import.</p>
+        <ul class="text-xs font-mono text-slate-700 list-disc pl-5 space-y-0.5 max-h-48 overflow-y-auto">
+          {% for em in error_detail.missing_emails %}
+            <li>{{ em }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+    {% if error_detail %}
+      <details class="text-sm text-slate-600">
+        <summary class="cursor-pointer font-medium text-slate-700">Full JSON response</summary>
+        <pre class="mt-2 p-3 rounded-lg bg-slate-50 border border-slate-200 overflow-auto text-xs">{{ error_detail|tojson(indent=2) }}</pre>
+      </details>
+    {% endif %}
+  {% endif %}
+
+  <div class="flex flex-wrap gap-3 pt-sm">
+    <a href="{{ url_for('in_person_import') }}" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">
+      ← Back to In-person import
+    </a>
+    <a href="{{ url_for('in_person_page') }}" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">
+      In-person dashboard
+    </a>
+    <a href="{{ url_for('admin_page') }}" class="inline-flex items-center rounded-lg bg-emerald-600 text-white px-4 py-2 text-sm font-semibold hover:bg-emerald-700 no-underline">
+      Admin
+    </a>
+  </div>
+</div>
+{% endblock %}

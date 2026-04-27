@@ -57,25 +57,37 @@
     color: #0a0a0a;
     box-shadow: 0 12px 30px -10px rgba(132, 204, 22, 0.55);
   }
+  .pw-ip-lb-podium-slot { transition: transform 0.2s ease, box-shadow 0.2s ease; }
+  .pw-ip-lb-podium-slot:hover { transform: translateY(-2px); }
+  .pw-ip-lb-champion-glow {
+    box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.35), 0 16px 48px -14px rgba(22, 163, 74, 0.35);
+  }
+  .pw-ip-lb-list-row:hover { background-color: rgba(240, 253, 244, 0.6); }
+  .pw-ip-arena-chip-active {
+    border-color: rgba(34, 197, 94, 0.95);
+    background: linear-gradient(180deg, rgba(240, 253, 244, 0.95), rgba(255, 255, 255, 0.98));
+    color: #14532d;
+    box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.2);
+  }
 </style>
 {% endblock %}
 
 {% block hero %}
-<section id="hero" class="pw-sidebar-offset pl-0 md:pl-[var(--pw-sidebar-current)]">
-  <div class="mx-margin rounded-3xl overflow-hidden relative pw-stage mt-0 border border-slate-200">
+<section id="hero" class="pw-sidebar-offset min-w-0 pl-0 md:pl-[var(--pw-sidebar-current)]">
+  <div class="mx-4 sm:mx-6 md:mx-margin rounded-3xl overflow-hidden relative pw-stage mt-0 border border-slate-200">
     <div class="pw-binary-back"></div>
     <div class="pw-binary-floor"></div>
     <div class="pw-cone"></div>
     <div class="pw-lamp" aria-hidden="true"></div>
 
-    <div class="relative z-10 px-margin py-[80px] flex flex-col items-center text-center min-h-[460px] justify-center">
+    <div class="relative z-10 px-4 sm:px-6 md:px-margin py-12 sm:py-16 md:py-[80px] flex flex-col items-center text-center min-h-[min(460px,85vh)] sm:min-h-[460px] justify-center">
       <p class="font-display text-emerald-300 text-lg md:text-xl tracking-wide mb-2">In-person</p>
-      <h1 class="font-display text-white font-black tracking-tight leading-[0.95] text-[64px] md:text-[112px] drop-shadow-[0_0_30px_rgba(187,247,208,0.25)]">
+      <h1 class="font-display text-white font-black tracking-tight leading-[0.95] text-[clamp(2.25rem,11vw,4rem)] sm:text-6xl md:text-7xl lg:text-[112px] max-w-full px-1 drop-shadow-[0_0_30px_rgba(187,247,208,0.25)]">
         PromptWars
       </h1>
 
       <a href="{{ url_for('admin_page') }}"
-         class="pw-cta-pill mt-8 inline-flex items-center gap-2 px-7 py-3 rounded-full font-display font-bold text-base md:text-lg no-underline hover:brightness-110 transition">
+         class="pw-cta-pill mt-6 sm:mt-8 inline-flex max-w-[calc(100%-2rem)] items-center justify-center gap-2 px-5 py-3 sm:px-7 sm:py-3 rounded-full font-display font-bold text-sm sm:text-base md:text-lg no-underline hover:brightness-110 transition text-center">
         <svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
           <path d="M12 1.5l1.8 5.4 5.7.2-4.6 3.4 1.7 5.5L12 12.6 7.4 16l1.7-5.5L4.5 7.1l5.7-.2L12 1.5z"/>
         </svg>
@@ -87,12 +99,136 @@
 {% endblock %}
 
 {% block content %}
-<section id="main-data-center" class="flex flex-col gap-sm">
-  <h2 class="font-display text-headline-lg text-slate-900 leading-tight">Main Data Center</h2>
-  <p class="font-body-md text-on-surface-variant">
-    Vision export analytics (one row per email). Registration times use <strong>IST</strong> for day/hour charts.
+
+{% macro _ip_lb_initials(name) -%}
+{%- set t = (name or '')|trim -%}
+{%- if t|length == 0 -%}?{%- elif t|length == 1 -%}{{ t|upper }}{%- else -%}{{ t[0:2]|upper }}{%- endif -%}
+{%- endmacro %}
+
+{% macro _ip_lb_podium_slot(entry, rank, champion) %}
+{% if entry %}
+<div class="pw-ip-lb-podium-slot relative flex flex-col items-center text-center rounded-2xl overflow-hidden border
+  {% if champion %}pw-ip-lb-champion-glow border-emerald-300 bg-gradient-to-b from-emerald-50/90 to-white shadow-lg py-7 sm:py-9 min-h-[158px] sm:min-h-[178px] -mt-0.5 sm:-mt-2 z-[1]{% else %}border-slate-100/80 bg-gradient-to-b from-slate-50/40 to-white py-5 sm:py-6 min-h-[128px] sm:min-h-[142px]{% endif %}">
+  <span class="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 text-[4rem] sm:text-[5rem] font-black leading-none tracking-tighter select-none
+    {% if rank == 1 %}text-amber-200{% elif rank == 2 %}text-sky-200{% else %}text-orange-200{% endif %}" aria-hidden="true">{{ rank }}</span>
+  <div class="relative mt-5 sm:mt-6 flex h-12 w-12 sm:h-14 sm:w-14 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-sm sm:text-base font-bold text-white shadow-md ring-2 ring-white/80">
+    {{ _ip_lb_initials(entry.team_name) }}
+  </div>
+  <p class="relative mt-2.5 px-1 text-sm font-semibold text-slate-900 truncate max-w-full w-full">{{ entry.team_name }}</p>
+  <p class="relative text-[11px] text-slate-500 truncate max-w-full w-full px-1">{{ entry.leader_name or "—" }}{% if entry.attendance_city %} · {{ entry.attendance_city }}{% endif %}</p>
+  <p class="relative mt-1 text-base sm:text-lg font-bold tabular-nums tracking-tight text-slate-900">
+    {% if entry.total_score is not none %}{{ "{:g}".format(entry.total_score|float) }} <span class="text-xs font-semibold text-emerald-600">pts</span>{% else %}—{% endif %}
   </p>
-  <p id="mdcTzNote" class="text-xs text-slate-500"></p>
+</div>
+{% else %}
+<div class="min-h-[128px] sm:min-h-[142px]" aria-hidden="true"></div>
+{% endif %}
+{% endmacro %}
+
+<section id="action-center-leaderboard" class="flex flex-col gap-sm mb-lg">
+  <h2 class="font-display text-headline-lg text-slate-900 leading-tight">Action Center · Main challenge</h2>
+  <p class="text-sm text-slate-500">Warm-up excluded.</p>
+</section>
+
+<div class="sticky top-16 z-30 -mx-1 min-w-0 sm:mx-0 mb-6 rounded-2xl border border-slate-200/80 bg-white/90 backdrop-blur-md px-3 sm:px-4 py-3 shadow-sm">
+  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+    <span class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Prompt War (city · date · session)</span>
+    <div class="flex flex-wrap gap-2">
+      <a href="{{ url_for('in_person_page', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id) }}"
+         class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold border transition-colors no-underline
+           {% if not ip_action_center_city %}pw-ip-arena-chip-active{% else %}border-slate-200 bg-white/90 text-slate-600 hover:border-emerald-200 hover:bg-emerald-50/50{% endif %}">
+        All PWs (global)
+      </a>
+      {% for pw in (in_person_action_pw_options or []) %}
+        {% set _chip_active = ip_action_center_city == pw.city and (ip_ac_pw_date_iso or '') == (pw.prompt_war_on_iso or '') and (ip_ac_session_label or '') == (pw.session_label or '') %}
+        <a href="{{ url_for('in_person_page', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, ipActionCenterCity=pw.city, ipPromptWarDate=pw.prompt_war_on_iso, ipPromptWarLabel=pw.session_label) }}"
+           class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold border transition-colors no-underline max-w-[14rem] truncate
+             {% if _chip_active %}pw-ip-arena-chip-active{% else %}border-slate-200 bg-white/90 text-slate-600 hover:border-emerald-200 hover:bg-emerald-50/50{% endif %}"
+           title="{{ pw.display }}">
+          <span class="truncate">{{ pw.display }}</span>
+          <span class="shrink-0 text-[10px] opacity-80 tabular-nums">({{ pw.team_count }})</span>
+        </a>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div class="flex justify-center mb-8 lg:mb-10">
+  <div class="bg-white rounded-2xl border border-emerald-200/80 shadow-sm w-full max-w-6xl overflow-hidden flex flex-col">
+    <div class="px-4 sm:px-6 pt-5 sm:pt-6 pb-4 border-b border-slate-100 bg-gradient-to-r from-emerald-50/40 via-white to-teal-50/30">
+      <p class="text-[10px] font-bold uppercase tracking-widest text-emerald-800/90 mb-1">Live standings (main only)</p>
+      <h3 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight leading-tight">
+        {% if ip_ac_session_display %}{{ ip_ac_session_display }}{% elif ip_action_center_city %}{{ ip_action_center_city }}{% else %}All PWs{% endif %}
+      </h3>
+      <p class="text-sm text-slate-500 mt-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+        <span>
+          <span class="font-semibold text-slate-800 tabular-nums">
+            {% if in_person_action_lb.error %}—{% else %}{{ in_person_action_lb.total }} team(s){% endif %}
+          </span>
+          <span class="text-slate-300"> · </span>
+          <span>Top 10 · ties → earlier submission</span>
+        </span>
+        <a href="{{ url_for('in_person_leaderboard', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, challengeId=challenge_id, ipActionCenterCity=ip_action_center_city or none, ipPromptWarDate=ip_ac_pw_date_iso or none, ipPromptWarLabel=ip_ac_session_label or none) }}"
+           class="font-semibold text-emerald-700 hover:underline no-underline shrink-0">Full leaderboard →</a>
+      </p>
+    </div>
+    <div class="px-4 sm:px-6 py-5 sm:py-6 flex-1 min-h-0 overflow-y-auto max-h-[min(34rem,68vh)] bg-white/80">
+      {% if in_person_action_lb.error %}
+        <div class="rounded-xl border border-rose-200 bg-rose-50/80 text-rose-800 px-4 py-3 text-sm">{{ in_person_action_lb.error }}</div>
+      {% elif in_person_action_lb.rows %}
+        <div class="grid grid-cols-3 gap-2 sm:gap-3 items-end mb-8 max-w-md sm:max-w-lg mx-auto" aria-label="Top three teams">
+          {{ _ip_lb_podium_slot(in_person_action_lb.rows[1] if in_person_action_lb.rows|length > 1 else none, 2, false) }}
+          {{ _ip_lb_podium_slot(in_person_action_lb.rows[0], 1, true) }}
+          {{ _ip_lb_podium_slot(in_person_action_lb.rows[2] if in_person_action_lb.rows|length > 2 else none, 3, false) }}
+        </div>
+        {% if in_person_action_lb.rows|length > 3 %}
+        <div class="rounded-xl border border-slate-100 divide-y divide-slate-100 overflow-hidden bg-white">
+          {% for r in in_person_action_lb.rows[3:] %}
+          <div class="pw-ip-lb-list-row flex items-center gap-3 sm:gap-4 py-3.5 sm:py-4 px-3 sm:px-4">
+            <span class="w-7 sm:w-8 shrink-0 text-center text-sm font-semibold text-slate-400 tabular-nums">{{ r.rank }}</span>
+            <div class="flex h-10 w-10 sm:h-11 sm:w-11 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xs sm:text-sm font-bold text-emerald-800 ring-1 ring-emerald-200/60">
+              {{ _ip_lb_initials(r.team_name) }}
+            </div>
+            <div class="flex-1 min-w-0">
+              <p class="font-semibold text-slate-900 truncate text-sm sm:text-base">{{ r.team_name }}</p>
+              <p class="text-xs text-slate-500 truncate">
+                {% if r.leader_email %}<span class="font-mono">{{ r.leader_email }}</span>
+                {% elif r.leader_name %}<span>{{ r.leader_name }}</span>
+                {% else %}—{% endif %}
+                {% if r.attendance_city %}<span class="text-slate-400"> · {{ r.attendance_city }}</span>{% endif %}
+              </p>
+            </div>
+            <div class="shrink-0 text-right">
+              <p class="text-sm sm:text-base font-bold tabular-nums text-slate-900">
+                {% if r.total_score is not none %}{{ "{:g}".format(r.total_score|float) }}{% else %}—{% endif %}
+              </p>
+              <p class="text-[10px] sm:text-[11px] font-medium text-emerald-600">pts</p>
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% endif %}
+      {% else %}
+        <div class="py-14 text-center text-sm text-slate-500">No main-challenge submission rows yet. Import from <a href="{{ url_for('in_person_import') }}" class="text-emerald-600 hover:underline font-semibold">In-person · Import</a>.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<section id="main-data-center" class="flex flex-col gap-sm mt-xl">
+  <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-8">
+    <div class="min-w-0 flex-1">
+      <h2 class="font-display text-headline-lg text-slate-900 leading-tight">Main Data Center</h2>
+      <p id="mdcTzNote" class="text-xs text-slate-500"></p>
+    </div>
+    {% if not data_center.error and data_center.chart_date_min and data_center.chart_date_max %}
+    <div class="w-full max-w-md shrink-0 max-lg:mx-auto lg:max-w-none lg:mx-0 lg:min-w-[22rem] lg:w-[min(36rem,42%)]">
+      {% with wide=true %}
+        {% include "partials/mdc_date_range_control.html" %}
+      {% endwith %}
+    </div>
+    {% endif %}
+  </div>
 </section>
 
 {% if data_center.error %}
@@ -107,57 +243,63 @@
       <span class="material-symbols-outlined shrink-0 text-lime-600 text-[20px]">groups</span>
       <div class="min-w-0 flex-1">
         <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total registrations</p>
-        <p class="font-display text-base sm:text-lg text-slate-900 tabular-nums leading-tight">{{ "{:,}".format(data_center.total_registrations or 0) }}</p>
+        <p id="mdcPillTotalReg" class="font-display text-base sm:text-lg text-slate-900 tabular-nums leading-tight">{{ "{:,}".format(data_center.total_registrations or 0) }}</p>
       </div>
     </div>
     <div class="flex w-full min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 sm:px-4 py-2 shadow-sm">
       <span class="material-symbols-outlined shrink-0 text-amber-500 text-[20px]">pin_drop</span>
       <div class="min-w-0 flex-1">
         <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Top city</p>
-        <p class="font-display text-base sm:text-lg text-slate-900 leading-tight truncate" title="{{ data_center.pill_top_city or '—' }}">{{ data_center.pill_top_city or "—" }}</p>
-        {% if data_center.pill_top_city_count %}<p class="text-[11px] text-slate-500 tabular-nums truncate">{{ "{:,}".format(data_center.pill_top_city_count) }} in top bucket</p>{% endif %}
+        <p id="mdcPillTopCity" class="font-display text-base sm:text-lg text-slate-900 leading-tight truncate" title="{{ data_center.pill_top_city or '—' }}">{{ data_center.pill_top_city or "—" }}</p>
+        {% if data_center.pill_top_city_count %}<p id="mdcPillTopCityMeta" class="text-[11px] text-slate-500 tabular-nums truncate">{{ "{:,}".format(data_center.pill_top_city_count) }} in top bucket</p>{% else %}<p id="mdcPillTopCityMeta" class="text-[11px] text-slate-500 tabular-nums truncate hidden"></p>{% endif %}
       </div>
     </div>
     <div class="flex w-full min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 sm:px-4 py-2 shadow-sm">
       <span class="material-symbols-outlined shrink-0 text-emerald-600 text-[20px]">map</span>
       <div class="min-w-0 flex-1">
         <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Top state</p>
-        <p class="font-display text-base sm:text-lg text-slate-900 leading-tight truncate" title="{{ data_center.pill_top_state or '—' }}">{{ data_center.pill_top_state or "—" }}</p>
-        {% if data_center.pill_top_state_count %}<p class="text-[11px] text-slate-500 tabular-nums truncate">{{ "{:,}".format(data_center.pill_top_state_count) }} in top bucket</p>{% endif %}
+        <p id="mdcPillTopState" class="font-display text-base sm:text-lg text-slate-900 leading-tight truncate" title="{{ data_center.pill_top_state or '—' }}">{{ data_center.pill_top_state or "—" }}</p>
+        {% if data_center.pill_top_state_count %}<p id="mdcPillTopStateMeta" class="text-[11px] text-slate-500 tabular-nums truncate">{{ "{:,}".format(data_center.pill_top_state_count) }} in top bucket</p>{% else %}<p id="mdcPillTopStateMeta" class="text-[11px] text-slate-500 tabular-nums truncate hidden"></p>{% endif %}
       </div>
     </div>
     <div class="flex w-full min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 sm:px-4 py-2 shadow-sm">
       <span class="material-symbols-outlined shrink-0 text-yellow-500 text-[20px]">cake</span>
       <div class="min-w-0 flex-1">
         <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Average age</p>
-        <p class="font-display text-base sm:text-lg text-slate-900 tabular-nums leading-tight truncate">
+        <p id="mdcPillAvgAge" class="font-display text-base sm:text-lg text-slate-900 tabular-nums leading-tight truncate">
           {% if data_center.average_age is not none %}{{ data_center.average_age }} yrs{% else %}—{% endif %}
         </p>
-        {% if data_center.with_dob_count %}<p class="text-[11px] text-slate-500 truncate">{{ "{:,}".format(data_center.with_dob_count) }} with DOB</p>{% endif %}
+        {% if data_center.with_dob_count %}<p id="mdcPillDobMeta" class="text-[11px] text-slate-500 truncate">{{ "{:,}".format(data_center.with_dob_count) }} with DOB</p>{% else %}<p id="mdcPillDobMeta" class="text-[11px] text-slate-500 truncate hidden"></p>{% endif %}
       </div>
     </div>
     <div class="col-span-1 flex w-full min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 sm:px-4 py-2 shadow-sm sm:col-span-2 lg:col-span-1">
       <span class="material-symbols-outlined shrink-0 text-lime-700 text-[20px]">trending_up</span>
       <div class="min-w-0 flex-1">
         <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Last 7 days</p>
-        <p class="font-display text-base sm:text-lg text-slate-900 tabular-nums leading-tight truncate">{{ "{:,}".format(data_center.registrations_last_7_days or 0) }}</p>
-        <p class="text-[11px] text-slate-500 truncate">New timestamps</p>
+        <p id="mdcPillLast7" class="font-display text-base sm:text-lg text-slate-900 tabular-nums leading-tight truncate">{{ "{:,}".format(data_center.registrations_last_7_days or 0) }}</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
+    <h3 class="font-display text-headline-md text-slate-900 mb-md">Attendance city</h3>
+    <div class="max-h-[70vh] overflow-y-auto rounded-xl border border-slate-100">
+      <div id="mdcAttendanceCityChartHost" class="relative w-full min-h-[280px]" style="height:320px">
+        <canvas id="mdcAttendanceCityBar"></canvas>
       </div>
     </div>
   </div>
 
   <div class="grid grid-cols-1 xl:grid-cols-2 gap-md">
     <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
-      <h3 class="font-display text-headline-md text-slate-900 mb-sm">Registration timeline</h3>
-      <p class="text-xs text-slate-500 mb-md">Daily counts from form timestamp (last 120 days, IST date).</p>
-      <div class="relative h-[280px] w-full">
+      <h3 class="font-display text-headline-md text-slate-900 mb-md">Registration timeline</h3>
+      <div id="mdcTimelineChartWrap" class="relative h-[280px] w-full">
         <canvas id="mdcTimelineChart"></canvas>
       </div>
     </div>
     <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
-      <h3 class="font-display text-headline-md text-slate-900 mb-sm">Registrations by hour</h3>
-      <p class="text-xs text-slate-500 mb-md">24-hour profile in IST (one bar per hour).</p>
-      <div class="relative h-[280px] w-full">
+      <h3 class="font-display text-headline-md text-slate-900 mb-md">Registrations by hour</h3>
+      <div id="mdcHourlyChartWrap" class="relative h-[280px] w-full">
         <canvas id="mdcHourlyChart"></canvas>
       </div>
     </div>
@@ -165,13 +307,11 @@
 
   <div class="grid grid-cols-1 lg:grid-cols-2 gap-md">
     <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm overflow-hidden">
-      <h3 class="font-display text-headline-md text-slate-900 mb-sm">India map (registrations)</h3>
-      <p class="text-xs text-slate-500 mb-md">State heat map: darker fill = more registrations from export <code class="rounded bg-slate-100 px-1">state</code>. Boundaries use the full India outline including J&amp;K and Ladakh. Hover a state for its count.</p>
+      <h3 class="font-display text-headline-md text-slate-900 mb-md">India map (registrations)</h3>
       <div id="mdcIndiaMap" class="w-full h-[360px]"></div>
     </div>
     <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm overflow-x-auto">
-      <h3 class="font-display text-headline-md text-slate-900 mb-sm">City pivot</h3>
-      <p class="text-xs text-slate-500 mb-md">Attendance city when set, otherwise residence city — sorted by registrations descending.</p>
+      <h3 class="font-display text-headline-md text-slate-900 mb-md">City pivot</h3>
       <div class="max-h-[360px] overflow-y-auto">
         <table class="w-full text-left text-sm min-w-[320px]">
           <thead class="sticky top-0 bg-white">
@@ -180,7 +320,7 @@
               <th class="py-2 text-[11px] font-semibold uppercase tracking-wider text-right">Registrations</th>
             </tr>
           </thead>
-          <tbody class="text-slate-800">
+          <tbody id="mdcCityPivotTbody" class="text-slate-800">
             {% for r in data_center.city_pivot or [] %}
               <tr class="border-b border-slate-100">
                 <td class="py-2 pr-4 font-medium">{{ r.city }}</td>
@@ -195,34 +335,21 @@
     </div>
   </div>
 
-  <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
-    <h3 class="font-display text-headline-md text-slate-900 mb-sm">Attendance city</h3>
-    <p class="text-xs text-slate-500 mb-md">Horizontal bars for every distinct <code class="rounded bg-slate-100 px-1">attendance_city</code> value (sorted by registrations, high to low).</p>
-    <div class="max-h-[70vh] overflow-y-auto rounded-xl border border-slate-100">
-      <div id="mdcAttendanceCityChartHost" class="relative w-full min-h-[280px]" style="height:320px">
-        <canvas id="mdcAttendanceCityBar"></canvas>
-      </div>
-    </div>
-  </div>
-
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-md">
     <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm min-w-0">
-      <h3 class="font-display text-headline-md text-slate-900 mb-sm">UTM source breakdown</h3>
-      <p class="text-xs text-slate-500 mb-md">Share of registrations by <code class="rounded bg-slate-100 px-1">utm_source</code> (doughnut).</p>
+      <h3 class="font-display text-headline-md text-slate-900 mb-md">UTM source breakdown</h3>
       <div id="mdcUtmChartHost" class="relative h-[280px] w-full max-w-[340px] mx-auto">
         <canvas id="mdcUtmDonut"></canvas>
       </div>
     </div>
     <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm min-w-0">
-      <h3 class="font-display text-headline-md text-slate-900 mb-sm">Gender mix</h3>
-      <p class="text-xs text-slate-500 mb-md">Share of registrations by gender (doughnut).</p>
+      <h3 class="font-display text-headline-md text-slate-900 mb-md">Gender mix</h3>
       <div id="mdcGenderChartHost" class="relative h-[280px] w-full max-w-[340px] mx-auto">
         <canvas id="mdcGenderDonut"></canvas>
       </div>
     </div>
     <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm min-w-0">
-      <h3 class="font-display text-headline-md text-slate-900 mb-sm">Top occupations</h3>
-      <p class="text-xs text-slate-500 mb-md">Share among top occupation buckets (doughnut).</p>
+      <h3 class="font-display text-headline-md text-slate-900 mb-md">Top occupations</h3>
       <div id="mdcOccupationChartHost" class="relative h-[280px] w-full max-w-[340px] mx-auto">
         <canvas id="mdcOccupationDonut"></canvas>
       </div>
@@ -238,6 +365,8 @@
     mdcUsersUrl: {{ url_for("in_person_users") | tojson }},
     inPersonUsers: {{ url_for("in_person_users") | tojson }},
     indiaGeoUrl: {{ url_for("static", filename="geo/in-all-claimed.geo.json") | tojson }},
+    mdcStatsApiUrl: {{ url_for("api_in_person_mdc_stats", inPersonEventId=in_person_event_id) | tojson }},
+    inPersonEventId: {{ in_person_event_id | tojson }},
   };
 </script>
 <script src="{{ url_for('static', filename='mdc_dashboard.js') }}" defer></script>

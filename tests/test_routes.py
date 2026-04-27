@@ -6,6 +6,7 @@ monkeypatched via fixtures in ``conftest.py``.
 
 from __future__ import annotations
 
+from urllib.parse import urlencode
 
 # ---------- API: validation paths (no DB needed) -------------------------
 
@@ -39,12 +40,49 @@ def test_virtual_leaderboard_page_renders(client, no_admin_pw, monkeypatch, app_
             "challenge": {"id": 1, "title": "Demo", "event_id": 2},
         },
     )
+    monkeypatch.setattr(
+        app_mod,
+        "_virtual_global_submission_leaderboard",
+        lambda **kw: {
+            "rows": [{"rank": 1, "team_name": "T", "leader_name": "L", "leader_email": "e@x.com", "average_score": 9.0, "submitted_at": None, "arena_count": 1}],
+            "total": 1,
+            "error": None,
+            "challenge": None,
+            "scope": {},
+        },
+    )
     monkeypatch.setattr(app_mod, "_load_virtual_challenges_brief", lambda _eid: [])
     resp = client.get("/virtual/leaderboard")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
     assert "Submission leaderboard" in body
     assert "virtual_challenge_submission_rows" in body
+    assert "Global (all arenas)" in body
+
+    resp_g = client.get("/virtual/leaderboard?global=1")
+    assert resp_g.status_code == 200
+    body_g = resp_g.get_data(as_text=True)
+    assert "Top teams across all virtual arenas." in body_g
+    assert "e@x.com" in body_g
+
+
+def test_api_virtual_global_submission_leaderboard_ok(client, no_admin_pw, monkeypatch, app_mod):
+    monkeypatch.setattr(
+        app_mod,
+        "_virtual_global_submission_leaderboard",
+        lambda **kw: {
+            "rows": [],
+            "total": 0,
+            "error": None,
+            "challenge": None,
+            "scope": {"virtual_event_id": 1, "global": True},
+        },
+    )
+    resp = client.get("/api/virtual/global-submission-leaderboard?virtualEventId=1")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["scope"]["global"] is True
+    assert data["total"] == 0
 
 
 def test_distribution_requires_one_scope(client):
@@ -95,13 +133,22 @@ def test_main_dashboard_renders(client, overview_stub):
     resp = client.get("/")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
-    # Hero copy
+    # Hero copy (sr-only + visible spans)
+    assert "Build with AI" in body
     assert "Build" in body and "with AI" in body
+    assert "Live ·" in body and "IST" in body
     # Stats section heading + a known card title
     assert "System overview" in body
+    assert "At a glance" in body
     assert "Total PW registrations" in body
     assert "In-person PW" in body
     assert "Virtual PW" in body
+    assert "In-person · Top 10" in body
+    assert "Virtual · Top 10" in body
+    assert body.count("Leaderboard overview") >= 2
+    assert "Global (main challenge)" in body
+    assert "Global (all arenas)" in body
+    assert "Min score" in body
     assert overview_stub["mdc_total_fmt"] in body
     assert overview_stub["credits_fmt"] in body
     assert overview_stub["mdc_in_person"]["top_city"] in body
@@ -127,21 +174,57 @@ def test_in_person_page_renders(client, funnel_stub):
     assert "42" in body
     assert "UTM source breakdown" in body
     assert "Attendance city" in body
+    assert "Full leaderboard" in body
+    assert "/in-person/leaderboard" in body
+    assert "mdcDateRangePanel" in body
+    assert "Registration date" in body
+    assert 'id="mdcDateFrom"' in body
+    assert "api/in-person/main-data-center/stats" in body
+
+
+def test_api_in_person_mdc_stats_json(client, funnel_stub):
+    resp = client.get("/api/in-person/main-data-center/stats?inPersonEventId=1")
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload.get("error") is None
+    assert payload["total_registrations"] == 42
+    assert payload.get("chart_date_min") == "2026-04-20"
+
+
+def test_in_person_leaderboard_page_renders(client, funnel_stub):
+    resp = client.get("/in-person/leaderboard")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "Full leaderboard" in body
+    assert "Per page" in body
+    assert "All PWs (global)" in body
 
 
 def test_virtual_page_renders(client, virtual_stub):
     resp = client.get("/virtual")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
-    assert "Virtual arena" in body
+    assert "Virtual · Standings" in body
+    assert "Global (all arenas)" in body
     assert "Virtual Main Data Center" in body
     assert "Alice" in body
     assert "Bob" in body
     assert "Attendance city" not in body
-    assert "Top 400 teams" in body
+    assert "Top 400" in body
     assert "Registrations at close" in body
     assert "Unique MDC-linked" in body
     assert "42" in body
+    assert "mdcDateRangePanel" in body
+    assert "api/virtual/main-data-center/stats" in body
+
+
+def test_api_virtual_mdc_stats_json(client, virtual_stub):
+    resp = client.get("/api/virtual/main-data-center/stats?virtualEventId=2")
+    assert resp.status_code == 200
+    payload = resp.get_json()
+    assert payload.get("error") is None
+    assert payload["total_registrations"] == 42
+    assert payload.get("skip_attendance_city") is True
 
 
 # ---------- Admin / CDI ---------------------------------------------------
@@ -214,9 +297,10 @@ def test_module_subpages_render(client, no_admin_pw, monkeypatch, app_mod):
 
     monkeypatch.setattr(app_mod, "_load_mdc_users_page", _empty_mdc_users)
     cases = (
-        ("/overview/users", "Overview · Users"),
+        ("/overview/logs", "Overview · Logs"),
         ("/overview/settings", "Overview · Settings"),
         ("/in-person/users", "In-person · Users"),
+        ("/in-person/leaderboard", "Full leaderboard"),
         ("/in-person/settings", "In-person · Settings"),
         ("/virtual/users", "Virtual · Users"),
         ("/virtual/settings", "Virtual · Settings"),
@@ -232,6 +316,8 @@ def test_in_person_users_roster_table(client, no_admin_pw):
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
     assert "Promptathon city" in body
+    assert "Designation" in body
+    assert "Yrs exp." in body
     assert "visibility" in body
 
 
@@ -305,6 +391,11 @@ def test_virtual_users_export_csv_omits_attendance_city_column(client, no_admin_
 def test_in_person_users_shows_download_and_city_filter(client, no_admin_pw, monkeypatch, app_mod):
     def fake_load(_eid, _page, _per_page, _search, attendance_city=None, **_kwargs):
         ac = (attendance_city or "").strip() if attendance_city else ""
+        preserve = {"attendance_city": "Mumbai"} if ac == "Mumbai" else {}
+        export_query = urlencode(preserve)
+        pagination = {"per_page": "25", **preserve}
+        preserve_query_str = urlencode(pagination)
+        preserve_items = list(preserve.items())
         return {
             "error": None,
             "rows": [],
@@ -315,7 +406,15 @@ def test_in_person_users_shows_download_and_city_filter(client, no_admin_pw, mon
             "attendance_city": ac,
             "attendance_city_options": ["Mumbai", "Delhi"],
             "total_pages": 1,
-            "export_query": "attendance_city=Mumbai" if ac == "Mumbai" else "",
+            "export_query": export_query,
+            "preserve_query_str": preserve_query_str,
+            "challenge_id": None,
+            "advanced": None,
+            "advanced_active": False,
+            "advanced_form_fields": app_mod.MDC_USERS_ADVANCED_FORM_FIELDS,
+            "advanced_text": {},
+            "advanced_raw": {},
+            "preserve_items": preserve_items,
         }
 
     monkeypatch.setattr(app_mod, "_load_mdc_users_page", fake_load)
@@ -333,7 +432,6 @@ def test_module_import_pages_when_admin_open(client, no_admin_pw):
     assert resp_ip.status_code == 200
     body_ip = resp_ip.get_data(as_text=True)
     assert "In-person · Import" in body_ip
-    assert "Run import" in body_ip
     assert "Main Data Center" in body_ip
     assert "Import Main Data Center" in body_ip
     resp_v = client.get("/virtual/import")
@@ -343,7 +441,6 @@ def test_module_import_pages_when_admin_open(client, no_admin_pw):
     assert "Virtual Main Data Center" in body_v
     assert "virtual_main_data_center" in body_v
     assert "/api/import/virtual/main-data-center" in body_v
-    assert "/api/credits/grant" in body_v
 
 
 def test_context_processor_injects_defaults(client, overview_stub):

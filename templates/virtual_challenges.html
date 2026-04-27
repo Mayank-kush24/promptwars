@@ -1,18 +1,24 @@
 {% extends "layouts/base_app.html" %}
 {% block title %}PromptWars — {{ title }}{% endblock %}
+{% block extra_head %}
+<style>
+  .pw-challenge-create-modal { display: none; }
+  .pw-challenge-create-modal.is-open { display: flex; }
+</style>
+{% endblock %}
 
 {% block content %}
 {% set form_action = url_for('virtual_challenges_create', virtualEventId=virtual_event_id) %}
+{% set show_create_modal = request.args.get('open_create') == '1' and not edit_id %}
 
 <div class="flex flex-col gap-md">
   <div class="flex flex-col gap-sm">
     <h1 class="font-display text-headline-lg text-slate-900 leading-tight">{{ title }}</h1>
-    <p class="font-body-md text-slate-600 max-w-3xl">
-      Manage challenges for Prompt Wars Virtual. A registrant from the Virtual Main Data Center
-      is <strong>eligible</strong> for a challenge if their <code class="rounded bg-slate-100 px-1">form_timestamp</code>
-      is on or before <code class="rounded bg-slate-100 px-1">closes_at</code> &mdash; i.e. they registered
-      before the challenge opens, or while it is open. Registering after a challenge ends excludes them.
-    </p>
+    <p class="text-sm text-slate-600 max-w-3xl">Eligible if registered on or before the challenge&rsquo;s <code class="rounded bg-slate-100 px-1">closes_at</code>.</p>
+    <details class="mt-2 max-w-3xl text-sm text-slate-600">
+      <summary class="cursor-pointer font-medium text-violet-800 hover:underline">Eligibility rules</summary>
+      <p class="mt-2">Uses <code class="rounded bg-slate-100 px-1">form_timestamp</code> from Virtual Main Data Center vs <code class="rounded bg-slate-100 px-1">closes_at</code>. Registering after a challenge ends excludes them.</p>
+    </details>
   </div>
 
   {% if error %}
@@ -26,68 +32,17 @@
     </div>
   {% endif %}
 
-  <section class="bg-white rounded-2xl border border-violet-200 p-lg shadow-sm">
-    <header class="flex items-center justify-between border-b border-violet-100 pb-sm mb-md">
-      <h2 class="font-display text-headline-md text-slate-900">Add new challenge</h2>
-      <span class="text-xs text-slate-500">Event #{{ virtual_event_id }}</span>
-    </header>
-    <form method="post" action="{{ form_action }}" class="grid grid-cols-1 md:grid-cols-2 gap-sm">
-      <label class="flex flex-col gap-xs md:col-span-2">
-        <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Title <span class="text-rose-600">*</span></span>
-        <input type="text" name="title" required maxlength="200"
-               placeholder="e.g. Sprint 3 — Build with Gemini"
-               class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400/50" />
-      </label>
-      <label class="flex flex-col gap-xs md:col-span-2">
-        <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Description</span>
-        <textarea name="description" rows="2"
-                  placeholder="Optional one-line description shown to admins"
-                  class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400/50"></textarea>
-      </label>
-      <label class="flex flex-col gap-xs">
-        <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Opens at</span>
-        <input type="datetime-local" name="opens_at"
-               class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400/50" />
-      </label>
-      <label class="flex flex-col gap-xs">
-        <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Closes at <span class="text-rose-600">*</span></span>
-        <input type="datetime-local" name="closes_at" required
-               class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400/50" />
-      </label>
-      <label class="flex flex-col gap-xs">
-        <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Status</span>
-        <select name="status"
-                class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400/50">
-          {% for s in statuses %}
-            <option value="{{ s }}" {% if s == 'draft' %}selected{% endif %}>{{ s }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <label class="flex flex-col gap-xs">
-        <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Slug (optional)</span>
-        <input type="text" name="slug" maxlength="200" placeholder="e.g. sprint-3"
-               class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400/50" />
-      </label>
-      <label class="flex flex-col gap-xs md:col-span-2">
-        <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Submission import sheet suffix (optional)</span>
-        <input type="text" name="import_sheet_suffix" maxlength="200"
-               placeholder="Must match text after 'Submission ' on the XLSX tab (e.g. Challenge 1)"
-               class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400/50" />
-        <span class="text-[11px] text-slate-500">If empty, the tab suffix must match the challenge title. Leading <code class="rounded bg-slate-100 px-0.5">1.</code> on tab names is ignored.</span>
-      </label>
-      <div class="md:col-span-2 flex items-center gap-2 pt-xs">
-        <button type="submit"
-                class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">
-          <span class="material-symbols-outlined text-[18px]">add</span> Create challenge
-        </button>
-      </div>
-    </form>
-  </section>
-
   <section class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-    <header class="flex items-center justify-between border-b border-slate-200 px-lg py-md">
-      <h2 class="font-display text-headline-md text-slate-900">All challenges</h2>
-      <span class="text-xs text-slate-500">{{ challenges | length }} total</span>
+    <header class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between border-b border-slate-200 px-lg py-md">
+      <div class="min-w-0">
+        <h2 class="font-display text-headline-md text-slate-900">All challenges</h2>
+        <p class="text-xs text-slate-500 mt-0.5">{{ challenges | length }} total · Event #{{ virtual_event_id }}</p>
+      </div>
+      <button type="button" id="pw-open-create-challenge"
+              class="inline-flex shrink-0 items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700 shadow-sm">
+        <span class="material-symbols-outlined text-[20px]">add</span>
+        Create challenge
+      </button>
     </header>
     <div class="overflow-x-auto">
       <table class="w-full text-left text-sm min-w-[820px]">
@@ -210,7 +165,7 @@
           {% else %}
             <tr>
               <td colspan="5" class="py-16 text-center text-slate-500">
-                No challenges yet. Use the form above to create one.
+                No challenges yet. Use <strong class="text-slate-700">Create challenge</strong> to add one.
               </td>
             </tr>
           {% endfor %}
@@ -224,4 +179,122 @@
        class="inline-flex items-center px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 no-underline">Sign out</a>
   </div>
 </div>
+
+<div id="pw-create-challenge-modal"
+     class="pw-challenge-create-modal fixed inset-0 z-[100] items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm{% if show_create_modal %} is-open{% endif %}"
+     role="dialog" aria-modal="true" aria-labelledby="pw-create-challenge-title"
+     aria-hidden="{% if show_create_modal %}false{% else %}true{% endif %}">
+  <div class="bg-white rounded-2xl border border-violet-200 shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col overflow-hidden">
+    <div class="flex items-center justify-between gap-3 border-b border-violet-100 px-lg py-md shrink-0">
+      <h2 id="pw-create-challenge-title" class="font-display text-headline-md text-slate-900">Add new challenge</h2>
+      <button type="button" id="pw-close-create-challenge" class="inline-flex items-center justify-center w-10 h-10 rounded-lg text-slate-500 hover:bg-slate-100" aria-label="Close">
+        <span class="material-symbols-outlined">close</span>
+      </button>
+    </div>
+    <div class="overflow-y-auto p-lg">
+      <form id="pw-create-challenge-form" method="post" action="{{ form_action }}" class="grid grid-cols-1 md:grid-cols-2 gap-sm">
+        <label class="flex flex-col gap-xs md:col-span-2">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Title <span class="text-rose-600">*</span></span>
+          <input type="text" name="title" required maxlength="200"
+                 placeholder="e.g. Sprint 3 — Build with Gemini"
+                 class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400/50" />
+        </label>
+        <label class="flex flex-col gap-xs md:col-span-2">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Description</span>
+          <textarea name="description" rows="2"
+                    placeholder="Optional one-line description shown to admins"
+                    class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400/50"></textarea>
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Opens at</span>
+          <input type="datetime-local" name="opens_at"
+                 class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400/50" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Closes at <span class="text-rose-600">*</span></span>
+          <input type="datetime-local" name="closes_at" required
+                 class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400/50" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Status</span>
+          <select name="status"
+                  class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400/50">
+            {% for s in statuses %}
+              <option value="{{ s }}" {% if s == 'draft' %}selected{% endif %}>{{ s }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Slug (optional)</span>
+          <input type="text" name="slug" maxlength="200" placeholder="e.g. sprint-3"
+                 class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400/50" />
+        </label>
+        <label class="flex flex-col gap-xs md:col-span-2">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Submission import sheet suffix (optional)</span>
+          <input type="text" name="import_sheet_suffix" maxlength="200"
+                 placeholder="Must match text after 'Submission ' on the XLSX tab (e.g. Challenge 1)"
+                 class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400/50" />
+          <span class="text-[11px] text-slate-500">If empty, the tab suffix must match the challenge title. Leading <code class="rounded bg-slate-100 px-0.5">1.</code> on tab names is ignored.</span>
+        </label>
+        <div class="md:col-span-2 flex items-center gap-2 pt-xs">
+          <button type="submit"
+                  class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">
+            <span class="material-symbols-outlined text-[18px]">add</span> Create challenge
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  var modal = document.getElementById("pw-create-challenge-modal");
+  var openBtn = document.getElementById("pw-open-create-challenge");
+  var closeBtn = document.getElementById("pw-close-create-challenge");
+  var form = document.getElementById("pw-create-challenge-form");
+  if (!modal || !openBtn || !closeBtn || !form) return;
+
+  function openModal() {
+    modal.classList.add("is-open");
+    modal.setAttribute("aria-hidden", "false");
+    document.body.style.overflow = "hidden";
+    try {
+      var first = form.querySelector("input[name=title]");
+      if (first) first.focus();
+    } catch (_e) {}
+  }
+
+  function closeModal() {
+    modal.classList.remove("is-open");
+    modal.setAttribute("aria-hidden", "true");
+    document.body.style.overflow = "";
+  }
+
+  openBtn.addEventListener("click", function () {
+    openModal();
+  });
+  closeBtn.addEventListener("click", function () {
+    closeModal();
+  });
+  modal.addEventListener("click", function (e) {
+    if (e.target === modal) closeModal();
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && modal.classList.contains("is-open")) {
+      e.preventDefault();
+      closeModal();
+    }
+  });
+  form.addEventListener("submit", function () {
+    closeModal();
+  });
+
+  if (modal.classList.contains("is-open")) {
+    document.body.style.overflow = "hidden";
+  }
+})();
+</script>
 {% endblock %}

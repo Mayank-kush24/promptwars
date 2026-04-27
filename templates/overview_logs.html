@@ -1,0 +1,271 @@
+{% extends "layouts/base_app.html" %}
+{% block title %}PromptWars — {{ title }}{% endblock %}
+{% block content %}
+{% macro logs_href(k, p=1) -%}
+{{- url_for('overview_logs', kind=k, page=p, per_page=(activity.per_page if activity else data.per_page if data else 25), window=(window_hours if window_hours is not none else 0), q=q or none) -}}
+{%- if k == 'activity' and action_eq %}&action={{ action_eq | urlencode }}{% endif %}
+{%- endmacro %}
+<div class="flex flex-col gap-md">
+  <div class="flex flex-col gap-sm">
+    <h1 class="font-display text-headline-lg text-slate-900 leading-tight">{{ title }}</h1>
+  </div>
+
+  {% if not audit_ready %}
+    <div class="rounded-xl border border-amber-200 bg-amber-50 text-amber-950 px-4 py-3 text-sm">
+      {{ schema_error }}
+    </div>
+  {% else %}
+    <div class="flex flex-wrap gap-2 border-b border-slate-200 pb-1">
+      <a href="{{ logs_href('activity', 1) }}"
+         class="inline-flex items-center gap-1.5 px-4 py-2 rounded-t-lg text-sm font-semibold no-underline
+                {% if kind == 'activity' %}bg-violet-50 text-violet-900 border border-b-0 border-slate-200 -mb-px{% else %}text-slate-600 hover:bg-slate-50 border border-transparent{% endif %}">
+        <span class="material-symbols-outlined text-[20px]" aria-hidden="true">bolt</span>
+        Activity
+      </a>
+      <a href="{{ logs_href('data', 1) }}"
+         class="inline-flex items-center gap-1.5 px-4 py-2 rounded-t-lg text-sm font-semibold no-underline
+                {% if kind == 'data' %}bg-violet-50 text-violet-900 border border-b-0 border-slate-200 -mb-px{% else %}text-slate-600 hover:bg-slate-50 border border-transparent{% endif %}">
+        <span class="material-symbols-outlined text-[20px]" aria-hidden="true">database</span>
+        Data changes
+      </a>
+    </div>
+
+    <form method="get" action="{{ url_for('overview_logs') }}" class="flex flex-col gap-sm">
+      <input type="hidden" name="kind" value="{{ kind }}" />
+      <div class="flex flex-col xl:flex-row gap-sm xl:items-end xl:justify-between">
+        <div class="flex flex-col lg:flex-row gap-sm flex-1 flex-wrap">
+          <label class="flex flex-col gap-xs flex-1 min-w-[200px] max-w-xl">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Search</span>
+            <input type="search" name="q" value="{{ q }}"
+                   placeholder="Endpoint, user, request id, SQL text…"
+                   class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400/50" />
+          </label>
+          <label class="flex flex-col gap-xs min-w-[160px] max-w-xs">
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Time window</span>
+            <select name="window"
+                    class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400/50 text-sm">
+              <option value="24" {% if window_hours == 24 %}selected{% endif %}>Last 24 hours</option>
+              <option value="72" {% if window_hours == 72 %}selected{% endif %}>Last 3 days</option>
+              <option value="168" {% if window_hours == 168 %}selected{% endif %}>Last 7 days</option>
+              <option value="720" {% if window_hours == 720 %}selected{% endif %}>Last 30 days</option>
+              <option value="0" {% if window_hours is none %}selected{% endif %}>All time</option>
+            </select>
+          </label>
+          {% if kind == 'activity' and activity %}
+            <label class="flex flex-col gap-xs min-w-[180px] max-w-sm">
+              <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Action type</span>
+              <select name="action"
+                      class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-400/50 text-sm">
+                <option value="">Any action</option>
+                {% for a in activity.action_options %}
+                  <option value="{{ a }}" {% if action_eq == a %}selected{% endif %}>{{ a }}</option>
+                {% endfor %}
+              </select>
+            </label>
+          {% endif %}
+        </div>
+        <div class="flex flex-wrap gap-2 items-center">
+          <input type="hidden" name="per_page" value="{{ activity.per_page if activity else data.per_page }}" />
+          <button type="submit" class="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">Apply</button>
+          {% if q or action_eq or (window_hours is not none and window_hours != 168) %}
+            <a href="{{ url_for('overview_logs', kind=kind) }}"
+               class="inline-flex items-center px-4 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">Reset filters</a>
+          {% endif %}
+        </div>
+      </div>
+    </form>
+
+    {% if kind == 'activity' and activity %}
+      {% if activity.error %}
+        <div class="rounded-xl border border-red-200 bg-red-50 text-red-900 px-4 py-3 text-sm">Could not load activity log: {{ activity.error }}</div>
+      {% else %}
+        <div class="flex flex-wrap items-center justify-between gap-sm text-sm text-slate-600">
+          <span>
+            {% if activity.total %}
+              {% set start = (activity.page - 1) * activity.per_page + 1 %}
+              {% set end_raw = activity.page * activity.per_page %}
+              {% set end = end_raw if end_raw < activity.total else activity.total %}
+              Showing <span class="font-semibold text-slate-900 tabular-nums">{{ "{:,}".format(start) }}</span>–
+              <span class="font-semibold text-slate-900 tabular-nums">{{ "{:,}".format(end) }}</span>
+              of <span class="font-semibold text-slate-900 tabular-nums">{{ "{:,}".format(activity.total) }}</span>
+            {% else %}
+              No rows in this window
+            {% endif %}
+          </span>
+          <form method="get" class="flex items-center gap-2">
+            <input type="hidden" name="kind" value="activity" />
+            {% if q %}<input type="hidden" name="q" value="{{ q }}" />{% endif %}
+            <input type="hidden" name="window" value="{{ window_hours if window_hours is not none else 0 }}" />
+            {% if action_eq %}<input type="hidden" name="action" value="{{ action_eq }}" />{% endif %}
+            <input type="hidden" name="page" value="1" />
+            <label class="text-xs text-slate-500">Per page</label>
+            <select name="per_page" onchange="this.form.submit()"
+                    class="text-sm rounded-lg border border-slate-200 px-2 py-1.5 bg-white">
+              {% for n in [10, 25, 50, 100] %}
+                <option value="{{ n }}" {% if activity.per_page == n %}selected{% endif %}>{{ n }}</option>
+              {% endfor %}
+            </select>
+          </form>
+        </div>
+
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div class="pw-scroll-x-touch">
+            <table class="w-full text-left text-sm min-w-[960px]">
+              <thead>
+                <tr class="border-b border-slate-200 bg-slate-50 text-slate-500">
+                  <th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider whitespace-nowrap">Time (UTC)</th>
+                  <th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider">Action</th>
+                  <th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider">Route / URL</th>
+                  <th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider whitespace-nowrap">HTTP</th>
+                  <th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider">Who</th>
+                  <th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider">Request</th>
+                  <th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider">SQL / extra</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                {% for row in activity.rows %}
+                  <tr class="align-top hover:bg-slate-50/80">
+                    <td class="py-2.5 px-3 text-xs text-slate-600 whitespace-nowrap font-mono">{{ row.occurred_at_fmt }}</td>
+                    <td class="py-2.5 px-3">
+                      <span class="inline-flex rounded-md bg-slate-100 text-slate-800 px-2 py-0.5 text-xs font-semibold">{{ row.action }}</span>
+                      {% if row.module or row.entity %}
+                        <div class="text-[11px] text-slate-500 mt-0.5">{{ row.module }}{% if row.module and row.entity %} · {% endif %}{{ row.entity }}</div>
+                      {% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-xs text-slate-800 max-w-md">
+                      <div class="font-mono break-all" title="{{ row.endpoint or row.url }}">{{ row.endpoint or row.url or "—" }}</div>
+                    </td>
+                    <td class="py-2.5 px-3 text-xs whitespace-nowrap">
+                      {% if row.http_method %}<span class="font-semibold text-slate-700">{{ row.http_method }}</span>{% endif %}
+                      {% if row.status is not none %}<span class="text-slate-600"> {{ row.status }}</span>{% endif %}
+                      {% if row.latency_ms_fmt %}<div class="text-[11px] text-slate-500">{{ row.latency_ms_fmt }} ms</div>{% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-xs text-slate-700 max-w-[200px] break-all">
+                      {{ row.principal or "—" }}
+                      {% if row.principal_email %}<div class="text-[11px] text-slate-500">{{ row.principal_email }}</div>{% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-[11px] font-mono text-slate-600 break-all max-w-[140px]" title="{{ row.request_id }}">{{ row.request_id or "—" }}</td>
+                    <td class="py-2.5 px-3 text-[11px] text-slate-600 max-w-lg">
+                      {% if row.sql_kind %}
+                        <span class="font-semibold text-slate-700">{{ row.sql_kind }}</span>
+                        <pre class="mt-1 whitespace-pre-wrap break-all font-mono text-[10px] leading-snug bg-slate-50 rounded p-1.5 border border-slate-100 max-h-28 overflow-y-auto">{{ row.sql_snip or "—" }}</pre>
+                      {% elif row.extra_snip %}
+                        <pre class="whitespace-pre-wrap break-all font-mono text-[10px] leading-snug bg-slate-50 rounded p-1.5 border border-slate-100 max-h-28 overflow-y-auto">{{ row.extra_snip }}</pre>
+                      {% else %}
+                        <span class="text-slate-400">—</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {% if activity.total_pages > 1 %}
+          <nav class="flex flex-wrap items-center gap-2 text-sm" aria-label="Pagination">
+            {% if activity.page > 1 %}
+              <a class="px-3 py-1.5 rounded-lg border border-slate-200 no-underline text-slate-700 hover:bg-slate-50"
+                 href="{{ logs_href('activity', activity.page - 1) }}">Previous</a>
+            {% endif %}
+            <span class="text-slate-600">Page {{ activity.page }} / {{ activity.total_pages }}</span>
+            {% if activity.page < activity.total_pages %}
+              <a class="px-3 py-1.5 rounded-lg border border-slate-200 no-underline text-slate-700 hover:bg-slate-50"
+                 href="{{ logs_href('activity', activity.page + 1) }}">Next</a>
+            {% endif %}
+          </nav>
+        {% endif %}
+      {% endif %}
+
+    {% elif kind == 'data' and data %}
+      {% if data.error %}
+        <div class="rounded-xl border border-red-200 bg-red-50 text-red-900 px-4 py-3 text-sm">Could not load data change log: {{ data.error }}</div>
+      {% else %}
+        <div class="flex flex-wrap items-center justify-between gap-sm text-sm text-slate-600">
+          <span>
+            {% if data.total %}
+              {% set start = (data.page - 1) * data.per_page + 1 %}
+              {% set end_raw = data.page * data.per_page %}
+              {% set end = end_raw if end_raw < data.total else data.total %}
+              Showing <span class="font-semibold text-slate-900 tabular-nums">{{ "{:,}".format(start) }}</span>–
+              <span class="font-semibold text-slate-900 tabular-nums">{{ "{:,}".format(end) }}</span>
+              of <span class="font-semibold text-slate-900 tabular-nums">{{ "{:,}".format(data.total) }}</span>
+            {% else %}
+              No rows in this window
+            {% endif %}
+          </span>
+          <form method="get" class="flex items-center gap-2">
+            <input type="hidden" name="kind" value="data" />
+            {% if q %}<input type="hidden" name="q" value="{{ q }}" />{% endif %}
+            <input type="hidden" name="window" value="{{ window_hours if window_hours is not none else 0 }}" />
+            <input type="hidden" name="page" value="1" />
+            <label class="text-xs text-slate-500">Per page</label>
+            <select name="per_page" onchange="this.form.submit()"
+                    class="text-sm rounded-lg border border-slate-200 px-2 py-1.5 bg-white">
+              {% for n in [10, 25, 50, 100] %}
+                <option value="{{ n }}" {% if data.per_page == n %}selected{% endif %}>{{ n }}</option>
+              {% endfor %}
+            </select>
+          </form>
+        </div>
+
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div class="pw-scroll-x-touch">
+            <table class="w-full text-left text-sm min-w-[900px]">
+              <thead>
+                <tr class="border-b border-slate-200 bg-slate-50 text-slate-500">
+                  <th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider whitespace-nowrap">Time (UTC)</th>
+                  <th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider">Operation</th>
+                  <th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider">Table</th>
+                  <th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider">Primary key</th>
+                  <th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider">Columns changed</th>
+                  <th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider">Who / request</th>
+                  <th class="py-3 px-3 text-[11px] font-semibold uppercase tracking-wider">Diff preview</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                {% for row in data.rows %}
+                  <tr class="align-top hover:bg-slate-50/80">
+                    <td class="py-2.5 px-3 text-xs text-slate-600 whitespace-nowrap font-mono">{{ row.occurred_at_fmt }}</td>
+                    <td class="py-2.5 px-3">
+                      <span class="inline-flex rounded-md px-2 py-0.5 text-xs font-semibold
+                        {% if row.op == 'INSERT' %}bg-emerald-100 text-emerald-900
+                        {% elif row.op == 'UPDATE' %}bg-amber-100 text-amber-900
+                        {% elif row.op == 'DELETE' %}bg-red-100 text-red-900
+                        {% else %}bg-slate-100 text-slate-800{% endif %}">{{ row.op }}</span>
+                    </td>
+                    <td class="py-2.5 px-3 text-xs font-mono text-slate-800 break-all">{{ row.table_ref }}</td>
+                    <td class="py-2.5 px-3 text-[11px] font-mono text-slate-600 break-all max-w-[200px]">{{ row.record_pk or "—" }}</td>
+                    <td class="py-2.5 px-3 text-xs text-slate-700 break-words max-w-[220px]">{{ row.changed_columns or "—" }}</td>
+                    <td class="py-2.5 px-3 text-xs text-slate-700 max-w-[200px] break-all">
+                      {{ row.principal or "—" }}
+                      {% if row.request_id %}<div class="text-[11px] font-mono text-slate-500 mt-0.5" title="{{ row.request_id }}">{{ row.request_id }}</div>{% endif %}
+                    </td>
+                    <td class="py-2.5 px-3 text-[11px] text-slate-600 max-w-lg">
+                      <pre class="whitespace-pre-wrap break-all font-mono text-[10px] leading-snug bg-slate-50 rounded p-1.5 border border-slate-100 max-h-32 overflow-y-auto">{{ row.changes_snip or "—" }}</pre>
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {% if data.total_pages > 1 %}
+          <nav class="flex flex-wrap items-center gap-2 text-sm" aria-label="Pagination">
+            {% if data.page > 1 %}
+              <a class="px-3 py-1.5 rounded-lg border border-slate-200 no-underline text-slate-700 hover:bg-slate-50"
+                 href="{{ logs_href('data', data.page - 1) }}">Previous</a>
+            {% endif %}
+            <span class="text-slate-600">Page {{ data.page }} / {{ data.total_pages }}</span>
+            {% if data.page < data.total_pages %}
+              <a class="px-3 py-1.5 rounded-lg border border-slate-200 no-underline text-slate-700 hover:bg-slate-50"
+                 href="{{ logs_href('data', data.page + 1) }}">Next</a>
+            {% endif %}
+          </nav>
+        {% endif %}
+      {% endif %}
+    {% endif %}
+  {% endif %}
+</div>
+{% endblock %}

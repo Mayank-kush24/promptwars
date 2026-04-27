@@ -94,3 +94,28 @@ def test_parse_rejects_missing_email_column():
     buf = BytesIO(b"Full Name\nAlice\n")
     with pytest.raises(ValueError, match="Email"):
         etl_data_center.parse_main_data_center_file(buf, "bad.csv")
+
+
+def test_split_designation_with_years_trailing_marker():
+    assert etl_data_center.split_designation_with_years("(Co-founder) Gen AI Developer( 2 )") == (
+        "(Co-founder) Gen AI Developer",
+        2,
+    )
+    assert etl_data_center.split_designation_with_years("-- ( 1 )") == ("--", 1)
+    assert etl_data_center.split_designation_with_years(".NET Developer(1)") == (".NET Developer", 1)
+    assert etl_data_center.split_designation_with_years("Intern") == ("Intern", None)
+    assert etl_data_center.split_designation_with_years(None) == (None, None)
+
+
+def test_parse_csv_splits_designation_trailing_years():
+    buf = BytesIO(
+        (
+            "Email,Full Name,Designation (Year of exp.)\n"
+            'd@x.com,Dee,"(Co-founder) Gen AI Developer( 2 )"\n'
+        ).encode("utf-8")
+    )
+    rows, stats = etl_data_center.parse_main_data_center_file(buf, "x.csv")
+    assert stats["rows_read"] == 1
+    assert len(rows) == 1
+    assert rows[0]["designation"] == "(Co-founder) Gen AI Developer"
+    assert rows[0]["designation_years_experience"] == 2
