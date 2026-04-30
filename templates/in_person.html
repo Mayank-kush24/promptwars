@@ -1,8 +1,8 @@
 {% extends "layouts/base_app.html" %}
 {% block title %}PromptWars — In-person{% endblock %}
 {% block extra_head %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js" defer></script>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js" defer></script>
+<script src="{{ pw_vendor_chart_js }}" defer></script>
+<script src="{{ pw_vendor_echarts_js }}" defer></script>
 <style>
   .pw-stage {
     background:
@@ -125,33 +125,15 @@
 {% endif %}
 {% endmacro %}
 
+{# Bounds sticky Prompt War bar: it sticks only while this block is on screen, then scrolls away before Main Data Center. #}
+<div class="pw-ip-ac-sticky-boundary min-w-0">
 <section id="action-center-leaderboard" class="flex flex-col gap-sm mb-lg">
   <h2 class="font-display text-headline-lg text-slate-900 leading-tight">Action Center · Main challenge</h2>
   <p class="text-sm text-slate-500">Warm-up excluded.</p>
 </section>
 
-<div class="sticky top-16 z-30 -mx-1 min-w-0 sm:mx-0 mb-6 rounded-2xl border border-slate-200/80 bg-white/90 backdrop-blur-md px-3 sm:px-4 py-3 shadow-sm">
-  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-    <span class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Prompt War (city · date · session)</span>
-    <div class="flex flex-wrap gap-2">
-      <a href="{{ url_for('in_person_page', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id) }}"
-         class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold border transition-colors no-underline
-           {% if not ip_action_center_city %}pw-ip-arena-chip-active{% else %}border-slate-200 bg-white/90 text-slate-600 hover:border-emerald-200 hover:bg-emerald-50/50{% endif %}">
-        All PWs (global)
-      </a>
-      {% for pw in (in_person_action_pw_options or []) %}
-        {% set _chip_active = ip_action_center_city == pw.city and (ip_ac_pw_date_iso or '') == (pw.prompt_war_on_iso or '') and (ip_ac_session_label or '') == (pw.session_label or '') %}
-        <a href="{{ url_for('in_person_page', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, ipActionCenterCity=pw.city, ipPromptWarDate=pw.prompt_war_on_iso, ipPromptWarLabel=pw.session_label) }}"
-           class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold border transition-colors no-underline max-w-[14rem] truncate
-             {% if _chip_active %}pw-ip-arena-chip-active{% else %}border-slate-200 bg-white/90 text-slate-600 hover:border-emerald-200 hover:bg-emerald-50/50{% endif %}"
-           title="{{ pw.display }}">
-          <span class="truncate">{{ pw.display }}</span>
-          <span class="shrink-0 text-[10px] opacity-80 tabular-nums">({{ pw.team_count }})</span>
-        </a>
-      {% endfor %}
-    </div>
-  </div>
-</div>
+{% set bar_mode = 'page' %}
+{% include 'partials/in_person_prompt_war_bar.html' %}
 
 <div class="flex justify-center mb-8 lg:mb-10">
   <div class="bg-white rounded-2xl border border-emerald-200/80 shadow-sm w-full max-w-6xl overflow-hidden flex flex-col">
@@ -213,6 +195,7 @@
       {% endif %}
     </div>
   </div>
+</div>
 </div>
 
 <section id="main-data-center" class="flex flex-col gap-sm mt-xl">
@@ -281,11 +264,41 @@
     </div>
   </div>
 
-  <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
-    <h3 class="font-display text-headline-md text-slate-900 mb-md">Attendance city</h3>
-    <div class="max-h-[70vh] overflow-y-auto rounded-xl border border-slate-100">
-      <div id="mdcAttendanceCityChartHost" class="relative w-full min-h-[280px]" style="height:320px">
-        <canvas id="mdcAttendanceCityBar"></canvas>
+  <div class="grid grid-cols-1 lg:grid-cols-2 gap-md">
+    <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm min-w-0">
+      <h3 class="font-display text-headline-md text-slate-900 mb-md">Attendance city</h3>
+      <div class="max-h-[70vh] overflow-y-auto rounded-xl border border-slate-100">
+        <div id="mdcAttendanceCityChartHost" class="relative w-full min-h-[280px]" style="height:320px">
+          <canvas id="mdcAttendanceCityBar"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm overflow-x-auto min-w-0">
+      <h3 class="font-display text-headline-md text-slate-900 mb-sm">PW sessions · RSVP (Hawkeye)</h3>
+      <p class="text-xs text-slate-500 mb-md max-w-prose">Per dated Prompt War session. RSVP and attendance counts will populate when the Hawkeye API is connected.</p>
+      <div class="max-h-[360px] overflow-y-auto">
+        <table class="w-full text-left text-sm min-w-[400px]">
+          <thead class="sticky top-0 bg-white z-[1] shadow-[0_1px_0_0_rgb(226_232_240)]">
+            <tr class="border-b border-slate-200 text-slate-500">
+              <th class="py-2 pr-4 text-[11px] font-semibold uppercase tracking-wider">Session</th>
+              <th class="py-2 pl-2 text-[11px] font-semibold uppercase tracking-wider text-right">RSVP sent</th>
+              <th class="py-2 pl-2 text-[11px] font-semibold uppercase tracking-wider text-right">RSVP accepted</th>
+              <th class="py-2 pl-2 text-[11px] font-semibold uppercase tracking-wider text-right">Attended</th>
+            </tr>
+          </thead>
+          <tbody id="mdcPwSessionRsvpTbody" class="text-slate-800">
+            {% for r in data_center.pw_session_rsvp or [] %}
+              <tr class="border-b border-slate-100">
+                <td class="py-2 pr-4 font-medium">{{ r.session_display }}</td>
+                <td class="py-2 pl-2 tabular-nums text-right">{{ "{:,}".format(r.rsvp_sent|int) }}</td>
+                <td class="py-2 pl-2 tabular-nums text-right">{{ "{:,}".format(r.rsvp_accepted|int) }}</td>
+                <td class="py-2 pl-2 tabular-nums text-right">{{ "{:,}".format(r.attended|int) }}</td>
+              </tr>
+            {% else %}
+              <tr><td colspan="4" class="py-lg text-center text-sm text-slate-500">No dated PW sessions in this range.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
       </div>
     </div>
   </div>
@@ -314,7 +327,7 @@
       <h3 class="font-display text-headline-md text-slate-900 mb-md">City pivot</h3>
       <div class="max-h-[360px] overflow-y-auto">
         <table class="w-full text-left text-sm min-w-[320px]">
-          <thead class="sticky top-0 bg-white">
+          <thead class="sticky top-0 bg-white z-[1] shadow-[0_1px_0_0_rgb(226_232_240)]">
             <tr class="border-b border-slate-200 text-slate-500">
               <th class="py-2 pr-4 text-[11px] font-semibold uppercase tracking-wider">City</th>
               <th class="py-2 text-[11px] font-semibold uppercase tracking-wider text-right">Registrations</th>
@@ -359,15 +372,15 @@
 {% endblock %}
 
 {% block scripts %}
+<script id="pw-in-person-mdc" type="application/json">{{ data_center | tojson }}</script>
+<script id="pw-in-person-routes" type="application/json">{{ {"mdcUsersUrl": url_for("in_person_users"), "inPersonUsers": url_for("in_person_users"), "indiaGeoUrl": url_for("static", filename="geo/in-all-claimed.geo.json"), "mdcStatsApiUrl": url_for("api_in_person_mdc_stats", inPersonEventId=in_person_event_id), "inPersonEventId": in_person_event_id} | tojson }}</script>
 <script>
-  window.__PW_MDC__ = {{ data_center | tojson }};
-  window.__PW_ROUTES__ = {
-    mdcUsersUrl: {{ url_for("in_person_users") | tojson }},
-    inPersonUsers: {{ url_for("in_person_users") | tojson }},
-    indiaGeoUrl: {{ url_for("static", filename="geo/in-all-claimed.geo.json") | tojson }},
-    mdcStatsApiUrl: {{ url_for("api_in_person_mdc_stats", inPersonEventId=in_person_event_id) | tojson }},
-    inPersonEventId: {{ in_person_event_id | tojson }},
-  };
+  (function () {
+    var elMdc = document.getElementById("pw-in-person-mdc");
+    var elRoutes = document.getElementById("pw-in-person-routes");
+    window.__PW_MDC__ = elMdc ? JSON.parse(elMdc.textContent || "null") : {};
+    window.__PW_ROUTES__ = elRoutes ? JSON.parse(elRoutes.textContent || "{}") : {};
+  })();
 </script>
 <script src="{{ url_for('static', filename='mdc_dashboard.js') }}" defer></script>
 {% endblock %}

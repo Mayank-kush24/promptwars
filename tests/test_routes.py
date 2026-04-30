@@ -178,8 +178,13 @@ def test_in_person_page_renders(client, funnel_stub):
     assert "/in-person/leaderboard" in body
     assert "mdcDateRangePanel" in body
     assert "Registration date" in body
-    assert 'id="mdcDateFrom"' in body
+    assert 'id="mdcDateRangePicker"' in body
+    assert "data-pw-date-range" in body
     assert "api/in-person/main-data-center/stats" in body
+    assert "Hawkeye" in body
+    assert "City pivot" in body
+    assert "PW sessions · RSVP" in body
+    assert "RSVP sent" in body
 
 
 def test_api_in_person_mdc_stats_json(client, funnel_stub):
@@ -189,6 +194,12 @@ def test_api_in_person_mdc_stats_json(client, funnel_stub):
     assert payload.get("error") is None
     assert payload["total_registrations"] == 42
     assert payload.get("chart_date_min") == "2026-04-20"
+    pr = payload.get("pw_session_rsvp")
+    assert isinstance(pr, list)
+    assert len(pr) == 2
+    assert pr[0]["city"] == "Mumbai"
+    assert "session_display" in pr[0]
+    assert pr[0]["rsvp_sent"] == pr[0]["rsvp_accepted"] == pr[0]["attended"] == 0
 
 
 def test_in_person_leaderboard_page_renders(client, funnel_stub):
@@ -225,6 +236,7 @@ def test_api_virtual_mdc_stats_json(client, virtual_stub):
     assert payload.get("error") is None
     assert payload["total_registrations"] == 42
     assert payload.get("skip_attendance_city") is True
+    assert payload.get("pw_session_rsvp") == []
 
 
 # ---------- Admin / CDI ---------------------------------------------------
@@ -293,6 +305,11 @@ def test_module_subpages_render(client, no_admin_pw, monkeypatch, app_mod):
             "attendance_city_options": [],
             "total_pages": 1,
             "export_query": "",
+            "preserve_query_str": "",
+            "preserve_items": [],
+            "mdc_pw_on": "",
+            "mdc_session_label": "",
+            "advanced_active": False,
         }
 
     monkeypatch.setattr(app_mod, "_load_mdc_users_page", _empty_mdc_users)
@@ -332,6 +349,9 @@ def test_in_person_users_export_csv(client, no_admin_pw, monkeypatch, app_mod):
                 "state": "Y",
                 "country": "IN",
                 "attendance_city": "Mumbai",
+                "pw_session_display": "Mumbai · 28 Mar 2026",
+                "prompt_war_on_iso": "2026-03-28",
+                "session_label": "",
                 "occupation": "Dev",
                 "mobile": "",
                 "profile_name": None,
@@ -345,6 +365,7 @@ def test_in_person_users_export_csv(client, no_admin_pw, monkeypatch, app_mod):
     assert "csv" in (resp.headers.get("Content-Type") or "").lower()
     body = resp.get_data(as_text=True)
     assert "full_name" in body
+    assert "pw_session_display" in body
     assert "Test User" in body
     assert "Mumbai" in body
 

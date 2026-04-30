@@ -3,7 +3,7 @@ Parse Main Data Center exports (CSV or XLSX) for In-person PromptWars.
 
 Headers are matched case-insensitively with normalized whitespace.
 Email is required; rows without a usable email are skipped.
-Duplicate emails in the file keep the last occurrence.
+Duplicate (email, Prompt War session) keys in the file keep the last occurrence.
 
 Audit note:
     This module is invoked by Flask routes which already run inside the
@@ -21,7 +21,7 @@ Audit note:
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import date, datetime
 from io import BytesIO
 from typing import Any, BinaryIO
 
@@ -29,6 +29,29 @@ import pandas as pd
 
 # Trailing "( 2 )" / "(2)" on designation = years of experience (not inner parens like "(Co-founder)").
 _DESIGNATION_TRAILING_YEARS_RE = re.compile(r"\s*\(\s*(\d+)\s*\)\s*$")
+
+# Align with app IPCSR_LEGACY_PROMPT_WAR_DATE / session label cap (no import of Flask app).
+_LEGACY_PW_DATE = date(1970, 1, 1)
+_SESSION_LABEL_MAX_LEN = 64
+
+
+def _normalize_mdc_session_label(raw: Any) -> str:
+    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+        return ""
+    s = str(raw).strip()
+    if not s:
+        return ""
+    return s[:_SESSION_LABEL_MAX_LEN]
+
+
+def _coerce_pw_date_cell(val: Any) -> date:
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return _LEGACY_PW_DATE
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date):
+        return val
+    return _LEGACY_PW_DATE
 
 
 def split_designation_with_years(raw: Any) -> tuple[str | None, int | None]:
@@ -98,6 +121,12 @@ HEADER_MAP: dict[str, str] = {
     "github url": "github_url",
     "linkedin url": "linkedin_url",
     "in which city, would you like to attend the in-person promptwars promptathon?": "attendance_city",
+    # Prompt War session (explicit from Vision export — confirm header text with form team)
+    "prompt war date": "prompt_war_on",
+    "prompt war date (yyyy-mm-dd)": "prompt_war_on",
+    "pw date": "prompt_war_on",
+    "pw session label": "session_label",
+    "pw session": "session_label",
 }
 
 _TEXT_COLS = (
@@ -191,8 +220,22 @@ def parse_main_data_center_file(fileobj: BinaryIO, filename: str) -> tuple[list[
     for c in _TEXT_COLS:
         out[c] = out[c].apply(lambda v: None if _blank_to_none(v) is None else str(v).strip())
 
-    out = out.drop_duplicates(subset=["email"], keep="last")
-    duplicate_emails_collapsed = with_email - len(out)
+    if "prompt_war_on" not in out.columns:
+        out["prompt_war_on"] = _LEGACY_PW_DATE
+    else:
+        pdt = pd.to_datetime(out["prompt_war_on"], errors="coerce")
+        out["prompt_war_on"] = pdt.dt.date
+        out.loc[pdt.isna(), "prompt_war_on"] = _LEGACY_PW_DATE
+
+    if "session_label" not in out.columns:
+        out["session_label"] = ""
+    else:
+        out["session_label"] = out["session_label"].map(_normalize_mdc_session_label)
+
+    out["_dedupe_sl"] = out["session_label"].fillna("").map(_normalize_mdc_session_label)
+    out = out.drop_duplicates(subset=["email", "prompt_war_on", "_dedupe_sl"], keep="last")
+    out = out.drop(columns=["_dedupe_sl"])
+    duplicate_registration_keys_collapsed = with_email - len(out)
 
     rows: list[dict[str, Any]] = []
     for _, s in out.iterrows():
@@ -230,6 +273,8 @@ def parse_main_data_center_file(fileobj: BinaryIO, filename: str) -> tuple[list[
             "github_url": s.get("github_url"),
             "linkedin_url": s.get("linkedin_url"),
             "attendance_city": s.get("attendance_city"),
+            "prompt_war_on": _coerce_pw_date_cell(s.get("prompt_war_on")),
+            "session_label": _normalize_mdc_session_label(s.get("session_label")),
         }
         rows.append(row)
 
@@ -237,6 +282,6 @@ def parse_main_data_center_file(fileobj: BinaryIO, filename: str) -> tuple[list[
         "rows_read": int(rows_read),
         "rows_skipped_no_email": int(skipped_no_email),
         "rows_after_dedupe": int(len(out)),
-        "duplicate_emails_collapsed": int(duplicate_emails_collapsed),
+        "duplicate_registration_keys_collapsed": int(duplicate_registration_keys_collapsed),
     }
     return rows, stats

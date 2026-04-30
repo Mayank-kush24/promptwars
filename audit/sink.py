@@ -70,6 +70,7 @@ class _SinkStats:
     written: int = 0
     overflowed: int = 0
     failed: int = 0
+    dropped_oldest: int = 0
 
 
 class AsyncAuditSink:
@@ -82,17 +83,23 @@ class AsyncAuditSink:
         flush_batch: int = 500,
         block_ms: int = 500,
         enabled: bool = True,
+        drop_oldest: bool = False,
     ):
         self.engine = engine
         self.queue: queue.Queue[dict] = queue.Queue(maxsize=max(1, int(maxsize)))
         self.flush_interval = max(0.005, float(flush_interval_ms) / 1000.0)
         self.flush_batch = max(1, int(flush_batch))
-        self.block_seconds = max(0.0, float(block_ms) / 1000.0)
+        self.drop_oldest = bool(drop_oldest)
+        # Under drop_oldest, never block the request thread on the queue.
+        self.block_seconds = (
+            0.0 if self.drop_oldest else max(0.0, float(block_ms) / 1000.0)
+        )
         self.enabled = bool(enabled)
         self.stats = _SinkStats()
         self._stop = threading.Event()
         self._worker: threading.Thread | None = None
         self._lock = threading.Lock()
+        self._drop_log_next = 0.0
 
     # ------------------------------------------------------------------ public
     def start(self) -> None:
@@ -112,27 +119,60 @@ class AsyncAuditSink:
             self._worker.join(timeout=timeout)
         self._worker = None
 
+    def queue_depth(self) -> int:
+        """Approximate pending events (for health checks)."""
+        try:
+            return self.queue.qsize()
+        except Exception:  # noqa: BLE001
+            return -1
+
+    def _maybe_log_drop_oldest(self) -> None:
+        now = time.monotonic()
+        if now < self._drop_log_next:
+            return
+        self._drop_log_next = now + 30.0
+        log.warning(
+            "audit: drop-oldest mode discarded %d events total (queue max=%d)",
+            self.stats.dropped_oldest,
+            self.queue.maxsize,
+        )
+
     def enqueue(self, event: dict[str, Any]) -> bool:
         """
         Enqueue an event. Returns True if accepted, False if overflow occurred.
-        Never silently drops: overflow events still produce a SINK_OVERFLOW row
+        When ``drop_oldest`` is False: overflow events still produce a SINK_OVERFLOW row
         when possible and increment a counter.
+        When ``drop_oldest`` is True: discards the oldest queued event and retries so
+        the request thread never blocks (best-effort; may still overflow if worker dead).
         """
         if not self.enabled:
             return False
         if "occurred_at" not in event:
             event["occurred_at"] = datetime.now(timezone.utc)
-        try:
-            if self.block_seconds > 0:
-                self.queue.put(event, block=True, timeout=self.block_seconds)
-            else:
-                self.queue.put_nowait(event)
-            self.stats.enqueued += 1
-            return True
-        except queue.Full:
-            self.stats.overflowed += 1
-            self._handle_overflow(event)
-            return False
+        max_drop_retries = self.queue.maxsize + 10 if self.drop_oldest else 1
+        for _ in range(max_drop_retries):
+            try:
+                if self.block_seconds > 0:
+                    self.queue.put(event, block=True, timeout=self.block_seconds)
+                else:
+                    self.queue.put_nowait(event)
+                self.stats.enqueued += 1
+                return True
+            except queue.Full:
+                if self.drop_oldest:
+                    try:
+                        self.queue.get_nowait()
+                        self.stats.dropped_oldest += 1
+                        self._maybe_log_drop_oldest()
+                    except queue.Empty:
+                        pass
+                    continue
+                self.stats.overflowed += 1
+                self._handle_overflow(event)
+                return False
+        self.stats.overflowed += 1
+        self._handle_overflow(event)
+        return False
 
     def flush_blocking(self, timeout: float = 5.0) -> int:
         """Drain the queue synchronously (used by tests and graceful shutdown)."""

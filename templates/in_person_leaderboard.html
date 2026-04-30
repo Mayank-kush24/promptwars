@@ -13,28 +13,8 @@
     </a>
   </div>
 
-  <div class="sticky top-16 z-30 -mx-1 sm:mx-0 rounded-2xl border border-slate-200/80 bg-white/90 backdrop-blur-md px-3 sm:px-4 py-3 shadow-sm">
-    <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-      <span class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Prompt War (city · date · session)</span>
-      <div class="flex flex-wrap gap-2">
-        <a href="{{ url_for('in_person_leaderboard', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, challengeId=challenge_id) }}"
-           class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold border transition-colors no-underline
-             {% if not ip_action_center_city %}border-emerald-500 bg-emerald-50 text-emerald-900{% else %}border-slate-200 bg-white/90 text-slate-600 hover:border-emerald-200 hover:bg-emerald-50/50{% endif %}">
-          All PWs (global)
-        </a>
-        {% for pw in (in_person_action_pw_options or []) %}
-          {% set _chip_active = ip_action_center_city == pw.city and (ip_ac_pw_date_iso or '') == (pw.prompt_war_on_iso or '') and (ip_ac_session_label or '') == (pw.session_label or '') %}
-          <a href="{{ url_for('in_person_leaderboard', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, challengeId=challenge_id, ipActionCenterCity=pw.city, ipPromptWarDate=pw.prompt_war_on_iso, ipPromptWarLabel=pw.session_label) }}"
-             class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold border transition-colors no-underline max-w-[14rem] truncate
-               {% if _chip_active %}border-emerald-500 bg-emerald-50 text-emerald-900{% else %}border-slate-200 bg-white/90 text-slate-600 hover:border-emerald-200 hover:bg-emerald-50/50{% endif %}"
-             title="{{ pw.display }}">
-            <span class="truncate">{{ pw.display }}</span>
-            <span class="shrink-0 text-[10px] opacity-80 tabular-nums">({{ pw.team_count }})</span>
-          </a>
-        {% endfor %}
-      </div>
-    </div>
-  </div>
+  {% set bar_mode = 'leaderboard' %}
+  {% include 'partials/in_person_prompt_war_bar.html' %}
 
   <p class="text-sm text-slate-600">
     <span class="font-semibold text-slate-900">{% if ip_ac_session_display %}{{ ip_ac_session_display }}{% elif ip_action_center_city %}{{ ip_action_center_city }}{% else %}All PWs (global){% endif %}</span>

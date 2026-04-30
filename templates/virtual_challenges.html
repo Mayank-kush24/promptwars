@@ -45,13 +45,17 @@
       </button>
     </header>
     <div class="overflow-x-auto">
-      <table class="w-full text-left text-sm min-w-[820px]">
+      <table class="w-full text-left text-sm min-w-[980px]">
         <thead>
           <tr class="border-b border-slate-200 bg-slate-50 text-slate-500">
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Title</th>
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Window</th>
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Status</th>
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-right">Eligible / Total</th>
+            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-right max-w-[14rem]"
+                title="Distinct teams from imported submission rows (normalized team name + leader email). Prior round = chronologically earlier challenge (closes_at, then opens_at). Fresh = no row on that round; returning = row on both.">
+              Import · teams
+            </th>
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-right w-40">Actions</th>
           </tr>
         </thead>
@@ -60,7 +64,7 @@
             {% set is_editing = edit_id and ch.id == edit_id %}
             <tr class="border-b border-slate-100 align-top {% if is_editing %}bg-violet-50/40{% endif %}">
               {% if is_editing %}
-                <td colspan="5" class="py-md px-lg">
+                <td colspan="6" class="py-md px-lg">
                   <form method="post" action="{{ url_for('virtual_challenges_update', cid=ch.id, virtualEventId=virtual_event_id) }}"
                         class="grid grid-cols-1 md:grid-cols-2 gap-sm">
                     <label class="flex flex-col gap-xs md:col-span-2">
@@ -144,6 +148,21 @@
                     <span class="text-[11px] text-violet-600 group-hover:underline">View eligible →</span>
                   </a>
                 </td>
+                <td class="py-3 px-4 text-right align-top">
+                  <div class="inline-flex flex-col items-end gap-0.5 tabular-nums">
+                    <span class="font-semibold text-slate-900" title="Distinct teams (imported rows, deduped)">{{ "{:,}".format(ch.submission_distinct_teams or 0) }}</span>
+                    <span class="text-[11px] text-slate-600">
+                      <span class="text-emerald-700 font-medium">{{ "{:,}".format(ch.submission_fresh_vs_prior_challenge or 0) }}</span>
+                      <span class="text-slate-400"> fresh</span>
+                      <span class="text-slate-300 mx-0.5">·</span>
+                      <span class="text-violet-700 font-medium">{{ "{:,}".format(ch.submission_returning_from_prior_challenge or 0) }}</span>
+                      <span class="text-slate-400"> prior</span>
+                    </span>
+                    {% if ch.submission_prior_challenge_title %}
+                      <span class="text-[10px] text-slate-400 max-w-[12rem] truncate" title="Chronologically earlier round">vs {{ ch.submission_prior_challenge_title }}</span>
+                    {% endif %}
+                  </div>
+                </td>
                 <td class="py-3 px-4 text-right whitespace-nowrap">
                   <a href="{{ url_for('virtual_challenges', virtualEventId=virtual_event_id, edit=ch.id) }}#edit-{{ ch.id }}"
                      class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-slate-200 text-slate-600 hover:bg-violet-50 hover:text-violet-700 hover:border-violet-200 no-underline"
@@ -164,7 +183,7 @@
             </tr>
           {% else %}
             <tr>
-              <td colspan="5" class="py-16 text-center text-slate-500">
+              <td colspan="6" class="py-16 text-center text-slate-500">
                 No challenges yet. Use <strong class="text-slate-700">Create challenge</strong> to add one.
               </td>
             </tr>

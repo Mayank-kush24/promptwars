@@ -138,6 +138,35 @@
           .join("");
       }
     }
+
+    var rsvpBody = document.getElementById("mdcPwSessionRsvpTbody");
+    if (rsvpBody) {
+      var pr = dc.pw_session_rsvp || [];
+      if (!pr.length) {
+        rsvpBody.innerHTML =
+          '<tr><td colspan="4" class="py-lg text-center text-sm text-slate-500">No dated PW sessions in this range.</td></tr>';
+      } else {
+        rsvpBody.innerHTML = pr
+          .map(function (r) {
+            var sent = Number(r.rsvp_sent) || 0;
+            var acc = Number(r.rsvp_accepted) || 0;
+            var att = Number(r.attended) || 0;
+            var lab = String(r.session_display || "").replace(/</g, "&lt;");
+            return (
+              '<tr class="border-b border-slate-100"><td class="py-2 pr-4 font-medium">' +
+              lab +
+              '</td><td class="py-2 pl-2 tabular-nums text-right">' +
+              fmtInt(sent) +
+              '</td><td class="py-2 pl-2 tabular-nums text-right">' +
+              fmtInt(acc) +
+              '</td><td class="py-2 pl-2 tabular-nums text-right">' +
+              fmtInt(att) +
+              "</td></tr>"
+            );
+          })
+          .join("");
+      }
+    }
   }
 
   window.addEventListener("DOMContentLoaded", function () {
@@ -760,151 +789,33 @@
     var note = document.getElementById("mdcTzNote");
     if (note) note.textContent = tzNote;
 
-    /* —— Date range slider (IST registration day) —— */
-    function parseYMD(s) {
-      var p = (s || "").slice(0, 10).split("-");
-      if (p.length !== 3) return null;
-      var y = parseInt(p[0], 10);
-      var m = parseInt(p[1], 10);
-      var d = parseInt(p[2], 10);
-      if (!y || !m || !d) return null;
-      return new Date(Date.UTC(y, m - 1, d));
-    }
-
-    function isoFromIndex(dMin, idx) {
-      var t = new Date(dMin.getTime());
-      t.setUTCDate(t.getUTCDate() + idx);
-      var y = t.getUTCFullYear();
-      var mo = String(t.getUTCMonth() + 1).padStart(2, "0");
-      var da = String(t.getUTCDate()).padStart(2, "0");
-      return y + "-" + mo + "-" + da;
-    }
-
-    function daySpanInclusive(d0, d1) {
-      return Math.max(1, Math.round((d1.getTime() - d0.getTime()) / 86400000) + 1);
-    }
-
-    function indexFromIso(dMin, iso) {
-      var t = parseYMD(iso);
-      if (!t) return 0;
-      return Math.max(0, Math.round((t.getTime() - dMin.getTime()) / 86400000));
-    }
-
+    /* —— Date range filter (IST registration day) ——
+       Wires the shared dropdown calendar (static/date_range_picker.js) to the
+       AJAX dashboard refresh. The picker emits `pw-date-range:apply` /
+       `pw-date-range:reset` on the host element with detail = { from, to, allRange }.
+    */
     var panel = document.getElementById("mdcDateRangePanel");
     var apiBase = (window.__PW_ROUTES__ && window.__PW_ROUTES__.mdcStatsApiUrl) || "";
     if (!panel || !apiBase) return;
 
-    var dMin = parseYMD(panel.dataset.min);
-    var dMax = parseYMD(panel.dataset.max);
-    if (!dMin || !dMax) return;
-
-    var nDays = daySpanInclusive(dMin, dMax);
-    var maxIdx = nDays - 1;
-    var loEl = document.getElementById("mdcRangeLo");
-    var hiEl = document.getElementById("mdcRangeHi");
-    var fill = document.getElementById("mdcRangeFill");
-    var dateLoEl = document.getElementById("mdcDateFrom");
-    var dateHiEl = document.getElementById("mdcDateTo");
     var hint = document.getElementById("mdcRangeFilterHint");
-    var loading = document.getElementById("mdcRangeLoading");
     var resetBtn = document.getElementById("mdcDateRangeReset");
-    var suppressDateEvents = false;
+    var pickerHost = document.getElementById("mdcDateRangePicker");
 
-    function clampIsoToBounds(iso) {
-      var mn = panel.dataset.min || "";
-      var mx = panel.dataset.max || "";
-      if (!iso) return mn;
-      if (mn && iso < mn) return mn;
-      if (mx && iso > mx) return mx;
-      return iso.slice(0, 10);
-    }
-
-    loEl.min = 0;
-    loEl.max = String(maxIdx);
-    hiEl.min = 0;
-    hiEl.max = String(maxIdx);
-
-    var lo = 0;
-    var hi = maxIdx;
-    if (dc.mdc_filter_by_registration_date && dc.mdc_date_from && dc.mdc_date_to) {
-      lo = Math.min(maxIdx, indexFromIso(dMin, dc.mdc_date_from));
-      hi = Math.min(maxIdx, Math.max(lo, indexFromIso(dMin, dc.mdc_date_to)));
-    }
-
-    function syncInputs() {
-      loEl.value = String(lo);
-      hiEl.value = String(hi);
-    }
-
-    function syncDatePickers() {
-      if (!dateLoEl || !dateHiEl) return;
-      suppressDateEvents = true;
-      dateLoEl.value = isoFromIndex(dMin, lo);
-      dateHiEl.value = isoFromIndex(dMin, hi);
-      suppressDateEvents = false;
-    }
-
-    function updateFill() {
-      if (!fill) return;
-      if (maxIdx <= 0) {
-        fill.style.left = "0%";
-        fill.style.width = "100%";
-        return;
+    function setLoading(on) {
+      if (pickerHost) {
+        if (on) pickerHost.classList.add("is-loading");
+        else pickerHost.classList.remove("is-loading");
       }
-      var pctL = (lo / maxIdx) * 100;
-      var pctR = (hi / maxIdx) * 100;
-      fill.style.left = pctL + "%";
-      fill.style.width = Math.max(0, pctR - pctL) + "%";
     }
 
-    function setLabels() {
-      var a = isoFromIndex(dMin, lo);
-      var b = isoFromIndex(dMin, hi);
-      var msg = "";
-      if (lo === 0 && hi === maxIdx) {
-        msg = "All dates (IST).";
-      } else {
-        msg = a + " – " + b + " (IST).";
-      }
+    function setLabels(fromIso, toIso, active) {
+      var msg = active && fromIso && toIso
+        ? fromIso + " – " + toIso + " (IST)."
+        : "All dates (IST).";
       if (hint) hint.textContent = msg;
       if (panel) panel.title = msg;
     }
-
-    function applyPayloadToRangeControls(payload) {
-      if (payload.mdc_filter_by_registration_date && payload.mdc_date_from && payload.mdc_date_to) {
-        lo = Math.min(maxIdx, Math.max(0, indexFromIso(dMin, payload.mdc_date_from)));
-        hi = Math.min(maxIdx, Math.max(lo, indexFromIso(dMin, payload.mdc_date_to)));
-      } else {
-        lo = 0;
-        hi = maxIdx;
-      }
-      syncInputs();
-      syncDatePickers();
-      updateFill();
-      setLabels();
-    }
-
-    function onDatePickerChange() {
-      if (suppressDateEvents) return;
-      if (!dateLoEl || !dateHiEl) return;
-      var a = clampIsoToBounds(dateLoEl.value);
-      var b = clampIsoToBounds(dateHiEl.value);
-      if (!a || !b) return;
-      if (a > b) {
-        b = a;
-        suppressDateEvents = true;
-        dateHiEl.value = b;
-        suppressDateEvents = false;
-      }
-      lo = Math.min(maxIdx, Math.max(0, indexFromIso(dMin, a)));
-      hi = Math.min(maxIdx, Math.max(lo, indexFromIso(dMin, b)));
-      syncInputs();
-      updateFill();
-      setLabels();
-      scheduleFetch();
-    }
-
-    var debounceTimer = null;
 
     function replaceUrlParams(fromIso, toIso, active) {
       try {
@@ -921,7 +832,7 @@
     }
 
     function fetchRange(fromIso, toIso, active) {
-      if (loading) loading.classList.remove("hidden");
+      setLoading(true);
       var url = apiBase;
       if (active) {
         url += (url.indexOf("?") >= 0 ? "&" : "?") + "mdc_date_from=" + encodeURIComponent(fromIso) + "&mdc_date_to=" + encodeURIComponent(toIso);
@@ -934,78 +845,44 @@
         .then(function (payload) {
           if (payload.error) throw new Error(payload.error);
           buildDashboard(payload);
-          replaceUrlParams(fromIso, toIso, active);
-          applyPayloadToRangeControls(payload);
+          var pActive = !!(payload.mdc_filter_by_registration_date && payload.mdc_date_from && payload.mdc_date_to);
+          var pFrom = pActive ? payload.mdc_date_from : "";
+          var pTo = pActive ? payload.mdc_date_to : "";
+          replaceUrlParams(pFrom, pTo, pActive);
+          setLabels(pFrom, pTo, pActive);
+          if (pickerHost && pickerHost.__pwDrp && typeof pickerHost.__pwDrp.setRange === "function") {
+            pickerHost.__pwDrp.setRange(pFrom, pTo);
+          }
         })
         .catch(function (err) {
           if (hint) hint.textContent = "Stats failed: " + (err && err.message ? err.message : String(err));
         })
         .finally(function () {
-          if (loading) loading.classList.add("hidden");
+          setLoading(false);
         });
     }
 
-    function scheduleFetch() {
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(function () {
-        debounceTimer = null;
-        var full = lo === 0 && hi === maxIdx;
-        if (full) {
+    if (pickerHost) {
+      pickerHost.addEventListener("pw-date-range:apply", function (ev) {
+        var d = (ev && ev.detail) || {};
+        if (d.allRange || !d.from || !d.to) {
           fetchRange("", "", false);
         } else {
-          fetchRange(isoFromIndex(dMin, lo), isoFromIndex(dMin, hi), true);
+          fetchRange(d.from, d.to, true);
         }
-      }, 320);
+      });
     }
-
-    function onLoInput() {
-      lo = Math.max(0, Math.min(maxIdx, parseInt(loEl.value, 10) || 0));
-      hi = Math.max(0, Math.min(maxIdx, parseInt(hiEl.value, 10) || 0));
-      if (lo > hi) {
-        hi = lo;
-        hiEl.value = String(hi);
-      }
-      syncInputs();
-      syncDatePickers();
-      updateFill();
-      setLabels();
-      scheduleFetch();
-    }
-
-    function onHiInput() {
-      lo = Math.max(0, Math.min(maxIdx, parseInt(loEl.value, 10) || 0));
-      hi = Math.max(0, Math.min(maxIdx, parseInt(hiEl.value, 10) || 0));
-      if (hi < lo) {
-        lo = hi;
-        loEl.value = String(lo);
-      }
-      syncInputs();
-      syncDatePickers();
-      updateFill();
-      setLabels();
-      scheduleFetch();
-    }
-
-    loEl.addEventListener("input", onLoInput);
-    hiEl.addEventListener("input", onHiInput);
-    if (dateLoEl) dateLoEl.addEventListener("change", onDatePickerChange);
-    if (dateHiEl) dateHiEl.addEventListener("change", onDatePickerChange);
 
     if (resetBtn) {
       resetBtn.addEventListener("click", function () {
-        lo = 0;
-        hi = maxIdx;
-        syncInputs();
-        syncDatePickers();
-        updateFill();
-        setLabels();
+        if (pickerHost && pickerHost.__pwDrp && typeof pickerHost.__pwDrp.setRange === "function") {
+          pickerHost.__pwDrp.setRange("", "");
+        }
         fetchRange("", "", false);
       });
     }
 
-    syncInputs();
-    syncDatePickers();
-    updateFill();
-    setLabels();
+    var initActive = !!(dc.mdc_filter_by_registration_date && dc.mdc_date_from && dc.mdc_date_to);
+    setLabels(dc.mdc_date_from || "", dc.mdc_date_to || "", initActive);
   });
 })();

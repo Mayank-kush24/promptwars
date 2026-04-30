@@ -64,6 +64,26 @@ MDC_PAGE_STUB: dict = {
     "hourly_counts": [0, 0, 0, 0, 0, 0, 1, 2, 4, 8, 6, 3, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     "state_distribution": [{"name": "Maharashtra", "value": 20}, {"name": "Karnataka", "value": 12}],
     "city_pivot": [{"city": "Mumbai", "count": 18}, {"city": "Delhi", "count": 12}],
+    "pw_session_rsvp": [
+        {
+            "session_display": "Mumbai · 28 Mar 2026",
+            "city": "Mumbai",
+            "prompt_war_on": "2026-03-28",
+            "session_label": "",
+            "rsvp_sent": 0,
+            "rsvp_accepted": 0,
+            "attended": 0,
+        },
+        {
+            "session_display": "Delhi · 28 Mar 2026",
+            "city": "Delhi",
+            "prompt_war_on": "2026-03-28",
+            "session_label": "",
+            "rsvp_sent": 0,
+            "rsvp_accepted": 0,
+            "attended": 0,
+        },
+    ],
     "gender_breakdown": [{"gender": "Male", "count": 25}, {"gender": "Female", "count": 17}],
     "top_occupations": [{"occupation": "Student", "count": 10}, {"occupation": "Professional", "count": 8}],
     "chart_date_min": "2026-04-20",
@@ -226,6 +246,7 @@ def virtual_stub(monkeypatch, app_mod):
             d["with_attendance_city"] = 0
             d["attendance_cities"] = []
             d["skip_attendance_city"] = True
+            d["pw_session_rsvp"] = []
         else:
             d["skip_attendance_city"] = False
         return d

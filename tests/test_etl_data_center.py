@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from io import BytesIO
 from zoneinfo import ZoneInfo
 
@@ -26,6 +27,8 @@ def test_parse_csv_maps_headers_and_email_pk():
     assert rows[0]["email"] == "a@example.com"
     assert rows[0]["full_name"] == "Ada Lovelace"
     assert rows[0]["attendance_city"] == "Mumbai"
+    assert rows[0]["prompt_war_on"] == etl_data_center._LEGACY_PW_DATE
+    assert rows[0]["session_label"] == ""
     assert rows[0]["form_timestamp"] is not None
     assert rows[0]["form_timestamp"].tzinfo is not None
 
@@ -64,9 +67,24 @@ def test_parse_csv_dedupes_by_email_last_wins():
         b"c@example.com,Second\n"
     )
     rows, stats = etl_data_center.parse_main_data_center_file(buf, "x.csv")
-    assert stats["duplicate_emails_collapsed"] == 1
+    assert stats["duplicate_registration_keys_collapsed"] == 1
     assert len(rows) == 1
     assert rows[0]["full_name"] == "Second"
+
+
+def test_parse_csv_same_email_two_pw_sessions_keeps_both():
+    buf = BytesIO(
+        (
+            "Email,Full Name,Prompt War Date\n"
+            "c@example.com,First,2026-03-28\n"
+            "c@example.com,Second,2026-05-04\n"
+        ).encode("utf-8")
+    )
+    rows, stats = etl_data_center.parse_main_data_center_file(buf, "x.csv")
+    assert stats["duplicate_registration_keys_collapsed"] == 0
+    assert len(rows) == 2
+    assert {r["full_name"] for r in rows} == {"First", "Second"}
+    assert {r["prompt_war_on"] for r in rows} == {date(2026, 3, 28), date(2026, 5, 4)}
 
 
 def test_parse_xlsx_roundtrip():

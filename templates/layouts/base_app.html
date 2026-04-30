@@ -4,6 +4,8 @@
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>{% block title %}PromptWars{% endblock %}</title>
+<link rel="icon" href="{{ url_for('favicon') }}" type="image/png" sizes="any"/>
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='favicon.png') }}"/>
 {% include "partials/ui_head.html" %}
 {% block extra_head %}{% endblock %}
 </head>

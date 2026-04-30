@@ -21,6 +21,7 @@ GUC-sync statement that we ourselves issued.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from typing import Any
@@ -38,6 +39,12 @@ _INSTRUMENTED_FLAG = "_pw_audit_instrumented"
 _GUC_SYNC_MARKER = "/* pw_audit_set_guc */"
 
 _KIND_RE = re.compile(r"^\s*(--[^\n]*\n|/\*.*?\*/\s*)*\s*([A-Za-z]+)", re.DOTALL)
+
+
+def _audit_sql_selects_enabled() -> bool:
+    """When False (default), skip app-layer audit for SELECT/TXN — huge read-path savings."""
+    raw = os.environ.get("AUDIT_SQL_SELECTS", "")
+    return raw.strip().lower() in {"1", "true", "yes", "on", "y"}
 
 
 def _detect_sql_kind(stmt: str) -> str:
@@ -133,6 +140,8 @@ def install_engine_listeners(engine: Engine, sink: AsyncAuditSink) -> None:
             t0 = getattr(context, "_pw_audit_t0", None) if context is not None else None
             latency_ms = (time.perf_counter() - t0) * 1000.0 if t0 else None
             kind = _detect_sql_kind(statement or "")
+            if not _audit_sql_selects_enabled() and kind in ("SELECT", "TXN"):
+                return
             ctx = current_audit_context()
             try:
                 rc = cursor.rowcount

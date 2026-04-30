@@ -349,6 +349,100 @@
     );
   }
 
+  function formatAuditChangesJson(ch) {
+    if (!ch || typeof ch !== "object") return "";
+    var raw;
+    try {
+      raw = JSON.stringify(ch, null, 2);
+    } catch (e) {
+      return "";
+    }
+    var truncated = raw.length > 12000;
+    return (
+      "<pre class=\"mt-1 p-2 bg-slate-50 border border-slate-100 rounded text-[11px] overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap\">" +
+      esc(truncated ? raw.slice(0, 12000) : raw) +
+      (truncated ? "\n…" : "") +
+      "</pre>"
+    );
+  }
+
+  function renderAuditLogSection(data) {
+    var al = data.audit_log;
+    if (!al) return "";
+    if (!al.available) {
+      return (
+        "<section class=\"mb-5 border-t border-slate-200 pt-4\">" +
+        "<h3 class=\"text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2\">Activity log</h3>" +
+        "<p class=\"text-xs text-slate-500\">" + esc(al.message || "Audit history is not available.") + "</p>" +
+        "</section>"
+      );
+    }
+    var note = al.message ? "<p class=\"text-xs text-amber-800 mb-2\">" + esc(al.message) + "</p>" : "";
+    var rows = al.rows || [];
+    if (!rows.length) {
+      return (
+        "<section class=\"mb-5 border-t border-slate-200 pt-4\">" +
+        "<h3 class=\"text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2\">Activity log</h3>" +
+        note +
+        "<p class=\"text-xs text-slate-500\">No audit history for this row yet (for example, created before audit was enabled or bulk-loaded without row-level triggers).</p>" +
+        "</section>"
+      );
+    }
+    var timeline = rows.map(function (r) {
+      var badge = r.kind === "event" ? "VIEW" : (r.op || "—");
+      var badgeClass = r.kind === "event" ? "bg-violet-100 text-violet-900" : "bg-slate-100 text-slate-800";
+      var changesHtml =
+        r.kind === "data" && r.changes
+          ? formatAuditChangesJson(r.changes)
+          : r.kind === "event" && r.extra
+            ? formatAuditChangesJson(r.extra)
+            : "";
+      var cols =
+        r.changed_columns && r.changed_columns.length
+          ? "<p class=\"text-[11px] text-slate-500 mt-0.5\">Columns: " + esc(r.changed_columns.join(", ")) + "</p>"
+          : "";
+      var who = [r.principal, r.principal_email].filter(Boolean).join(" · ") || "—";
+      var reqShort = r.request_id ? String(r.request_id).slice(0, 14) : "";
+      return (
+        "<li class=\"relative pl-6 pb-4 border-l border-slate-200 last:border-l-0 last:pb-0\">" +
+        "<span class=\"absolute left-0 top-1.5 w-2 h-2 rounded-full bg-violet-500 -translate-x-[5px]\" aria-hidden=\"true\"></span>" +
+        "<div class=\"flex flex-wrap items-baseline gap-x-2 gap-y-0.5\">" +
+        "<span class=\"text-xs font-semibold tabular-nums text-slate-900\">" +
+        esc(r.occurred_at_fmt || r.occurred_at || "") +
+        "</span>" +
+        "<span class=\"text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded " +
+        badgeClass +
+        "\">" +
+        esc(badge) +
+        "</span></div>" +
+        "<p class=\"text-sm text-slate-800 mt-0.5\">" +
+        esc(r.summary || "") +
+        "</p>" +
+        cols +
+        "<p class=\"text-[11px] text-slate-500 mt-1\">" +
+        esc(who) +
+        (reqShort ? " · req " + esc(reqShort) : "") +
+        "</p>" +
+        (r.new_row_columns && r.new_row_columns.length
+          ? "<p class=\"text-[10px] text-slate-500 mt-1\">Inserted fields (sample): " +
+            esc(r.new_row_columns.join(", ")) +
+            "</p>"
+          : "") +
+        changesHtml +
+        "</li>"
+      );
+    }).join("");
+    return (
+      "<section class=\"mb-5 border-t border-slate-200 pt-4\">" +
+      "<h3 class=\"text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2\">Activity log</h3>" +
+      "<p class=\"text-[10px] text-slate-500 mb-3\">Row-level INSERT/UPDATE/DELETE from the Master Audit Log, plus detail views. Requires <code class=\"rounded bg-slate-100 px-1\">database/audit.sql</code> on the database.</p>" +
+      note +
+      "<ol class=\"list-none m-0 p-0\">" +
+      timeline +
+      "</ol></section>"
+    );
+  }
+
   function openModal() {
     overlay.classList.add("is-open");
     overlay.setAttribute("aria-hidden", "false");
@@ -366,10 +460,52 @@
     errEl.textContent = "";
   }
 
+  function renderParticipatedChallengesSection(data) {
+    var items = data.participated_challenges;
+    var err = data.participated_challenges_error;
+    var body = "";
+    if (err) {
+      body = "<p class=\"text-xs text-amber-800\">" + esc(String(err)) + "</p>";
+    } else if (!items || !items.length) {
+      body =
+        "<p class=\"text-sm text-slate-600\">No challenge submission rows linked to this registration.</p>";
+    } else {
+      body =
+        "<ul class=\"list-none m-0 p-0 space-y-1.5\">" +
+        items
+          .map(function (ch) {
+            var st = ch.status ? " <span class=\"text-slate-500\">(" + esc(ch.status) + ")</span>" : "";
+            return (
+              "<li class=\"text-sm text-slate-800\"><span class=\"font-medium\">" +
+              esc(ch.title || "—") +
+              "</span>" +
+              st +
+              "</li>"
+            );
+          })
+          .join("") +
+        "</ul>";
+    }
+    return (
+      "<section class=\"mb-5 last:mb-0\">" +
+      "<h3 class=\"text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2\">Arena challenges (submissions)</h3>" +
+      body +
+      "</section>"
+    );
+  }
+
   function renderDetail(data) {
-    var skip = { email_normalized: true, error: true };
+    var skip = {
+      email_normalized: true,
+      error: true,
+      audit_log: true,
+      participated_challenges: true,
+      participated_challenges_error: true,
+    };
     var used = {};
     var parts = [];
+
+    parts.push(renderParticipatedChallengesSection(data));
 
     DETAIL_GROUPS.forEach(function (g) {
       var rows = [];
@@ -390,6 +526,8 @@
         "</section>"
       );
     });
+
+    parts.push(renderAuditLogSection(data));
 
     var otherKeys = Object.keys(data)
       .filter(function (k) {

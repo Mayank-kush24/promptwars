@@ -44,11 +44,22 @@
             {% endfor %}
           </select>
         </label>
+        <label class="flex flex-col gap-xs min-w-[140px] max-w-[200px]">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">PW date</span>
+          <input type="date" name="mdc_pw_on" value="{{ users.mdc_pw_on }}"
+                 class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-400/50 text-sm" />
+        </label>
+        <label class="flex flex-col gap-xs min-w-[160px] max-w-[220px]">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">PW session label</span>
+          <input type="text" name="mdc_session_label" value="{{ users.mdc_session_label }}"
+                 placeholder="Optional"
+                 class="px-3 py-2 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-400/50 text-sm" />
+        </label>
       </div>
       <div class="flex flex-wrap gap-2 items-center">
         <input type="hidden" name="per_page" value="{{ users.per_page }}" />
         <button type="submit" class="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">Apply filters</button>
-        {% if users.search or users.attendance_city or users.advanced_active %}
+        {% if users.search or users.attendance_city or users.mdc_pw_on or users.mdc_session_label or users.advanced_active %}
           <a href="{{ url_for('in_person_users', per_page=users.per_page) }}" class="inline-flex items-center px-4 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">Clear</a>
         {% endif %}
         <a href="{{ url_for('in_person_users_export_csv') }}{% if users.export_query %}?{{ users.export_query }}{% endif %}"
@@ -93,13 +104,14 @@
 
   <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
     <div class="overflow-x-auto">
-      <table class="w-full text-left text-sm min-w-[900px]">
+      <table class="w-full text-left text-sm min-w-[1020px]">
         <thead>
           <tr class="border-b border-slate-200 bg-slate-50 text-slate-500">
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Name</th>
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Email</th>
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Location</th>
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Promptathon city</th>
+            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">PW session</th>
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Occupation</th>
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Designation</th>
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-right tabular-nums">Yrs exp.</th>
@@ -133,6 +145,9 @@
               </td>
               <td class="py-3 px-4 max-w-[140px]">
                 <span class="truncate block" title="{{ row.attendance_city or '—' }}">{{ row.attendance_city or '—' }}</span>
+              </td>
+              <td class="py-3 px-4 max-w-[220px]">
+                <span class="truncate block text-slate-700 text-xs" title="{{ row.pw_session_display or '—' }}">{{ row.pw_session_display or '—' }}</span>
               </td>
               <td class="py-3 px-4 max-w-[140px]">
                 <span class="truncate block" title="{{ row.occupation or '—' }}">{{ row.occupation or '—' }}</span>
@@ -334,7 +349,7 @@
       ],
     },
     { title: "Marketing (UTM)", keys: ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"] },
-    { title: "Promptathon", keys: ["attendance_city"] },
+    { title: "Promptathon", keys: ["attendance_city", "pw_session_display", "prompt_war_on_iso", "session_label"] },
     { title: "Social & links", keys: ["github_url", "linkedin_url"] },
     { title: "Record", keys: ["id", "event_id", "created_at", "updated_at"] },
   ];
@@ -347,6 +362,100 @@
       "</th><td class=\"py-2 px-3 text-slate-800 break-words\">" +
       linkifyCellValue(v) +
       "</td></tr>"
+    );
+  }
+
+  function formatAuditChangesJson(ch) {
+    if (!ch || typeof ch !== "object") return "";
+    var raw;
+    try {
+      raw = JSON.stringify(ch, null, 2);
+    } catch (e) {
+      return "";
+    }
+    var truncated = raw.length > 12000;
+    return (
+      "<pre class=\"mt-1 p-2 bg-slate-50 border border-slate-100 rounded text-[11px] overflow-x-auto max-h-48 overflow-y-auto whitespace-pre-wrap\">" +
+      esc(truncated ? raw.slice(0, 12000) : raw) +
+      (truncated ? "\n…" : "") +
+      "</pre>"
+    );
+  }
+
+  function renderAuditLogSection(data) {
+    var al = data.audit_log;
+    if (!al) return "";
+    if (!al.available) {
+      return (
+        "<section class=\"mb-5 border-t border-slate-200 pt-4\">" +
+        "<h3 class=\"text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2\">Activity log</h3>" +
+        "<p class=\"text-xs text-slate-500\">" + esc(al.message || "Audit history is not available.") + "</p>" +
+        "</section>"
+      );
+    }
+    var note = al.message ? "<p class=\"text-xs text-amber-800 mb-2\">" + esc(al.message) + "</p>" : "";
+    var rows = al.rows || [];
+    if (!rows.length) {
+      return (
+        "<section class=\"mb-5 border-t border-slate-200 pt-4\">" +
+        "<h3 class=\"text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2\">Activity log</h3>" +
+        note +
+        "<p class=\"text-xs text-slate-500\">No audit history for this row yet (for example, created before audit was enabled or bulk-loaded without row-level triggers).</p>" +
+        "</section>"
+      );
+    }
+    var timeline = rows.map(function (r) {
+      var badge = r.kind === "event" ? "VIEW" : (r.op || "—");
+      var badgeClass = r.kind === "event" ? "bg-sky-100 text-sky-900" : "bg-slate-100 text-slate-800";
+      var changesHtml =
+        r.kind === "data" && r.changes
+          ? formatAuditChangesJson(r.changes)
+          : r.kind === "event" && r.extra
+            ? formatAuditChangesJson(r.extra)
+            : "";
+      var cols =
+        r.changed_columns && r.changed_columns.length
+          ? "<p class=\"text-[11px] text-slate-500 mt-0.5\">Columns: " + esc(r.changed_columns.join(", ")) + "</p>"
+          : "";
+      var who = [r.principal, r.principal_email].filter(Boolean).join(" · ") || "—";
+      var reqShort = r.request_id ? String(r.request_id).slice(0, 14) : "";
+      return (
+        "<li class=\"relative pl-6 pb-4 border-l border-slate-200 last:border-l-0 last:pb-0\">" +
+        "<span class=\"absolute left-0 top-1.5 w-2 h-2 rounded-full bg-emerald-500 -translate-x-[5px]\" aria-hidden=\"true\"></span>" +
+        "<div class=\"flex flex-wrap items-baseline gap-x-2 gap-y-0.5\">" +
+        "<span class=\"text-xs font-semibold tabular-nums text-slate-900\">" +
+        esc(r.occurred_at_fmt || r.occurred_at || "") +
+        "</span>" +
+        "<span class=\"text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded " +
+        badgeClass +
+        "\">" +
+        esc(badge) +
+        "</span></div>" +
+        "<p class=\"text-sm text-slate-800 mt-0.5\">" +
+        esc(r.summary || "") +
+        "</p>" +
+        cols +
+        "<p class=\"text-[11px] text-slate-500 mt-1\">" +
+        esc(who) +
+        (reqShort ? " · req " + esc(reqShort) : "") +
+        "</p>" +
+        (r.new_row_columns && r.new_row_columns.length
+          ? "<p class=\"text-[10px] text-slate-500 mt-1\">Inserted fields (sample): " +
+            esc(r.new_row_columns.join(", ")) +
+            "</p>"
+          : "") +
+        changesHtml +
+        "</li>"
+      );
+    }).join("");
+    return (
+      "<section class=\"mb-5 border-t border-slate-200 pt-4\">" +
+      "<h3 class=\"text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2\">Activity log</h3>" +
+      "<p class=\"text-[10px] text-slate-500 mb-3\">Row-level INSERT/UPDATE/DELETE from the Master Audit Log, plus detail views. Requires <code class=\"rounded bg-slate-100 px-1\">database/audit.sql</code> on the database.</p>" +
+      note +
+      "<ol class=\"list-none m-0 p-0\">" +
+      timeline +
+      "</ol></section>"
     );
   }
 
@@ -367,10 +476,56 @@
     errEl.textContent = "";
   }
 
+  function renderParticipatedPwSessionsSection(data) {
+    var items = data.participated_pw_sessions;
+    var err = data.participated_pw_sessions_error;
+    var body = "";
+    if (err) {
+      body = "<p class=\"text-xs text-amber-800\">" + esc(String(err)) + "</p>";
+    } else if (!items || !items.length) {
+      body = "<p class=\"text-sm text-slate-600\">No other sessions found for this email.</p>";
+    } else {
+      body =
+        "<ul class=\"list-none m-0 p-0 space-y-1.5\">" +
+        items
+          .map(function (s) {
+            var cur = s.is_current
+              ? " <span class=\"text-[10px] font-semibold text-emerald-700\">(this row)</span>"
+              : "";
+            return (
+              "<li class=\"text-sm text-slate-800\"><span class=\"font-medium\">" +
+              esc(s.pw_session_display || "—") +
+              "</span>" +
+              cur +
+              "</li>"
+            );
+          })
+          .join("") +
+        "</ul>";
+    }
+    return (
+      "<section class=\"mb-5 last:mb-0\">" +
+      "<h3 class=\"text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2\">Prompt War sessions (registrations)</h3>" +
+      body +
+      "</section>"
+    );
+  }
+
   function renderDetail(data) {
-    var skip = { email_normalized: true, error: true, team_submissions: true, team_submissions_error: true };
+    var skip = {
+      email_normalized: true,
+      error: true,
+      team_submissions: true,
+      team_submissions_error: true,
+      audit_log: true,
+      prompt_war_on: true,
+      participated_pw_sessions: true,
+      participated_pw_sessions_error: true,
+    };
     var used = {};
     var parts = [];
+
+    parts.push(renderParticipatedPwSessionsSection(data));
 
     DETAIL_GROUPS.forEach(function (g) {
       var rows = [];
@@ -427,6 +582,8 @@
           "</tbody></table></div></section>"
       );
     }
+
+    parts.push(renderAuditLogSection(data));
 
     var otherKeys = Object.keys(data)
       .filter(function (k) {

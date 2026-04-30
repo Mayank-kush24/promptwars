@@ -1,0 +1,55 @@
+{# PromptWars shared date range picker.
+
+   Renders a single host element which the shared `static/date_range_picker.js`
+   widget enhances into a dropdown calendar (matches the design reference).
+
+   Caller variables (all optional unless noted):
+     drp_id            unique id for the host element                                 (recommended)
+     drp_from_name     name of the hidden "from" input (so it submits with the form)  (recommended)
+     drp_to_name       name of the hidden "to"   input
+     drp_min           ISO bound for earliest selectable date / datetime
+     drp_max           ISO bound for latest   selectable date / datetime
+     drp_from          initial "from" value (ISO)
+     drp_to            initial "to"   value (ISO)
+     drp_label         small uppercase label rendered inside the trigger (e.g. "Registration date")
+     drp_placeholder   trigger text when no range selected (default "Pick a date range")
+     drp_accent        sky | violet | emerald | slate | rose                          (default sky)
+     drp_size          sm | md                                                        (default sm)
+     drp_mode          date | datetime                                                (default date)
+     drp_show_presets  truthy → render quick-range chips inside the popover           (default true)
+     drp_show_reset    truthy → render an "All" reset chip on the trigger             (default false)
+     drp_extra_class   extra Tailwind classes on the host wrapper
+     drp_emit_only     truthy → don't render hidden inputs (consumer wires events)    (default false)
+#}
+{% set _drp_id = drp_id or ('pwDrp' ~ (range(100000) | random)) %}
+{% set _drp_accent = drp_accent or 'sky' %}
+{% set _drp_size = drp_size or 'sm' %}
+{% set _drp_mode = drp_mode or 'date' %}
+{% set _drp_label = drp_label or '' %}
+{% set _drp_placeholder = drp_placeholder or 'Pick a date range' %}
+{% set _drp_presets = '1' if (drp_show_presets is not defined or drp_show_presets) else '0' %}
+{% set _drp_show_reset = '1' if drp_show_reset else '0' %}
+{% set _drp_from_name = drp_from_name or '' %}
+{% set _drp_to_name = drp_to_name or '' %}
+{% set _drp_from = drp_from or '' %}
+{% set _drp_to = drp_to or '' %}
+{% set _drp_min = drp_min or '' %}
+{% set _drp_max = drp_max or '' %}
+<div
+  id="{{ _drp_id }}"
+  class="pw-drp {{ drp_extra_class or '' }}"
+  data-pw-date-range
+  data-pw-drp-accent="{{ _drp_accent }}"
+  data-pw-drp-size="{{ _drp_size }}"
+  data-pw-drp-mode="{{ _drp_mode }}"
+  data-pw-drp-label="{{ _drp_label }}"
+  data-pw-drp-placeholder="{{ _drp_placeholder }}"
+  data-pw-drp-presets="{{ _drp_presets }}"
+  data-pw-drp-show-reset="{{ _drp_show_reset }}"
+  {% if _drp_from_name and not drp_emit_only %}data-pw-drp-from-name="{{ _drp_from_name }}"{% endif %}
+  {% if _drp_to_name and not drp_emit_only %}data-pw-drp-to-name="{{ _drp_to_name }}"{% endif %}
+  {% if _drp_from %}data-pw-drp-from="{{ _drp_from }}"{% endif %}
+  {% if _drp_to %}data-pw-drp-to="{{ _drp_to }}"{% endif %}
+  {% if _drp_min %}data-pw-drp-min="{{ _drp_min }}"{% endif %}
+  {% if _drp_max %}data-pw-drp-max="{{ _drp_max }}"{% endif %}
+></div>

@@ -27,7 +27,8 @@ function podiumSlot(entry, rank, champion) {
   if (!entry) {
     return '<div class="min-h-[128px] sm:min-h-[142px]" aria-hidden="true"></div>';
   }
-  var wm = rank === 1 ? "text-amber-200" : rank === 2 ? "text-sky-200" : "text-orange-200";
+  var wm =
+    rank === 1 ? "text-fuchsia-200" : rank === 2 ? "text-violet-200" : "text-purple-200";
   var box = champion
     ? "border-violet-300 bg-gradient-to-b from-violet-50/90 to-white shadow-lg shadow-violet-500/15 py-7 sm:py-9 min-h-[158px] sm:min-h-[178px] -mt-0.5 sm:-mt-2 z-[1]"
     : "border-slate-100/80 bg-gradient-to-b from-slate-50/40 to-white py-5 sm:py-6 min-h-[128px] sm:min-h-[142px]";
@@ -159,6 +160,17 @@ function applyLeaderboardPayload(data) {
   var total = typeof data.total === "number" ? data.total : rows.length;
   if (count) count.textContent = total + " team(s)";
   board.innerHTML = buildLeaderboardDom(rows);
+  try {
+    var sigParts = [String(total)];
+    for (var i = 0; i < Math.min(8, rows.length); i++) {
+      var r = rows[i];
+      var sc = r.total_score != null ? r.total_score : r.average_score;
+      sigParts.push(String(r.rank) + ":" + String(r.team_name || "") + ":" + String(sc));
+    }
+    board.setAttribute("data-pw-lb-sig", sigParts.join("|"));
+  } catch (_e) {
+    /* ignore */
+  }
   return true;
 }
 
@@ -299,23 +311,68 @@ window.addEventListener("DOMContentLoaded", function () {
   if (!document.getElementById("slbBoard")) return;
   if (!challengeId || virtualEventId == null) return;
 
-  var pollMs = 4000;
+  /* Base interval with per-tab jitter to reduce synchronized request bursts. */
+  var pollMs = 4000 + Math.floor(Math.random() * 1000);
   var timer = null;
+  var lastJson = null;
+  var backoffMs = pollMs;
+  var maxBackoffMs = 16000;
 
   function stopPoll() {
     if (timer != null) {
-      clearInterval(timer);
+      window.clearTimeout(timer);
       timer = null;
     }
   }
 
-  /* First paint: main-thread fetch is simplest; polls use worker when enabled. */
+  function scheduleNext(fn, delay) {
+    stopPoll();
+    timer = window.setTimeout(fn, delay);
+  }
+
+  function tick() {
+    if (document.hidden) {
+      scheduleNext(tick, 800);
+      return;
+    }
+    refreshSubmissionLeaderboard(challengeId, virtualEventId, baseUrl, workerUrl, useWorker).then(function (stillOk) {
+      if (!stillOk) return;
+      var nextDelay = backoffMs + Math.floor(Math.random() * 800);
+      try {
+        var el = document.getElementById("slbBoard");
+        var cur = el ? el.getAttribute("data-pw-lb-sig") : null;
+        if (cur && lastJson === cur) {
+          backoffMs = Math.min(maxBackoffMs, backoffMs * 2);
+        } else {
+          backoffMs = pollMs;
+        }
+        lastJson = cur || null;
+      } catch (e) {
+        backoffMs = pollMs;
+      }
+      scheduleNext(tick, nextDelay);
+    });
+  }
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) {
+      stopPoll();
+      return;
+    }
+    refreshSubmissionLeaderboardFetch(challengeId, virtualEventId, baseUrl).then(function (ok) {
+      if (ok) tick();
+    });
+  });
+
+  /* First paint: main-thread fetch; then polling with visibility + backoff. */
   refreshSubmissionLeaderboardFetch(challengeId, virtualEventId, baseUrl).then(function (ok) {
     if (!ok) return;
-    timer = window.setInterval(function () {
-      refreshSubmissionLeaderboard(challengeId, virtualEventId, baseUrl, workerUrl, useWorker).then(function (stillOk) {
-        if (!stillOk) stopPoll();
-      });
-    }, pollMs);
+    try {
+      var el0 = document.getElementById("slbBoard");
+      lastJson = el0 ? el0.getAttribute("data-pw-lb-sig") : null;
+    } catch (e2) {
+      lastJson = null;
+    }
+    scheduleNext(tick, pollMs);
   });
 });

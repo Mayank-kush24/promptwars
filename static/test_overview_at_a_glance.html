@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>PromptWars — Overview (test)</title>
+  <link rel="icon" href="/favicon.ico" type="image/png" sizes="any"/>
+  <script src="https://cdn.tailwindcss.com?plugins=forms"></script>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0&amp;display=swap"/>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&amp;display=swap"/>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Google Sans"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+            display: ['"Google Sans"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+          },
+          colors: {
+            'pw-ip': '#A3E635',
+            'pw-ip-muted': '#ecfccb',
+            'pw-v': '#A855F7',
+            'pw-v-muted': '#f3e8ff',
+          },
+        },
+      },
+    };
+  </script>
+  <style>
+    html, body { font-family: "Google Sans", ui-sans-serif, system-ui, sans-serif; }
+    body { background: #f8fafc; }
+    .material-symbols-outlined {
+      font-family: "Material Symbols Outlined";
+      font-weight: normal;
+      font-style: normal;
+      font-size: 24px;
+      line-height: 1;
+      display: inline-block;
+    }
+  </style>
+</head>
+<body class="min-h-screen text-slate-900 antialiased">
+  <header class="border-b border-slate-200 bg-white px-4 py-3 shadow-sm">
+    <p class="text-xs font-medium text-amber-800">Test page — mock data only. Mirrors main overview layout (hero, system cards, combined At a glance, leaderboards).</p>
+    <p class="text-[11px] text-slate-500 mt-1">Open: <code class="rounded bg-slate-100 px-1">/static/test_overview_at_a_glance.html</code></p>
+  </header>
+
+  <!-- Hero (same structure as main_dashboard hero) -->
+  <section class="px-4 pt-6 pb-2 sm:px-6 md:px-8">
+    <div class="mx-auto max-w-7xl overflow-hidden rounded-3xl border border-white/60 bg-gradient-to-r from-[#dbeafe] via-[#ede9fe] to-[#fce7f3] shadow-sm">
+      <div class="grid grid-cols-1 items-start gap-6 px-4 py-8 sm:px-6 lg:grid-cols-12 lg:gap-8 lg:px-8 lg:pt-10 lg:pb-6">
+        <div class="relative flex min-w-0 flex-col gap-4 lg:col-span-7">
+          <svg class="pointer-events-none absolute -left-4 -top-6 h-48 w-64 text-violet-400/25 sm:h-56 sm:w-80" viewBox="0 0 200 160" fill="currentColor" aria-hidden="true">
+            <circle cx="40" cy="30" r="3"/><circle cx="120" cy="20" r="2"/><circle cx="170" cy="55" r="2.5"/>
+            <circle cx="90" cy="70" r="2"/><circle cx="30" cy="100" r="2"/><circle cx="150" cy="110" r="3"/>
+            <circle cx="60" cy="130" r="2"/><circle cx="180" cy="140" r="2"/>
+          </svg>
+          <div class="relative z-10 flex flex-wrap items-center justify-center gap-2 sm:justify-start sm:gap-3">
+            <span class="font-display text-[clamp(2.5rem,12vw,5.5rem)] font-black leading-none text-[#fbbf24] select-none md:text-[112px]">{</span>
+            <h1 class="font-display flex min-w-0 flex-wrap items-center justify-center gap-2 text-[clamp(1.35rem,5.5vw,2.75rem)] font-black leading-none tracking-tight text-slate-900 sm:gap-3 sm:justify-start md:text-[60px]">
+              <span class="sr-only">Build with AI</span>
+              <span aria-hidden="true">Build</span>
+              <span class="inline-flex h-10 w-10 shrink-0 rotate-6 items-center justify-center rounded-2xl bg-gradient-to-br from-[#4285F4] to-[#1d4ed8] text-white shadow-md sm:h-12 sm:w-12 md:h-14 md:w-14">
+                <span class="material-symbols-outlined text-[22px] sm:text-[28px] md:text-[32px]">auto_awesome</span>
+              </span>
+              <span aria-hidden="true">with AI</span>
+            </h1>
+            <span class="font-display text-[clamp(2.5rem,12vw,5.5rem)] font-black leading-none text-[#fbbf24] select-none md:text-[112px]">}</span>
+          </div>
+          <div class="relative z-10 flex flex-wrap items-center gap-2">
+            <span class="inline-flex items-center gap-2 rounded-full border border-white/80 bg-white/70 px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm backdrop-blur">
+              <span class="relative flex h-2 w-2">
+                <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60"></span>
+                <span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
+              </span>
+              Live · 2026-04-29 12:00 IST
+            </span>
+          </div>
+        </div>
+        <div class="flex min-w-0 flex-col gap-2 lg:col-span-5 lg:pt-2">
+          <p class="font-display text-xl leading-snug text-slate-900 sm:text-2xl md:text-3xl">
+            Welcome to <span class="font-semibold text-slate-800">India's first end-to-end vibe coding challenge</span>.
+          </p>
+          <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:gap-3">
+            <span class="inline-flex cursor-default items-center justify-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white">
+              <span class="material-symbols-outlined text-[18px]">rocket_launch</span> Live arena
+            </span>
+            <span class="inline-flex cursor-default items-center justify-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-900">
+              <span class="material-symbols-outlined text-[18px]">insights</span> Funnel
+            </span>
+          </div>
+        </div>
+      </div>
+      <div class="px-4 pb-8 sm:px-6 md:px-8">
+        <div class="mx-auto w-full max-w-2xl overflow-hidden rounded-2xl border border-white/80 bg-white/85 shadow-sm backdrop-blur lg:ml-auto lg:mr-0">
+          <div class="grid grid-cols-1 divide-y divide-slate-100 sm:grid-cols-2 sm:divide-x sm:divide-y-0">
+            <div class="group flex min-w-0 items-start gap-3 p-4">
+              <span class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+                <span class="material-symbols-outlined text-[22px]">bolt</span>
+              </span>
+              <div class="min-w-0 flex-1">
+                <p class="text-xs font-bold uppercase tracking-wide text-slate-500">Live arena</p>
+                <p class="mt-0.5 text-sm font-semibold text-slate-900">1 live · Challenge 1</p>
+                <p class="mt-1 text-xs font-semibold text-blue-600">Open virtual →</p>
+              </div>
+            </div>
+            <div class="group flex min-w-0 items-start gap-3 p-4">
+              <span class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-violet-50 text-violet-600">
+                <span class="material-symbols-outlined text-[22px]">groups</span>
+              </span>
+              <div class="min-w-0 flex-1">
+                <p class="text-xs font-bold uppercase tracking-wide text-slate-500">Arena participants</p>
+                <p class="mt-0.5 text-sm font-semibold tabular-nums text-slate-900">0</p>
+                <p class="mt-1 text-xs font-semibold text-violet-700">Open arena →</p>
+              </div>
+            </div>
+            <div class="group flex min-w-0 items-start gap-3 p-4">
+              <span class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-lime-50 text-lime-700">
+                <span class="material-symbols-outlined text-[22px]">trending_up</span>
+              </span>
+              <div class="min-w-0 flex-1">
+                <p class="text-xs font-bold uppercase tracking-wide text-slate-500">In-person funnel</p>
+                <p class="mt-0.5 text-sm font-semibold text-slate-900">0 → 0 <span class="font-normal text-slate-500">(0.0%)</span></p>
+                <p class="mt-1 text-xs font-semibold text-lime-700">Open funnel →</p>
+              </div>
+            </div>
+            <div class="group flex min-w-0 items-start gap-3 p-4">
+              <span class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+                <span class="material-symbols-outlined text-[22px]">toll</span>
+              </span>
+              <div class="min-w-0 flex-1">
+                <p class="text-xs font-bold uppercase tracking-wide text-slate-500">Credits in circulation</p>
+                <p class="mt-0.5 text-sm font-semibold tabular-nums text-slate-900">0</p>
+                <p class="mt-1 text-xs font-semibold text-amber-700">Manage credits →</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <main class="mx-auto flex max-w-7xl flex-col gap-8 px-4 py-8 sm:px-6 md:px-8">
+    <div class="flex flex-col gap-2">
+      <h2 class="font-display text-3xl font-medium leading-tight tracking-tight text-slate-900 sm:text-[32px] sm:leading-10">System overview</h2>
+    </div>
+
+    <!-- Bento (4 cards like main_dashboard) -->
+    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
+      <div class="flex min-h-[140px] flex-col justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-shadow hover:shadow-md">
+        <div class="flex items-start justify-between gap-2">
+          <span class="text-[12px] font-semibold uppercase tracking-wider text-slate-500">Total PW registrations</span>
+          <span class="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+            <span class="material-symbols-outlined text-[22px]">groups</span>
+          </span>
+        </div>
+        <div class="flex flex-col">
+          <span class="font-display text-[32px] font-medium leading-tight tracking-tight text-slate-900">27,692</span>
+          <span class="mt-1 text-xs text-slate-500">In-person + virtual · +1,350 last 7 days</span>
+        </div>
+      </div>
+      <div class="flex min-h-[140px] flex-col justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-shadow hover:shadow-md">
+        <div class="flex items-start justify-between gap-2">
+          <span class="text-[12px] font-semibold uppercase tracking-wider text-lime-700">In-person PW</span>
+          <span class="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-lime-50 text-lime-600">
+            <span class="material-symbols-outlined text-[22px]">stadium</span>
+          </span>
+        </div>
+        <div class="flex flex-col">
+          <span class="font-display text-[32px] font-medium leading-tight tracking-tight text-slate-900">16,092</span>
+          <span class="mt-1 text-xs text-slate-500">+186 last 7d · top city Bengaluru</span>
+        </div>
+      </div>
+      <div class="flex min-h-[140px] flex-col justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-shadow hover:shadow-md">
+        <div class="flex items-start justify-between gap-2">
+          <span class="text-[12px] font-semibold uppercase tracking-wider text-violet-700">Virtual PW</span>
+          <span class="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-violet-50 text-violet-600">
+            <span class="material-symbols-outlined text-[22px]">stream</span>
+          </span>
+        </div>
+        <div class="flex flex-col">
+          <span class="font-display text-[32px] font-medium leading-tight tracking-tight text-slate-900">11,600</span>
+          <span class="mt-1 text-xs text-slate-500">+1,164 last 7d · top city Hyderabad</span>
+        </div>
+      </div>
+      <div class="flex min-h-[140px] flex-col justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-shadow hover:shadow-md">
+        <div class="flex items-start justify-between gap-2">
+          <span class="text-[12px] font-semibold uppercase tracking-wider text-slate-500">Credits in circulation</span>
+          <span class="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+            <span class="material-symbols-outlined text-[22px]">toll</span>
+          </span>
+        </div>
+        <div class="flex flex-col">
+          <span class="font-display text-[32px] font-medium leading-tight tracking-tight text-slate-900">0</span>
+          <span class="mt-1 text-xs text-slate-500">0 participants · 1 live</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- At a glance -->
+    <div>
+      <h3 class="font-display mb-4 text-2xl font-medium text-slate-900">At a glance</h3>
+      <div class="mx-auto w-full max-w-3xl">
+    <article class="flex min-w-0 flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm sm:p-8">
+
+      <div class="flex flex-wrap items-start justify-between gap-2 border-b border-slate-100 pb-4">
+        <div>
+          <p class="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] font-bold uppercase tracking-wider">
+            <span class="text-pw-ip">In-person</span>
+            <span class="font-normal text-slate-300">·</span>
+            <span class="text-pw-v">Virtual</span>
+          </p>
+          <h2 class="font-display mt-1 text-lg font-medium text-slate-900">Action Center · Arena &amp; imports</h2>
+        </div>
+        <div class="flex shrink-0 flex-col items-end gap-1 text-xs font-semibold">
+          <span class="text-pw-ip">Open in-person →</span>
+          <span class="text-pw-v">Open virtual →</span>
+        </div>
+      </div>
+
+      <dl class="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+        <div class="rounded-lg border border-slate-100 bg-slate-50 px-2 py-2">
+          <dt class="text-slate-500">Total registrations</dt>
+          <dd class="mt-0.5 font-semibold tabular-nums">
+            <span class="text-pw-ip">16,092</span><span class="mx-1 font-normal text-slate-400">/</span><span class="text-pw-v">11,600</span>
+          </dd>
+        </div>
+        <div class="rounded-lg border border-slate-100 bg-slate-50 px-2 py-2">
+          <dt class="text-slate-500">+7d</dt>
+          <dd class="mt-0.5 font-semibold tabular-nums">
+            <span class="text-pw-ip">186</span><span class="mx-1 font-normal text-slate-400">/</span><span class="text-pw-v">1,164</span>
+          </dd>
+        </div>
+        <div class="min-w-0 rounded-lg border border-slate-100 bg-slate-50 px-2 py-2 sm:col-span-2">
+          <dt class="text-slate-500">Top city</dt>
+          <dd class="mt-0.5 truncate font-semibold">
+            <span class="text-pw-ip">Bengaluru</span><span class="mx-1 font-normal text-slate-400">/</span><span class="text-pw-v">Hyderabad</span>
+          </dd>
+        </div>
+        <div class="min-w-0 rounded-lg border border-slate-100 bg-slate-50 px-2 py-2 sm:col-span-2">
+          <dt class="text-slate-500">Top state</dt>
+          <dd class="mt-0.5 truncate font-semibold">
+            <span class="text-pw-ip">Karnataka</span><span class="mx-1 font-normal text-slate-400">/</span><span class="text-pw-v">Maharashtra</span>
+          </dd>
+        </div>
+      </dl>
+
+      <div class="flex flex-wrap gap-2 text-xs">
+        <span class="rounded-full border border-pw-ip/60 bg-pw-ip-muted px-2.5 py-1 font-medium text-pw-ip">RSVP 0</span>
+        <span class="rounded-full border border-pw-ip/60 bg-pw-ip-muted px-2.5 py-1 font-medium text-pw-ip">Submissions 0</span>
+        <span class="rounded-full border border-pw-ip/60 bg-white px-2.5 py-1 font-medium text-pw-ip">0.0% conversion</span>
+        <span class="rounded-full border border-pw-v/60 bg-pw-v-muted px-2.5 py-1 font-medium text-pw-v">1 live</span>
+        <span class="rounded-full border border-pw-v/60 bg-pw-v-muted px-2.5 py-1 font-medium text-pw-v">0 in arena</span>
+        <span class="rounded-full border border-pw-v/60 bg-white px-2.5 py-1 font-medium text-pw-v">0 credits</span>
+      </div>
+
+      <div class="rounded-xl border border-slate-200 bg-gradient-to-br from-pw-ip-muted/90 via-white to-pw-v-muted/90 p-4">
+        <p class="mb-1 flex flex-wrap items-center gap-x-2 text-[10px] font-bold uppercase tracking-wider">
+          <span class="text-pw-ip">Main sheet scores</span>
+          <span class="font-normal text-slate-300">·</span>
+          <span class="text-pw-v">Global import scores</span>
+        </p>
+        <p class="mb-3 text-[10px] text-slate-500">
+          <span class="text-pw-ip">150 rows · 145 scored</span>
+          <span class="mx-1.5 text-slate-400">/</span>
+          <span class="text-pw-v">1,703 rows · 1,685 scored</span>
+        </p>
+        <dl class="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4 sm:gap-2">
+          <div>
+            <dt class="text-slate-600">Min score</dt>
+            <dd class="mt-0.5 font-semibold tabular-nums">
+              <span class="text-pw-ip">9.25</span><span class="mx-1 font-normal text-slate-400">/</span><span class="text-pw-v">0.5</span>
+            </dd>
+          </div>
+          <div>
+            <dt class="text-slate-600">Max score</dt>
+            <dd class="mt-0.5 font-semibold tabular-nums">
+              <span class="text-pw-ip">97.03</span><span class="mx-1 font-normal text-slate-400">/</span><span class="text-pw-v">97.11</span>
+            </dd>
+          </div>
+          <div>
+            <dt class="text-slate-600">Average</dt>
+            <dd class="mt-0.5 font-semibold tabular-nums">
+              <span class="text-pw-ip">80.089</span><span class="mx-1 font-normal text-slate-400">/</span><span class="text-pw-v">63.4442</span>
+            </dd>
+          </div>
+          <div>
+            <dt class="text-slate-600">Std dev</dt>
+            <dd class="mt-0.5 font-semibold tabular-nums">
+              <span class="text-pw-ip">18.8744</span><span class="mx-1 font-normal text-slate-400">/</span><span class="text-pw-v">24.0764</span>
+            </dd>
+          </div>
+        </dl>
+      </div>
+
+      <div class="rounded-xl border border-slate-200 bg-gradient-to-br from-pw-ip-muted/70 via-white to-pw-v-muted/70 p-4">
+        <p class="mb-1 flex flex-wrap items-center gap-x-2 text-[10px] font-bold uppercase tracking-wider">
+          <span class="text-pw-ip">Main sheet scores</span>
+          <span class="font-normal text-slate-300">·</span>
+          <span class="text-pw-v">Challenge 2 · Challenge 3</span>
+        </p>
+        <p class="mb-3 text-[10px] text-slate-500">
+          <span class="text-pw-ip">150 rows · 145 scored</span>
+          <span class="mx-1.5 text-slate-400">/</span>
+          <span class="text-pw-v">210 rows · 209 scored</span>
+        </p>
+        <dl class="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4 sm:gap-2">
+          <div>
+            <dt class="text-slate-600">Min score</dt>
+            <dd class="mt-0.5 font-semibold tabular-nums">
+              <span class="text-pw-ip">9.25</span><span class="mx-1 font-normal text-slate-400">/</span><span class="text-pw-v">9.25</span>
+            </dd>
+          </div>
+          <div>
+            <dt class="text-slate-600">Max score</dt>
+            <dd class="mt-0.5 font-semibold tabular-nums">
+              <span class="text-pw-ip">97.03</span><span class="mx-1 font-normal text-slate-400">/</span><span class="text-pw-v">96.98</span>
+            </dd>
+          </div>
+          <div>
+            <dt class="text-slate-600">Average</dt>
+            <dd class="mt-0.5 font-semibold tabular-nums">
+              <span class="text-pw-ip">80.089</span><span class="mx-1 font-normal text-slate-400">/</span><span class="text-pw-v">71.6864</span>
+            </dd>
+          </div>
+          <div>
+            <dt class="text-slate-600">Std dev</dt>
+            <dd class="mt-0.5 font-semibold tabular-nums">
+              <span class="text-pw-ip">18.8744</span><span class="mx-1 font-normal text-slate-400">/</span><span class="text-pw-v">20.7548</span>
+            </dd>
+          </div>
+        </dl>
+      </div>
+
+      <div>
+        <p class="mb-2 flex flex-wrap items-center gap-x-2 text-[10px] font-bold uppercase">
+          <span class="text-pw-ip">Global standings · top 3</span>
+          <span class="font-normal text-slate-300">·</span>
+          <span class="text-pw-v">Mean score · top 3 (all arenas)</span>
+        </p>
+        <ol class="space-y-2 text-sm">
+          <li class="flex min-w-0 items-center gap-2">
+            <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-700 tabular-nums">1</span>
+            <div class="min-w-0 flex-1 truncate">
+              <span class="font-medium text-pw-ip">Akshay R</span>
+              <span class="mx-0.5 font-semibold tabular-nums text-pw-ip">97.03</span>
+              <span class="text-slate-400">/</span>
+              <span class="font-medium text-pw-v">Nitin Patidar</span>
+              <span class="ml-0.5 font-semibold tabular-nums text-pw-v">97.11</span>
+            </div>
+          </li>
+          <li class="flex min-w-0 items-center gap-2">
+            <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-700 tabular-nums">2</span>
+            <div class="min-w-0 flex-1 truncate">
+              <span class="font-medium text-pw-ip">Nandish S</span>
+              <span class="mx-0.5 font-semibold tabular-nums text-pw-ip">96.94</span>
+              <span class="text-slate-400">/</span>
+              <span class="font-medium text-pw-v">Srinivas Reddy Yarragudi</span>
+              <span class="ml-0.5 font-semibold tabular-nums text-pw-v">97.03</span>
+            </div>
+          </li>
+          <li class="flex min-w-0 items-center gap-2">
+            <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-200 text-xs font-bold text-slate-700 tabular-nums">3</span>
+            <div class="min-w-0 flex-1 truncate">
+              <span class="font-medium text-pw-ip">Neil John</span>
+              <span class="mx-0.5 font-semibold tabular-nums text-pw-ip">96.84</span>
+              <span class="text-slate-400">/</span>
+              <span class="font-medium text-pw-v">Remon</span>
+              <span class="ml-0.5 font-semibold tabular-nums text-pw-v">97.03</span>
+            </div>
+          </li>
+        </ol>
+      </div>
+    </article>
+      </div>
+    </div>
+
+    <!-- Leaderboards (matches main_dashboard #pw-overview-leaderboards) -->
+    <div id="pw-overview-leaderboards" class="grid scroll-mt-24 grid-cols-1 gap-6 lg:grid-cols-2 lg:gap-8 md:scroll-mt-28">
+      <!-- In-person · Top 10 -->
+      <div class="flex min-w-0 flex-col rounded-2xl border border-lime-200 bg-white p-6 shadow-sm">
+        <div class="mb-4 border-b border-slate-100 pb-4">
+          <h3 class="font-display text-2xl font-medium text-slate-900">In-person · Top 10</h3>
+        </div>
+        <div class="mb-4 flex min-w-0 flex-col gap-2 rounded-xl border border-slate-200/90 bg-slate-50/50 p-3 shadow-sm ring-1 ring-inset ring-slate-200/60">
+          <label class="flex min-w-0 flex-col gap-1.5">
+            <span class="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+              <span class="material-symbols-outlined shrink-0 text-[16px] text-slate-400" aria-hidden="true">filter_alt</span>
+              Leaderboard overview
+            </span>
+            <div class="relative min-w-0">
+              <select disabled class="w-full min-w-0 cursor-not-allowed appearance-none rounded-lg border border-slate-200 bg-white py-2.5 pl-3 pr-10 text-sm font-medium text-slate-800 opacity-90 shadow-sm">
+                <option>Global (main challenge)</option>
+              </select>
+              <span class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2 text-slate-500" aria-hidden="true">
+                <span class="material-symbols-outlined text-[22px]">expand_more</span>
+              </span>
+            </div>
+          </label>
+        </div>
+        <p class="mb-4 text-xs text-slate-500">Warm-up excluded.</p>
+        <div class="mx-auto mb-4 grid w-full max-w-[22rem] grid-cols-3 items-end gap-2 sm:max-w-[26rem] sm:gap-3" aria-label="Top three teams">
+          <!-- 2nd -->
+          <div class="relative flex min-h-[128px] min-w-0 w-full flex-col items-center rounded-2xl border border-slate-100/80 bg-gradient-to-b from-slate-50/40 to-white py-5 text-center sm:min-h-[142px] sm:py-6">
+            <span class="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 select-none text-[4rem] font-black leading-none tracking-tighter text-sky-200 sm:text-[5rem]" aria-hidden="true">2</span>
+            <div class="relative mt-5 flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-sm font-bold text-white shadow-md ring-2 ring-white/80 sm:mt-6 sm:h-14 sm:w-14 sm:text-base">NS</div>
+            <p class="relative mt-2.5 w-full max-w-full truncate px-1 text-sm font-semibold text-slate-900">Nandish S</p>
+            <p class="relative max-w-full truncate px-1 text-[11px] text-slate-500">Lead · Bengaluru</p>
+            <p class="relative mt-1 text-base font-bold tabular-nums tracking-tight text-slate-900 sm:text-lg">96.94 <span class="text-xs font-semibold text-emerald-600">pts</span></p>
+          </div>
+          <!-- 1st -->
+          <div class="relative z-[1] -mt-0.5 flex min-h-[158px] min-w-0 w-full flex-col items-center rounded-2xl border border-emerald-300 bg-gradient-to-b from-emerald-50/90 to-white py-7 text-center shadow-[0_0_0_1px_rgba(34,197,94,0.35),0_16px_48px_-14px_rgba(22,163,74,0.35)] sm:-mt-2 sm:min-h-[178px] sm:py-9">
+            <span class="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 select-none text-[4rem] font-black leading-none tracking-tighter text-amber-200 sm:text-[5rem]" aria-hidden="true">1</span>
+            <div class="relative mt-5 flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-sm font-bold text-white shadow-md ring-2 ring-white/80 sm:mt-6 sm:h-14 sm:w-14 sm:text-base">AR</div>
+            <p class="relative mt-2.5 w-full max-w-full truncate px-1 text-sm font-semibold text-slate-900">Akshay R</p>
+            <p class="relative max-w-full truncate px-1 text-[11px] text-slate-500">Lead · Bengaluru</p>
+            <p class="relative mt-1 text-base font-bold tabular-nums tracking-tight text-slate-900 sm:text-lg">97.03 <span class="text-xs font-semibold text-emerald-600">pts</span></p>
+          </div>
+          <!-- 3rd -->
+          <div class="relative flex min-h-[128px] min-w-0 w-full flex-col items-center rounded-2xl border border-slate-100/80 bg-gradient-to-b from-slate-50/40 to-white py-5 text-center sm:min-h-[142px] sm:py-6">
+            <span class="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 select-none text-[4rem] font-black leading-none tracking-tighter text-orange-200 sm:text-[5rem]" aria-hidden="true">3</span>
+            <div class="relative mt-5 flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-sm font-bold text-white shadow-md ring-2 ring-white/80 sm:mt-6 sm:h-14 sm:w-14 sm:text-base">NJ</div>
+            <p class="relative mt-2.5 w-full max-w-full truncate px-1 text-sm font-semibold text-slate-900">Neil John</p>
+            <p class="relative max-w-full truncate px-1 text-[11px] text-slate-500">Lead · Mumbai</p>
+            <p class="relative mt-1 text-base font-bold tabular-nums tracking-tight text-slate-900 sm:text-lg">96.84 <span class="text-xs font-semibold text-emerald-600">pts</span></p>
+          </div>
+        </div>
+        <ol class="flex-1 space-y-2 text-sm">
+          <li class="flex min-w-0 items-center gap-2 border-b border-slate-50 pb-2">
+            <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-lime-100 text-xs font-bold text-lime-900 tabular-nums">4</span>
+            <span class="min-w-0 flex-1 truncate font-medium text-slate-900">Team Delta</span>
+            <span class="max-w-[5rem] shrink-0 truncate text-xs text-slate-500" title="Pune">Pune</span>
+            <span class="shrink-0 font-semibold tabular-nums text-lime-800">96.72</span>
+          </li>
+          <li class="flex min-w-0 items-center gap-2 border-b border-slate-50 pb-2">
+            <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-lime-100 text-xs font-bold text-lime-900 tabular-nums">5</span>
+            <span class="min-w-0 flex-1 truncate font-medium text-slate-900">Team Echo</span>
+            <span class="max-w-[5rem] shrink-0 truncate text-xs text-slate-500">Chennai</span>
+            <span class="shrink-0 font-semibold tabular-nums text-lime-800">96.55</span>
+          </li>
+          <li class="flex min-w-0 items-center gap-2 border-b border-slate-50 pb-2">
+            <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-lime-100 text-xs font-bold text-lime-900 tabular-nums">6</span>
+            <span class="min-w-0 flex-1 truncate font-medium text-slate-900">Team Foxtrot</span>
+            <span class="max-w-[5rem] shrink-0 truncate text-xs text-slate-500">Delhi</span>
+            <span class="shrink-0 font-semibold tabular-nums text-lime-800">96.41</span>
+          </li>
+          <li class="flex min-w-0 items-center gap-2 border-b border-slate-50 pb-2">
+            <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-lime-100 text-xs font-bold text-lime-900 tabular-nums">7</span>
+            <span class="min-w-0 flex-1 truncate font-medium text-slate-900">Team Golf</span>
+            <span class="max-w-[5rem] shrink-0 truncate text-xs text-slate-500">Hyderabad</span>
+            <span class="shrink-0 font-semibold tabular-nums text-lime-800">96.28</span>
+          </li>
+          <li class="flex min-w-0 items-center gap-2 border-b border-slate-50 pb-2">
+            <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-lime-100 text-xs font-bold text-lime-900 tabular-nums">8</span>
+            <span class="min-w-0 flex-1 truncate font-medium text-slate-900">Team Hotel</span>
+            <span class="max-w-[5rem] shrink-0 truncate text-xs text-slate-500">Kochi</span>
+            <span class="shrink-0 font-semibold tabular-nums text-lime-800">96.10</span>
+          </li>
+          <li class="flex min-w-0 items-center gap-2 border-b border-slate-50 pb-2">
+            <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-lime-100 text-xs font-bold text-lime-900 tabular-nums">9</span>
+            <span class="min-w-0 flex-1 truncate font-medium text-slate-900">Team India</span>
+            <span class="max-w-[5rem] shrink-0 truncate text-xs text-slate-500">Ahmedabad</span>
+            <span class="shrink-0 font-semibold tabular-nums text-lime-800">95.98</span>
+          </li>
+          <li class="flex min-w-0 items-center gap-2 pb-2">
+            <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-lime-100 text-xs font-bold text-lime-900 tabular-nums">10</span>
+            <span class="min-w-0 flex-1 truncate font-medium text-slate-900">Team Juliet</span>
+            <span class="max-w-[5rem] shrink-0 truncate text-xs text-slate-500">Jaipur</span>
+            <span class="shrink-0 font-semibold tabular-nums text-lime-800">95.85</span>
+          </li>
+        </ol>
+        <span class="mt-4 inline-flex cursor-default items-center gap-1 text-xs font-semibold text-lime-700 no-underline">Full in-person leaderboard <span class="material-symbols-outlined text-[14px]">arrow_forward</span></span>
+      </div>
+
+      <!-- Virtual · Top 10 -->
+      <div class="flex min-w-0 flex-col rounded-2xl border border-violet-200 bg-white p-6 shadow-sm">
+        <div class="mb-4 border-b border-slate-100 pb-4">
+          <h3 class="font-display text-2xl font-medium text-slate-900">Virtual · Top 10</h3>
+        </div>
+        <div class="mb-4 flex min-w-0 flex-col gap-2 rounded-xl border border-slate-200/90 bg-slate-50/50 p-3 shadow-sm ring-1 ring-inset ring-slate-200/60">
+          <label class="flex min-w-0 flex-col gap-1.5">
+            <span class="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+              <span class="material-symbols-outlined shrink-0 text-[16px] text-slate-400" aria-hidden="true">filter_alt</span>
+              Leaderboard overview
+            </span>
+            <div class="relative min-w-0">
+              <select disabled class="w-full min-w-0 cursor-not-allowed appearance-none rounded-lg border border-slate-200 bg-white py-2.5 pl-3 pr-10 text-sm font-medium text-slate-800 opacity-90 shadow-sm">
+                <option>Global (mean over arenas)</option>
+              </select>
+              <span class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2 text-slate-500" aria-hidden="true">
+                <span class="material-symbols-outlined text-[22px]">expand_more</span>
+              </span>
+            </div>
+          </label>
+        </div>
+        <div class="mx-auto mb-4 grid w-full max-w-[22rem] grid-cols-3 items-end gap-2 sm:max-w-[26rem] sm:gap-3" aria-label="Top three teams">
+          <div class="relative flex min-h-[128px] min-w-0 w-full flex-col items-center rounded-2xl border border-slate-100/80 bg-gradient-to-b from-violet-50/35 to-white py-5 text-center sm:min-h-[142px] sm:py-6">
+            <span class="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 select-none text-[4rem] font-black leading-none tracking-tighter text-violet-200 sm:text-[5rem]" aria-hidden="true">2</span>
+            <div class="relative mt-5 flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 via-fuchsia-500 to-pink-500 text-sm font-bold text-white shadow-md ring-2 ring-white/90 sm:mt-6 sm:h-14 sm:w-14 sm:text-base">SR</div>
+            <p class="relative mt-2.5 w-full max-w-full truncate px-1 text-sm font-semibold text-slate-900">Srinivas Reddy Yarragudi</p>
+            <p class="relative max-w-full truncate px-1 text-[11px] text-slate-500">Lead · <span class="text-slate-400">12 ch.</span></p>
+            <p class="relative mt-1 text-base font-bold tabular-nums tracking-tight text-slate-900 sm:text-lg">97.03 <span class="text-xs font-semibold text-fuchsia-600">avg</span></p>
+          </div>
+          <div class="relative z-[1] -mt-0.5 flex min-h-[158px] min-w-0 w-full flex-col items-center rounded-2xl border border-fuchsia-200/90 bg-gradient-to-b from-fuchsia-50/80 via-violet-50/50 to-white py-7 text-center shadow-[0_0_0_1px_rgba(217,70,239,0.35),0_16px_48px_-14px_rgba(139,92,246,0.35)] sm:-mt-2 sm:min-h-[178px] sm:py-9">
+            <span class="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 select-none text-[4rem] font-black leading-none tracking-tighter text-fuchsia-200 sm:text-[5rem]" aria-hidden="true">1</span>
+            <div class="relative mt-5 flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 via-fuchsia-500 to-pink-500 text-sm font-bold text-white shadow-md ring-2 ring-white/90 sm:mt-6 sm:h-14 sm:w-14 sm:text-base">NP</div>
+            <p class="relative mt-2.5 w-full max-w-full truncate px-1 text-sm font-semibold text-slate-900">Nitin Patidar</p>
+            <p class="relative max-w-full truncate px-1 text-[11px] text-slate-500">Lead · <span class="text-slate-400">14 ch.</span></p>
+            <p class="relative mt-1 text-base font-bold tabular-nums tracking-tight text-slate-900 sm:text-lg">97.11 <span class="text-xs font-semibold text-fuchsia-600">avg</span></p>
+          </div>
+          <div class="relative flex min-h-[128px] min-w-0 w-full flex-col items-center rounded-2xl border border-slate-100/80 bg-gradient-to-b from-violet-50/35 to-white py-5 text-center sm:min-h-[142px] sm:py-6">
+            <span class="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 select-none text-[4rem] font-black leading-none tracking-tighter text-purple-200 sm:text-[5rem]" aria-hidden="true">3</span>
+            <div class="relative mt-5 flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 via-fuchsia-500 to-pink-500 text-sm font-bold text-white shadow-md ring-2 ring-white/90 sm:mt-6 sm:h-14 sm:w-14 sm:text-base">RE</div>
+            <p class="relative mt-2.5 w-full max-w-full truncate px-1 text-sm font-semibold text-slate-900">Remon</p>
+            <p class="relative max-w-full truncate px-1 text-[11px] text-slate-500">Lead · <span class="text-slate-400">8 ch.</span></p>
+            <p class="relative mt-1 text-base font-bold tabular-nums tracking-tight text-slate-900 sm:text-lg">97.03 <span class="text-xs font-semibold text-fuchsia-600">avg</span></p>
+          </div>
+        </div>
+        <ol class="flex-1 space-y-2 text-sm">
+          <li class="flex min-w-0 items-center gap-2 border-b border-slate-50 pb-2">
+            <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100 text-xs font-bold text-violet-900 tabular-nums">4</span>
+            <span class="min-w-0 flex-1 truncate font-medium text-slate-900">Asha Verma</span>
+            <span class="shrink-0 text-xs tabular-nums text-slate-500">9 ch.</span>
+            <span class="shrink-0 font-semibold tabular-nums text-violet-800">96.88</span>
+          </li>
+          <li class="flex min-w-0 items-center gap-2 border-b border-slate-50 pb-2">
+            <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100 text-xs font-bold text-violet-900 tabular-nums">5</span>
+            <span class="min-w-0 flex-1 truncate font-medium text-slate-900">Vikram Singh</span>
+            <span class="shrink-0 text-xs tabular-nums text-slate-500">11 ch.</span>
+            <span class="shrink-0 font-semibold tabular-nums text-violet-800">96.75</span>
+          </li>
+          <li class="flex min-w-0 items-center gap-2 border-b border-slate-50 pb-2">
+            <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100 text-xs font-bold text-violet-900 tabular-nums">6</span>
+            <span class="min-w-0 flex-1 truncate font-medium text-slate-900">Meera K</span>
+            <span class="shrink-0 text-xs tabular-nums text-slate-500">7 ch.</span>
+            <span class="shrink-0 font-semibold tabular-nums text-violet-800">96.62</span>
+          </li>
+          <li class="flex min-w-0 items-center gap-2 border-b border-slate-50 pb-2">
+            <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100 text-xs font-bold text-violet-900 tabular-nums">7</span>
+            <span class="min-w-0 flex-1 truncate font-medium text-slate-900">Chris Paul</span>
+            <span class="shrink-0 text-xs tabular-nums text-slate-500">10 ch.</span>
+            <span class="shrink-0 font-semibold tabular-nums text-violet-800">96.50</span>
+          </li>
+          <li class="flex min-w-0 items-center gap-2 border-b border-slate-50 pb-2">
+            <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100 text-xs font-bold text-violet-900 tabular-nums">8</span>
+            <span class="min-w-0 flex-1 truncate font-medium text-slate-900">Deepa Rao</span>
+            <span class="shrink-0 text-xs tabular-nums text-slate-500">6 ch.</span>
+            <span class="shrink-0 font-semibold tabular-nums text-violet-800">96.41</span>
+          </li>
+          <li class="flex min-w-0 items-center gap-2 border-b border-slate-50 pb-2">
+            <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100 text-xs font-bold text-violet-900 tabular-nums">9</span>
+            <span class="min-w-0 flex-1 truncate font-medium text-slate-900">Samir Khan</span>
+            <span class="shrink-0 text-xs tabular-nums text-slate-500">8 ch.</span>
+            <span class="shrink-0 font-semibold tabular-nums text-violet-800">96.33</span>
+          </li>
+          <li class="flex min-w-0 items-center gap-2 pb-2">
+            <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100 text-xs font-bold text-violet-900 tabular-nums">10</span>
+            <span class="min-w-0 flex-1 truncate font-medium text-slate-900">Lisa Wong</span>
+            <span class="shrink-0 text-xs tabular-nums text-slate-500">5 ch.</span>
+            <span class="shrink-0 font-semibold tabular-nums text-violet-800">96.20</span>
+          </li>
+        </ol>
+        <span class="mt-4 inline-flex cursor-default items-center gap-1 text-xs font-semibold text-violet-700 no-underline">Full global leaderboard <span class="material-symbols-outlined text-[14px]">arrow_forward</span></span>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

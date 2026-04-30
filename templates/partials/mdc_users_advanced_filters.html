@@ -10,6 +10,16 @@
 {% set pw_adv_reset_qs = users.get('reset_advanced_qs', '') %}
 {% set pw_adv_active = users.get('advanced_active') %}
 {% set pw_adv_sel_class = 'min-h-[44px] w-full max-w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm ' ~ pw_adv_input_focus %}
+{# Pick an accent for the shared date-range picker based on the focus ring tint of the host page. #}
+{% if 'violet' in (pw_adv_input_focus or '') %}
+  {% set pw_adv_drp_accent = 'violet' %}
+{% elif 'emerald' in (pw_adv_input_focus or '') %}
+  {% set pw_adv_drp_accent = 'emerald' %}
+{% elif 'rose' in (pw_adv_input_focus or '') %}
+  {% set pw_adv_drp_accent = 'rose' %}
+{% else %}
+  {% set pw_adv_drp_accent = 'sky' %}
+{% endif %}
 
 {% if pw_adv_chips %}
   <div class="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
@@ -106,52 +116,104 @@
                 </select>
               </label>
             {% elif item.kind == 'date_range' %}
-              <label class="flex min-w-0 flex-col gap-1" data-pw-adv-field="{{ item.label|lower }} from">
-                <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{{ item.label }} from</span>
-                <input type="date"
-                       name="{{ item.from_key }}"
-                       value="{{ pw_adv_raw.get(item.from_key, '') }}"
-                       class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm {{ pw_adv_input_focus }}" />
-              </label>
-              <label class="flex min-w-0 flex-col gap-1" data-pw-adv-field="{{ item.label|lower }} to">
-                <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{{ item.label }} to</span>
-                <input type="date"
-                       name="{{ item.to_key }}"
-                       value="{{ pw_adv_raw.get(item.to_key, '') }}"
-                       class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm {{ pw_adv_input_focus }}" />
-              </label>
+              <div class="flex min-w-0 flex-col gap-1 sm:col-span-2 lg:col-span-3" data-pw-adv-field="{{ item.label|lower }}">
+                <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{{ item.label }}</span>
+                {% with
+                  drp_id='pwAdvDr_' ~ item.from_key,
+                  drp_from_name=item.from_key,
+                  drp_to_name=item.to_key,
+                  drp_from=pw_adv_raw.get(item.from_key, ''),
+                  drp_to=pw_adv_raw.get(item.to_key, ''),
+                  drp_accent=pw_adv_drp_accent,
+                  drp_size='md',
+                  drp_mode='date',
+                  drp_label='',
+                  drp_placeholder='Any date',
+                  drp_show_presets=true,
+                  drp_show_reset=false,
+                  drp_extra_class='self-start'
+                %}
+                  {% include "partials/date_range_picker.html" %}
+                {% endwith %}
+              </div>
             {% elif item.kind == 'datetime_range' %}
-              <label class="flex min-w-0 flex-col gap-1" data-pw-adv-field="{{ item.label|lower }} from">
-                <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{{ item.label }} from</span>
-                <input type="datetime-local"
-                       data-pw-adv-dt-from="{{ item.from_key }}"
-                       name="{{ item.from_key }}"
-                       value="{{ pw_adv_raw.get(item.from_key, '') }}"
-                       class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm {{ pw_adv_input_focus }}" />
-              </label>
-              <label class="flex min-w-0 flex-col gap-1" data-pw-adv-field="{{ item.label|lower }} to">
-                <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{{ item.label }} to</span>
-                <input type="datetime-local"
-                       data-pw-adv-dt-to="{{ item.to_key }}"
-                       name="{{ item.to_key }}"
-                       value="{{ pw_adv_raw.get(item.to_key, '') }}"
-                       class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm {{ pw_adv_input_focus }}" />
-              </label>
-              <div class="flex flex-wrap items-end gap-1.5 sm:col-span-2 lg:col-span-1"
-                   data-pw-adv-field="{{ item.label|lower }} preset"
-                   data-pw-adv-dt-presets="{{ item.from_key }}|{{ item.to_key }}">
-                <span class="w-full text-[11px] font-semibold uppercase tracking-wide text-slate-500">Quick range</span>
-                <button type="button" data-preset="today" class="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50">Today</button>
-                <button type="button" data-preset="7d" class="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50">Last 7d</button>
-                <button type="button" data-preset="30d" class="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50">Last 30d</button>
-                <button type="button" data-preset="month" class="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:border-slate-300 hover:bg-slate-50">This month</button>
-                <button type="button" data-preset="clear" class="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-500 hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700">Clear</button>
+              <div class="flex min-w-0 flex-col gap-1 sm:col-span-2 lg:col-span-3" data-pw-adv-field="{{ item.label|lower }}">
+                <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{{ item.label }}</span>
+                {% with
+                  drp_id='pwAdvDr_' ~ item.from_key,
+                  drp_from_name=item.from_key,
+                  drp_to_name=item.to_key,
+                  drp_from=pw_adv_raw.get(item.from_key, ''),
+                  drp_to=pw_adv_raw.get(item.to_key, ''),
+                  drp_accent=pw_adv_drp_accent,
+                  drp_size='md',
+                  drp_mode='datetime',
+                  drp_label='',
+                  drp_placeholder='Any time',
+                  drp_show_presets=true,
+                  drp_show_reset=false,
+                  drp_extra_class='self-start'
+                %}
+                  {% include "partials/date_range_picker.html" %}
+                {% endwith %}
               </div>
             {% endif %}
           {% endfor %}
         </div>
       </fieldset>
     {% endfor %}
+
+    {% if request.endpoint == 'virtual_users' %}
+      <fieldset class="mt-4" data-pw-adv-group="promptwar_virtual">
+        <legend class="mb-2 inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+          <span class="material-symbols-outlined text-[16px] text-slate-400" aria-hidden="true">military_tech</span>
+          Prompt War arena
+        </legend>
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <label class="flex min-w-0 flex-col gap-1 sm:col-span-2 lg:col-span-3" data-pw-adv-field="submitted in challenge">
+            <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Submitted in challenge (workbook)</span>
+            <select name="participated_challenge_id"
+                    class="{{ pw_adv_sel_class }}">
+              <option value="">Any</option>
+              {% for ch in (users.participation_challenge_options or []) %}
+                <option value="{{ ch.id }}"
+                        {% if users.get('selected_participated_challenge_id') is not none and ch.id == users.get('selected_participated_challenge_id') %}selected{% endif %}>
+                  {{ ch.title }}
+                </option>
+              {% endfor %}
+            </select>
+          </label>
+          <p class="text-xs text-slate-600 sm:col-span-2 lg:col-span-3 -mt-1">
+            Unlike <span class="font-semibold">Eligible for challenge</span> in the main filters, this keeps only users with at least one imported team row for the selected arena round.
+          </p>
+        </div>
+      </fieldset>
+    {% elif request.endpoint == 'in_person_users' %}
+      <fieldset class="mt-4" data-pw-adv-group="promptwar_inperson">
+        <legend class="mb-2 inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+          <span class="material-symbols-outlined text-[16px] text-slate-400" aria-hidden="true">event</span>
+          Prompt War workbook
+        </legend>
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <label class="flex min-w-0 flex-col gap-1 sm:col-span-2 lg:col-span-3" data-pw-adv-field="submitted in pw session">
+            <span class="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Submitted in PW session (workbook)</span>
+            <select name="submission_session"
+                    class="{{ pw_adv_sel_class }}">
+              <option value="">Any</option>
+              {% for opt in (users.participation_submission_session_options or []) %}
+                <option value="{{ opt.token }}"
+                        {% if users.get('selected_submission_session') and opt.token == users.get('selected_submission_session') %}selected{% endif %}>
+                  {{ opt.label }}
+                </option>
+              {% endfor %}
+            </select>
+          </label>
+          <p class="text-xs text-slate-600 sm:col-span-2 lg:col-span-3 -mt-1">
+            Keeps rows where this email appears as <span class="font-semibold">team lead</span> on an imported in-person workbook for the selected city, date, and session label.
+          </p>
+        </div>
+      </fieldset>
+    {% endif %}
 
     <div class="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-slate-100/80 pt-3">
       <span class="text-[11px] text-slate-500" data-pw-adv-empty-msg hidden>No fields match.</span>
@@ -201,41 +263,8 @@
     });
   }
 
-  function fmtDtLocal(d) {
-    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
-    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
-           'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
-  }
-
-  panel.querySelectorAll('[data-pw-adv-dt-presets]').forEach(function (group) {
-    var keys = (group.getAttribute('data-pw-adv-dt-presets') || '').split('|');
-    var fromKey = keys[0];
-    var toKey = keys[1];
-    var fromInput = panel.querySelector('[data-pw-adv-dt-from="' + fromKey + '"]');
-    var toInput = panel.querySelector('[data-pw-adv-dt-to="' + toKey + '"]');
-    group.addEventListener('click', function (ev) {
-      var btn = ev.target.closest('button[data-preset]');
-      if (!btn) return;
-      ev.preventDefault();
-      var kind = btn.getAttribute('data-preset');
-      var now = new Date();
-      var start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-      var end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 0, 0);
-      if (kind === 'clear') {
-        if (fromInput) fromInput.value = '';
-        if (toInput) toInput.value = '';
-        return;
-      }
-      if (kind === '7d') {
-        start = new Date(start.getTime() - 6 * 24 * 60 * 60 * 1000);
-      } else if (kind === '30d') {
-        start = new Date(start.getTime() - 29 * 24 * 60 * 60 * 1000);
-      } else if (kind === 'month') {
-        start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-      }
-      if (fromInput) fromInput.value = fmtDtLocal(start);
-      if (toInput) toInput.value = fmtDtLocal(end);
-    });
-  });
+  /* Quick-range presets are now built into the shared dropdown calendar
+     widget (see static/date_range_picker.js). The popover handles its own
+     "Today / Last 7d / Last 30d / This month / All" chips. */
 })();
 </script>

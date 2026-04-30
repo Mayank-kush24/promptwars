@@ -110,13 +110,23 @@ CREATE TABLE in_person_main_data_center_registrations (
   github_url TEXT,
   linkedin_url TEXT,
   attendance_city TEXT,
+  prompt_war_on DATE NOT NULL DEFAULT DATE '1970-01-01',
+  session_label TEXT NOT NULL DEFAULT '',
+  session_label_normalized TEXT GENERATED ALWAYS AS (lower(btrim(session_label))) STORED,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (event_id, email_normalized)
+  CONSTRAINT uq_ip_mdc_event_email_pw_session UNIQUE (
+    event_id,
+    email_normalized,
+    prompt_war_on,
+    session_label_normalized
+  )
 );
 
 CREATE INDEX idx_ip_mdc_event ON in_person_main_data_center_registrations (event_id);
 CREATE INDEX idx_ip_mdc_event_updated ON in_person_main_data_center_registrations (event_id, updated_at DESC);
+CREATE INDEX idx_ip_mdc_event_pw ON in_person_main_data_center_registrations (event_id, prompt_war_on);
+CREATE INDEX idx_ip_mdc_event_city ON in_person_main_data_center_registrations (event_id, attendance_city);
 
 -- Virtual Main Data Center: same shape as in-person export; scoped to virtual events only.
 CREATE TABLE virtual_main_data_center_registrations (

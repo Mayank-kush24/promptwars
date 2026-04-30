@@ -113,6 +113,59 @@
 {% set ip_glb = overview.get('in_person_ac_global_top10') or {} %}
 {% set ch_title = (vtop.get("challenge") or {}).get("title") or vc.get("challenge_title") or "Selected arena" %}
 
+{% macro _ov_initials(name) -%}
+{%- set t = (name or '')|trim -%}
+{%- if t|length == 0 -%}?{%- elif t|length == 1 -%}{{ t|upper }}{%- else -%}{{ t[0:2]|upper }}{%- endif -%}
+{%- endmacro %}
+
+{# Overview podium — Tailwind-only (no deps on virtual/in-person page CSS). #}
+{% macro _ov_ip_podium(entry, rank, champion) %}
+{% if entry %}
+<div class="relative box-border min-w-0 w-full flex flex-col items-center text-center rounded-2xl overflow-hidden border transition-transform duration-200 hover:-translate-y-0.5
+  {% if champion %}border-emerald-300 bg-gradient-to-b from-emerald-50/90 to-white shadow-[0_0_0_1px_rgba(34,197,94,0.35),0_16px_48px_-14px_rgba(22,163,74,0.35)] py-7 sm:py-9 min-h-[158px] sm:min-h-[178px] -mt-0.5 sm:-mt-2 z-[1]{% else %}border-slate-100/80 bg-gradient-to-b from-slate-50/40 to-white py-5 sm:py-6 min-h-[128px] sm:min-h-[142px]{% endif %}">
+  <span class="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 text-[4rem] sm:text-[5rem] font-black leading-none tracking-tighter select-none
+    {% if rank == 1 %}text-amber-200{% elif rank == 2 %}text-sky-200{% else %}text-orange-200{% endif %}" aria-hidden="true">{{ rank }}</span>
+  <div class="relative mt-5 sm:mt-6 flex h-12 w-12 sm:h-14 sm:w-14 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 text-sm sm:text-base font-bold text-white shadow-md ring-2 ring-white/80">
+    {{ _ov_initials(entry.team_name) }}
+  </div>
+  <p class="relative mt-2.5 px-1 text-sm font-semibold text-slate-900 truncate max-w-full w-full">{{ entry.team_name }}</p>
+  <p class="relative text-[11px] text-slate-500 truncate max-w-full w-full px-1">{{ entry.leader_name or "—" }}{% if entry.attendance_city %} · {{ entry.attendance_city }}{% endif %}</p>
+  <p class="relative mt-1 text-base sm:text-lg font-bold tabular-nums tracking-tight text-slate-900">
+    {% if entry.total_score is not none %}{{ "{:g}".format(entry.total_score|float) }} <span class="text-xs font-semibold text-emerald-600">pts</span>{% else %}—{% endif %}
+  </p>
+</div>
+{% else %}
+<div class="min-h-[128px] sm:min-h-[142px] min-w-0 w-full" aria-hidden="true"></div>
+{% endif %}
+{% endmacro %}
+
+{% macro _ov_vw_podium(entry, rank, champion, is_global) %}
+{% if entry %}
+<div class="relative box-border min-w-0 w-full flex flex-col items-center text-center rounded-2xl overflow-hidden border transition-transform duration-200 hover:-translate-y-0.5
+  {% if champion %}border-fuchsia-200/90 bg-gradient-to-b from-fuchsia-50/80 via-violet-50/50 to-white shadow-[0_0_0_1px_rgba(217,70,239,0.35),0_16px_48px_-14px_rgba(139,92,246,0.35)] py-7 sm:py-9 min-h-[158px] sm:min-h-[178px] -mt-0.5 sm:-mt-2 z-[1]{% else %}border-slate-100/80 bg-gradient-to-b from-violet-50/35 to-white py-5 sm:py-6 min-h-[128px] sm:min-h-[142px]{% endif %}">
+  <span class="pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 text-[4rem] sm:text-[5rem] font-black leading-none tracking-tighter select-none
+    {% if rank == 1 %}text-fuchsia-200{% elif rank == 2 %}text-violet-200{% else %}text-purple-200{% endif %}" aria-hidden="true">{{ rank }}</span>
+  <div class="relative mt-5 sm:mt-6 flex h-12 w-12 sm:h-14 sm:w-14 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 via-fuchsia-500 to-pink-500 text-sm sm:text-base font-bold text-white shadow-md ring-2 ring-white/90">
+    {{ _ov_initials(entry.team_name) }}
+  </div>
+  <p class="relative mt-2.5 px-1 text-sm font-semibold text-slate-900 truncate max-w-full w-full">{{ entry.team_name }}</p>
+  <p class="relative text-[11px] text-slate-500 truncate max-w-full w-full px-1">
+    {{ entry.leader_name or "—" }}
+    {% if is_global and entry.arena_count is defined %}<span class="text-slate-400"> · {{ entry.arena_count }} ch.</span>{% endif %}
+  </p>
+  <p class="relative mt-1 text-base sm:text-lg font-bold tabular-nums tracking-tight text-slate-900">
+    {% if is_global %}
+      {% if entry.average_score is not none %}{{ "{:g}".format(entry.average_score|float) }} <span class="text-xs font-semibold text-fuchsia-600">avg</span>{% else %}—{% endif %}
+    {% else %}
+      {% if entry.total_score is not none %}{{ "{:g}".format(entry.total_score|float) }} <span class="text-xs font-semibold text-fuchsia-600">pts</span>{% else %}—{% endif %}
+    {% endif %}
+  </p>
+</div>
+{% else %}
+<div class="min-h-[128px] sm:min-h-[142px] min-w-0 w-full" aria-hidden="true"></div>
+{% endif %}
+{% endmacro %}
+
 <div class="flex flex-col gap-sm">
   <h2 class="font-display text-headline-lg text-slate-900 leading-tight">System overview</h2>
 </div>
@@ -313,8 +366,15 @@
       {% if ip_glb.get('error') %}
         <p class="text-sm text-rose-700">{{ ip_glb.error }}</p>
       {% elif ip_glb.get('rows') %}
+        {% set _ipr = ip_glb.rows %}
+        <div class="grid w-full min-w-0 max-w-[22rem] sm:max-w-[26rem] mx-auto grid-cols-[repeat(3,minmax(0,1fr))] gap-2 sm:gap-3 items-end mb-4" aria-label="Top three teams">
+          {{ _ov_ip_podium(_ipr[1] if _ipr|length > 1 else none, 2, false) }}
+          {{ _ov_ip_podium(_ipr[0], 1, true) }}
+          {{ _ov_ip_podium(_ipr[2] if _ipr|length > 2 else none, 3, false) }}
+        </div>
+        {% if _ipr|length > 3 %}
         <ol class="space-y-2 text-sm flex-1">
-          {% for r in ip_glb.rows %}
+          {% for r in _ipr[3:] %}
             <li class="flex items-center gap-2 min-w-0 border-b border-slate-50 pb-2">
               <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-lime-100 text-xs font-bold text-lime-900 tabular-nums">{{ r.rank }}</span>
               <span class="flex-1 min-w-0 truncate font-medium text-slate-900" title="{{ r.team_name }}">{{ r.team_name }}</span>
@@ -323,6 +383,7 @@
             </li>
           {% endfor %}
         </ol>
+        {% endif %}
       {% else %}
         <p class="text-sm text-slate-500">No main-challenge rows yet.</p>
       {% endif %}
@@ -333,15 +394,24 @@
           <p class="text-sm text-rose-700">{{ in_person_ac_focus_lb.error }}</p>
         {% elif in_person_ac_focus_lb.get('rows') %}
           <p class="text-xs text-slate-600 mb-2">Showing <strong>{{ in_person_ac_focus_session_display or in_person_ac_focus_city }}</strong></p>
+          {% set _ipr = in_person_ac_focus_lb.rows %}
+          <div class="grid w-full min-w-0 max-w-[22rem] sm:max-w-[26rem] mx-auto grid-cols-[repeat(3,minmax(0,1fr))] gap-2 sm:gap-3 items-end mb-4" aria-label="Top three teams">
+            {{ _ov_ip_podium(_ipr[1] if _ipr|length > 1 else none, 2, false) }}
+            {{ _ov_ip_podium(_ipr[0], 1, true) }}
+            {{ _ov_ip_podium(_ipr[2] if _ipr|length > 2 else none, 3, false) }}
+          </div>
+          {% if _ipr|length > 3 %}
           <ol class="space-y-2 text-sm flex-1">
-            {% for r in in_person_ac_focus_lb.rows %}
+            {% for r in _ipr[3:] %}
               <li class="flex items-center gap-2 min-w-0 border-b border-slate-50 pb-2">
                 <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-lime-100 text-xs font-bold text-lime-900 tabular-nums">{{ r.rank }}</span>
                 <span class="flex-1 min-w-0 truncate font-medium text-slate-900">{{ r.team_name }}</span>
+                <span class="text-xs text-slate-500 truncate max-w-[5rem] shrink-0" title="{{ r.attendance_city or '' }}">{{ r.attendance_city or "—" }}</span>
                 <span class="font-semibold tabular-nums text-lime-800 shrink-0">{% if r.total_score is not none %}{{ "{:g}".format(r.total_score|float) }}{% else %}—{% endif %}</span>
               </li>
             {% endfor %}
           </ol>
+          {% endif %}
           {% if ip_per_city_leaderboard_url %}
           <a href="{{ ip_per_city_leaderboard_url }}" class="inline-flex items-center gap-1 text-xs font-semibold text-lime-700 hover:underline mt-md no-underline">Open this view on leaderboard <span class="material-symbols-outlined text-[14px]">arrow_forward</span></a>
           {% endif %}
@@ -370,8 +440,15 @@
       {% if v_glb.get('error') %}
         <p class="text-sm text-rose-700">{{ v_glb.error }}</p>
       {% elif v_glb.get('rows') %}
+        {% set _vr = v_glb.rows %}
+        <div class="grid w-full min-w-0 max-w-[22rem] sm:max-w-[26rem] mx-auto grid-cols-[repeat(3,minmax(0,1fr))] gap-2 sm:gap-3 items-end mb-4" aria-label="Top three teams">
+          {{ _ov_vw_podium(_vr[1] if _vr|length > 1 else none, 2, false, true) }}
+          {{ _ov_vw_podium(_vr[0], 1, true, true) }}
+          {{ _ov_vw_podium(_vr[2] if _vr|length > 2 else none, 3, false, true) }}
+        </div>
+        {% if _vr|length > 3 %}
         <ol class="space-y-2 text-sm flex-1">
-          {% for r in v_glb.rows %}
+          {% for r in _vr[3:] %}
             <li class="flex items-center gap-2 min-w-0 border-b border-slate-50 pb-2">
               <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100 text-xs font-bold text-violet-900 tabular-nums">{{ r.rank }}</span>
               <span class="flex-1 min-w-0 truncate font-medium text-slate-900" title="{{ r.team_name }}">{{ r.team_name }}</span>
@@ -380,6 +457,7 @@
             </li>
           {% endfor %}
         </ol>
+        {% endif %}
       {% else %}
         <p class="text-sm text-slate-500">No virtual submission rows yet.</p>
       {% endif %}
@@ -388,8 +466,15 @@
       {% if vtop.get("error") %}
         <p class="text-sm text-rose-700">{{ vtop.error }}</p>
       {% elif (vtop.get("rows") or [])|length %}
+        {% set _vr = vtop.rows %}
+        <div class="grid w-full min-w-0 max-w-[22rem] sm:max-w-[26rem] mx-auto grid-cols-[repeat(3,minmax(0,1fr))] gap-2 sm:gap-3 items-end mb-4" aria-label="Top three teams">
+          {{ _ov_vw_podium(_vr[1] if _vr|length > 1 else none, 2, false, false) }}
+          {{ _ov_vw_podium(_vr[0], 1, true, false) }}
+          {{ _ov_vw_podium(_vr[2] if _vr|length > 2 else none, 3, false, false) }}
+        </div>
+        {% if _vr|length > 3 %}
         <ol class="space-y-2 text-sm flex-1">
-          {% for r in vtop.rows %}
+          {% for r in _vr[3:] %}
             <li class="flex items-center gap-2 min-w-0 border-b border-slate-50 pb-2">
               <span class="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-200 text-xs font-bold text-violet-950 tabular-nums">{{ r.rank }}</span>
               <span class="flex-1 min-w-0 truncate font-medium text-slate-900" title="{{ r.team_name }}">{{ r.team_name }}</span>
@@ -397,6 +482,7 @@
             </li>
           {% endfor %}
         </ol>
+        {% endif %}
       {% else %}
         <p class="text-sm text-slate-500">No rows for this challenge yet.</p>
       {% endif %}

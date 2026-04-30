@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from urllib.parse import urlencode
 
 
@@ -431,7 +432,9 @@ def test_mdc_users_advanced_field_groups_cover_every_text_column(app_mod):
     assert text_cols_in_groups == set(app_mod.MDC_USERS_ADVANCED_TEXT_COLUMNS)
 
 
-def test_virtual_dashboard_shows_eligibility_pill(client, virtual_stub, monkeypatch, app_mod):
+def test_virtual_dashboard_propagates_challenge_id_without_eligibility_panel(
+    client, virtual_stub, monkeypatch, app_mod
+):
     monkeypatch.setattr(
         app_mod,
         "_load_virtual_eligibility_summary",
@@ -450,9 +453,9 @@ def test_virtual_dashboard_shows_eligibility_pill(client, virtual_stub, monkeypa
     resp = client.get("/virtual?challengeId=101")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
-    assert "Manage challenges" in body
-    assert "Challenge eligibility" in body
-    assert "150" in body and "200" in body
+    assert "Challenge eligibility" not in body
+    assert 'name="challengeId"' in body
+    assert 'value="101"' in body
 
 
 def test_virtual_redirects_when_challenge_id_not_in_event(client, virtual_stub, monkeypatch, app_mod):
@@ -651,3 +654,93 @@ def test_credits_grant_event_only_skips_eligibility(client, no_admin_pw, monkeyp
     )
     assert resp.status_code == 200
     assert called["n"] == 0
+
+
+# ---------- Participation filters & session tokens ------------------------
+
+
+def test_parse_mdc_users_advanced_participated_challenge_only(app_mod):
+    adv = app_mod._parse_mdc_users_advanced_from_request({"participated_challenge_id": "12"})
+    assert adv is not None
+    assert adv["participated_challenge_id"] == 12
+
+
+def test_ip_submission_session_token_roundtrip(app_mod):
+    tok = app_mod._encode_ip_submission_session_token("Mumbai", date(2026, 3, 28), "Morning")
+    dec = app_mod._decode_ip_submission_session_token(tok)
+    assert dec == ("Mumbai", date(2026, 3, 28), "Morning")
+
+
+def test_parse_mdc_users_advanced_submission_session_only(app_mod):
+    tok = app_mod._encode_ip_submission_session_token("Delhi", date(2026, 1, 15), "")
+    adv = app_mod._parse_mdc_users_advanced_from_request({"submission_session": tok})
+    assert adv is not None
+    assert adv["ip_submission_session"] == ("Delhi", date(2026, 1, 15), "")
+
+
+def test_mdc_users_build_filter_virtual_participated_challenge(monkeypatch, app_mod):
+    def fake_get(cid):
+        if int(cid) == 12:
+            return {"id": 12, "event_id": 2, "title": "Arena A"}
+        return None
+
+    monkeypatch.setattr(app_mod, "_get_virtual_challenge", fake_get)
+    adv = app_mod._parse_mdc_users_advanced_from_request({"participated_challenge_id": "12"})
+    where, params = app_mod._mdc_users_build_filter(2, "", None, mode="virtual", advanced=adv)
+    assert "virtual_challenge_submission_rows" in where
+    assert params.get("part_ch_id") == 12
+
+
+def test_mdc_users_build_filter_in_person_submission_session(app_mod):
+    tok = app_mod._encode_ip_submission_session_token("Pune", date(2026, 2, 1), "A")
+    adv = app_mod._parse_mdc_users_advanced_from_request({"submission_session": tok})
+    where, params = app_mod._mdc_users_build_filter(1, "", None, mode="in_person", advanced=adv)
+    assert "in_person_challenge_submission_rows" in where
+    assert params.get("ss_city") == "Pune"
+    assert params.get("ss_pwo") == date(2026, 2, 1)
+    assert params.get("ss_sl") == "A"
+
+
+def test_virtual_users_page_shows_submitted_in_challenge_filter(client, no_admin_pw, monkeypatch, app_mod):
+    def fake_load(eid, page, per_page, search, attendance_city=None, **kwargs):
+        preserve = {"per_page": str(per_page)}
+        return {
+            "error": None,
+            "rows": [],
+            "total": 0,
+            "page": 1,
+            "per_page": per_page,
+            "search": "",
+            "attendance_city": "",
+            "attendance_city_options": [],
+            "total_pages": 1,
+            "export_query": urlencode(preserve),
+            "preserve_query_str": urlencode(preserve),
+            "challenge_id": None,
+            "advanced": None,
+            "advanced_active": False,
+            "advanced_count": 0,
+            "advanced_form_fields": app_mod.MDC_USERS_ADVANCED_FORM_FIELDS,
+            "advanced_field_groups": app_mod.MDC_USERS_ADVANCED_FIELD_GROUPS,
+            "advanced_text": {},
+            "advanced_raw": {},
+            "advanced_chips": [],
+            "advanced_select_options": {c: [] for c in app_mod.MDC_USERS_ADVANCED_TEXT_COLUMNS},
+            "advanced_select_limit": app_mod.MDC_USERS_ADVANCED_SELECT_LIMIT,
+            "reset_advanced_qs": urlencode(preserve),
+            "preserve_items": list(preserve.items()),
+            "mdc_pw_on": "",
+            "mdc_session_label": "",
+            "participation_challenge_options": [{"id": 1, "title": "Round 1"}],
+            "participation_submission_session_options": [],
+            "selected_participated_challenge_id": None,
+            "selected_submission_session": "",
+        }
+
+    monkeypatch.setattr(app_mod, "_load_mdc_users_page", fake_load)
+    monkeypatch.setattr(app_mod, "_load_virtual_challenges_brief", lambda *_a, **_k: [])
+    resp = client.get("/virtual/users")
+    assert resp.status_code == 200
+    text = resp.get_data(as_text=True)
+    assert "Submitted in challenge (workbook)" in text
+    assert "Eligible for challenge" in text

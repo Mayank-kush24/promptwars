@@ -121,6 +121,48 @@
 
 {% block scripts %}
 <script>
+/** Read fetch body as text, then JSON; avoids false "Network error" when server returns HTML or empty body. */
+function pwParseImportApiResponse(r) {
+  return r.text().then(function (text) {
+    var body = {};
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch (e) {
+        var snip = String(text).replace(/</g, " ").replace(/\s+/g, " ").trim();
+        if (snip.length > 320) snip = snip.slice(0, 320) + "\u2026";
+        var low = String(text).toLowerCase();
+        var nginx413 =
+          r.status === 413 ||
+          (low.indexOf("413") >= 0 && low.indexOf("request entity too large") >= 0);
+        var hint =
+          nginx413 && low.indexOf("nginx") >= 0
+            ? " Your reverse proxy (nginx) rejected the upload before it reached the app. In the nginx server or location block, set: client_max_body_size 0;  (0 = no limit) or e.g. client_max_body_size 25g;  Reload nginx. See deploy/nginx_large_uploads.conf.example in this repo."
+            : " Often: reverse-proxy body limit (nginx client_max_body_size) or bad multipart.";
+        body = {
+          error:
+            "HTTP " +
+            r.status +
+            " " +
+            (r.statusText || "") +
+            " — response was not JSON." +
+            hint +
+            (snip ? " Preview: " + snip : ""),
+        };
+      }
+    } else {
+      body = {
+        error:
+          "HTTP " +
+          r.status +
+          " " +
+          (r.statusText || "") +
+          " — empty response body.",
+      };
+    }
+    return { ok: r.ok, status: r.status, body: body };
+  });
+}
 (function () {
   var form = document.getElementById("mdc-import-form");
   var overlay = document.getElementById("mdc-overlay");
@@ -164,7 +206,7 @@
           '<li class="flex justify-between gap-4 border-b border-slate-200 py-2"><span>Read</span><span class="tabular-nums font-medium text-slate-900">' + fmt(s.rows_read) + '</span></li>' +
           '<li class="flex justify-between gap-4 border-b border-slate-200 py-2"><span>Written</span><span class="tabular-nums font-medium text-slate-900">' + fmt(s.rows_written) + '</span></li>' +
           '<li class="flex justify-between gap-4 border-b border-slate-200 py-2"><span>After dedupe</span><span class="tabular-nums font-medium text-slate-900">' + fmt(s.rows_after_dedupe) + '</span></li>' +
-          '<li class="flex justify-between gap-4 py-2"><span>Duplicate emails (last kept)</span><span class="tabular-nums font-medium text-slate-900">' + fmt(s.duplicate_emails_collapsed) + '</span></li>' +
+          '<li class="flex justify-between gap-4 py-2"><span>Duplicate keys (last kept)</span><span class="tabular-nums font-medium text-slate-900">' + fmt((s.duplicate_registration_keys_collapsed != null ? s.duplicate_registration_keys_collapsed : s.duplicate_emails_collapsed) || 0) + '</span></li>' +
         '</ul></div>' +
       '<div class="flex flex-wrap gap-3 mt-md">' +
         '<a href="' + {{ url_for("in_person_page")|tojson }} + '" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">In-person dashboard</a>' +
@@ -202,7 +244,7 @@
       credentials: "same-origin",
       headers: { Accept: "application/json" }
     })
-      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
+      .then(pwParseImportApiResponse)
       .then(function (res) {
         if (msgTimer) clearInterval(msgTimer);
         msgTimer = null;
@@ -301,11 +343,7 @@
     body.innerHTML = "<p class=\"text-slate-600\">Uploading…</p>";
     if (submitBtn) submitBtn.disabled = true;
     fetch(apiUrl, { method: "POST", body: fd, credentials: "same-origin" })
-      .then(function (r) {
-        return r.json().then(function (j) {
-          return { ok: r.ok, body: j, status: r.status };
-        });
-      })
+      .then(pwParseImportApiResponse)
       .then(function (res) {
         var p = res.body || {};
         if (!res.ok) {

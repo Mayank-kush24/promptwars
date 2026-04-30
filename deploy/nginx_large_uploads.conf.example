@@ -1,0 +1,9 @@
+# Snippet for nginx in front of Prompt Wars (merge into server { } or location /your-mount/ { }).
+#
+# Default nginx client_max_body_size is 1m — large MDC CSV/XLSX or Action Center XLSX uploads
+# return 413 Request Entity Too Large before the request reaches Flask/Waitress.
+#
+# 0 = disable size check (unlimited request body from nginx's perspective).
+# Alternatively use a finite cap, e.g. client_max_body_size 10g;
+#
+client_max_body_size 0;

@@ -9,8 +9,10 @@ from __future__ import annotations
 import base64
 import csv
 import json
+import logging
 import os
 import sys
+import time
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from decimal import Decimal
@@ -19,10 +21,13 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from dotenv import load_dotenv
-from flask import Flask, g, jsonify, make_response, redirect, render_template, request, Response, session, url_for
+from flask import Flask, g, jsonify, make_response, redirect, render_template, request, Response, send_from_directory, session, url_for
+from logging.handlers import RotatingFileHandler
+from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.middleware.proxy_fix import ProxyFix
 from sqlalchemy import bindparam, text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.pool import QueuePool
 
 from audit.db import create_engine
 
@@ -251,6 +256,17 @@ def _ipcsr_pw_session_display(*, city: str, prompt_war_on: date, session_label: 
     return f"{city} · {d}"
 
 
+def _pw_session_rsvp_row_key(city: str, prompt_war_on: date | str, session_label: str) -> tuple[str, str, str]:
+    """Stable dedupe key for MDC + challenge-submission PW session rows."""
+    if isinstance(prompt_war_on, str):
+        prompt_war_on = date.fromisoformat(prompt_war_on[:10])
+    return (
+        city.strip().lower(),
+        prompt_war_on.isoformat(),
+        (session_label or "").strip(),
+    )
+
+
 def _parse_main_dashboard_pw_session(raw: str | None) -> tuple[date | None, str]:
     """Parse ``inPersonTopPwSession`` value ``YYYY-MM-DD`` or ``YYYY-MM-DD|label``."""
     v = (raw or "").strip()
@@ -372,7 +388,53 @@ def _format_submission_submitted_at(value) -> str:
     return str(value)
 
 
-engine: Engine = create_engine(DATABASE_URL, future=True)
+engine: Engine = create_engine(
+    DATABASE_URL,
+    future=True,
+    poolclass=QueuePool,
+    pool_size=int(os.environ.get("DB_POOL_SIZE", "32")),
+    max_overflow=int(os.environ.get("DB_POOL_OVERFLOW", "32")),
+    pool_pre_ping=True,
+    pool_recycle=int(os.environ.get("DB_POOL_RECYCLE", "1800")),
+    pool_timeout=int(os.environ.get("DB_POOL_TIMEOUT", "10")),
+)
+
+from services.cache import TTLStore  # noqa: E402
+
+_PW_CACHE_HOT = TTLStore(
+    maxsize=int(os.environ.get("PW_CACHE_HOT_MAX", "2000")),
+    ttl=float(os.environ.get("PW_CACHE_HOT_TTL_SEC", "5")),
+)
+_PW_CACHE_WARM = TTLStore(
+    maxsize=int(os.environ.get("PW_CACHE_WARM_MAX", "500")),
+    ttl=float(os.environ.get("PW_CACHE_WARM_TTL_SEC", "60")),
+)
+
+
+def pw_invalidate_read_caches() -> None:
+    """Call after imports, credit grants, or challenge mutations."""
+    _PW_CACHE_HOT.clear()
+    _PW_CACHE_WARM.clear()
+
+
+import concurrent.futures  # noqa: E402
+
+_IMPORT_THREAD_POOL = concurrent.futures.ThreadPoolExecutor(
+    max_workers=max(1, int(os.environ.get("PW_IMPORT_THREAD_POOL", "2"))),
+    thread_name_prefix="pw_import",
+)
+
+
+def _pw_shutdown_import_pool() -> None:
+    try:
+        _IMPORT_THREAD_POOL.shutdown(wait=False, cancel_futures=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+import atexit  # noqa: E402
+
+atexit.register(_pw_shutdown_import_pool)
 
 
 class _StripCdiPathMiddleware:
@@ -408,6 +470,35 @@ app.secret_key = SESSION_SECRET
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 if CDI_MOUNT_PREFIX:
     app.wsgi_app = _StripCdiPathMiddleware(app.wsgi_app, CDI_MOUNT_PREFIX)
+
+# Optional Flask-side cap (bytes). Leave unset for no limit at the app layer; reverse proxies
+# (nginx client_max_body_size, etc.) may still enforce their own limits — see deploy/nginx_large_uploads.conf.example
+try:
+    _pw_max_upload_mb = int((os.environ.get("PW_MAX_UPLOAD_MB") or "").strip())
+    if _pw_max_upload_mb > 0:
+        app.config["MAX_CONTENT_LENGTH"] = _pw_max_upload_mb * 1024 * 1024
+except ValueError:
+    pass
+
+
+@app.errorhandler(RequestEntityTooLarge)
+def _pw_request_entity_too_large(_e: RequestEntityTooLarge):
+    if (request.path or "").startswith("/api/"):
+        return jsonify(
+            {
+                "error": (
+                    "Uploaded file exceeds a server-side size limit (Flask MAX_CONTENT_LENGTH / "
+                    "Waitress max_request_body_size). Most 413 errors in production are from nginx: "
+                    "set client_max_body_size 0; (or a large value) — see deploy/nginx_large_uploads.conf.example"
+                ),
+            }
+        ), 413
+    return (
+        "Uploaded file too large. If using nginx, set client_max_body_size (see deploy/nginx_large_uploads.conf.example). "
+        "Optional Flask cap: PW_MAX_UPLOAD_MB.",
+        413,
+        {"Content-Type": "text/plain; charset=utf-8"},
+    )
 
 
 @app.template_filter("pw_submitted_at")
@@ -545,13 +636,86 @@ import h2s_cdi_auth as _h2s_cdi_auth_module  # noqa: E402
 _h2s_cdi_auth_module._first_allowed_path = _pw_cdi_first_allowed_path
 
 # Master Audit Log: install once at boot. After this call every HTTP request,
-# every SQL statement (incl. SELECT), and every auth event is captured into
-# audit.audit_events asynchronously, and DB row triggers (database/audit.sql)
-# write field-level diffs into audit.audit_data_changes synchronously.
+# SQL writes (SELECT/TXN optional via AUDIT_SQL_SELECTS), and every auth event
+# is captured into audit.audit_events asynchronously, and DB row triggers
+# (database/audit.sql) write field-level diffs into audit.audit_data_changes synchronously.
 import audit  # noqa: E402
 from audit.decorators import audit_view  # noqa: E402
 
 audit.install(app, engine)
+
+# Response compression (gzip/br for JSON/HTML when client accepts).
+from flask_compress import Compress  # noqa: E402
+
+_compress = Compress()
+_compress.init_app(app)
+app.config["COMPRESS_MIMETYPES"] = [
+    "text/html",
+    "text/css",
+    "application/json",
+    "application/javascript",
+    "image/svg+xml",
+]
+app.config["COMPRESS_LEVEL"] = int(os.environ.get("COMPRESS_LEVEL", "6"))
+app.config["COMPRESS_MIN_SIZE"] = int(os.environ.get("COMPRESS_MIN_SIZE", "1024"))
+
+if not DEBUG_MODE:
+    app.config["TEMPLATES_AUTO_RELOAD"] = False
+    app.config["SEND_FILE_MAX_AGE_DEFAULT"] = int(
+        os.environ.get("SEND_FILE_MAX_AGE_DEFAULT", "31536000")
+    )
+    app.jinja_env.auto_reload = False
+    app.jinja_env.cache_size = int(os.environ.get("JINJA_CACHE_SIZE", "400"))
+app.config["JSON_SORT_KEYS"] = False
+
+_slow_log = (os.environ.get("PW_SLOW_REQUEST_LOG") or "").strip()
+if _slow_log:
+    _slow_handler = RotatingFileHandler(
+        _slow_log,
+        maxBytes=int(os.environ.get("PW_SLOW_LOG_MAX_BYTES", str(5 * 1024 * 1024))),
+        backupCount=int(os.environ.get("PW_SLOW_LOG_BACKUPS", "3")),
+        encoding="utf-8",
+    )
+    _slow_handler.setLevel(logging.WARNING)
+    _slow_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    )
+    app.logger.addHandler(_slow_handler)
+    app.logger.setLevel(logging.INFO)
+
+
+@app.before_request
+def _pw_request_timing_start() -> None:
+    g.pw_req_t0 = time.perf_counter()
+
+
+@app.after_request
+def _pw_request_timing_end(response: Response):
+    t0 = getattr(g, "pw_req_t0", None)
+    if t0 is not None:
+        elapsed_ms = int((time.perf_counter() - t0) * 1000)
+        response.headers["X-Response-Time-ms"] = str(elapsed_ms)
+        if elapsed_ms >= int(os.environ.get("PW_SLOW_REQUEST_MS", "500")):
+            msg = f"{request.method} {request.path} {elapsed_ms}ms endpoint={request.endpoint!r}"
+            app.logger.warning("slow_request %s", msg)
+    path = request.path or ""
+    if path.startswith("/static/"):
+        response.headers.setdefault(
+            "Cache-Control",
+            "public, max-age=31536000, immutable",
+        )
+    ep = request.endpoint or ""
+    if ep in (
+        "api_in_person_mdc_stats",
+        "api_virtual_mdc_stats",
+        "api_virtual_submission_leaderboard",
+        "api_virtual_global_submission_leaderboard",
+        "credits_distribution",
+        "leaderboard",
+    ):
+        response.headers.setdefault("Cache-Control", "private, max-age=5")
+    return response
+
 
 # Map Flask endpoint → (module id, sub-page key) for sidebar + module selector.
 _PW_ENDPOINT_NAV: dict[str, tuple[str, str]] = {
@@ -598,6 +762,14 @@ _PW_ENDPOINT_NAV: dict[str, tuple[str, str]] = {
 }
 
 
+def _pw_vendor_script_url(filename: str, cdn_fallback: str) -> str:
+    """Prefer ``static/vendor/<filename>`` when present (offline / LAN), else CDN."""
+    vp = ROOT / "static" / "vendor" / filename
+    if vp.is_file():
+        return url_for("static", filename=f"vendor/{filename}")
+    return cdn_fallback
+
+
 def _pw_subnav_rows(module: str) -> list[dict[str, str]]:
     if module == "overview":
         spec = (
@@ -607,7 +779,7 @@ def _pw_subnav_rows(module: str) -> list[dict[str, str]]:
         )
     elif module == "in_person":
         spec = (
-            ("dashboard", "Dashboard", "in_person_page", "analytics"),
+            ("dashboard", "Dashboard", "in_person_page", "dashboard"),
             ("leaderboard", "Leaderboard", "in_person_leaderboard", "leaderboard"),
             ("users", "Users", "in_person_users", "group"),
             ("import", "Import", "in_person_import", "upload_file"),
@@ -615,7 +787,7 @@ def _pw_subnav_rows(module: str) -> list[dict[str, str]]:
         )
     else:
         spec = (
-            ("dashboard", "Dashboard", "virtual_page", "stadia_controller"),
+            ("dashboard", "Dashboard", "virtual_page", "dashboard"),
             ("leaderboard", "Leaderboard", "virtual_submission_leaderboard", "leaderboard"),
             ("challenges", "Challenges", "virtual_challenges", "flag"),
             ("users", "Users", "virtual_users", "group"),
@@ -656,6 +828,14 @@ def _inject_ui_context() -> dict:
         "pw_modules": pw_modules,
         "portal_url": _portal,
         "portal_dashboard_url": f"{_portal}/dashboard",
+        "pw_vendor_chart_js": _pw_vendor_script_url(
+            "chart.umd.min.js",
+            "https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js",
+        ),
+        "pw_vendor_echarts_js": _pw_vendor_script_url(
+            "echarts.min.js",
+            "https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js",
+        ),
     }
 
 
@@ -688,9 +868,32 @@ def health():
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
-        return jsonify({"ok": True, "database": "up"})
     except Exception as exc:  # noqa: BLE001
         return jsonify({"ok": False, "database": "down", "detail": str(exc)}), 503
+    out: dict[str, object] = {"ok": True, "database": "up"}
+    pool = engine.pool
+    try:
+        out["db_pool_size"] = pool.size()
+        out["db_pool_checked_out"] = pool.checkedout()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from audit import get_sink
+
+        sk = get_sink()
+        if sk is not None and hasattr(sk, "queue_depth"):
+            qd = sk.queue_depth()
+            if qd is not None and int(qd) >= 0:
+                out["audit_queue_depth"] = int(qd)
+    except Exception:  # noqa: BLE001
+        pass
+    return jsonify(out)
+
+
+@app.get("/favicon.ico")
+def favicon():
+    """PW logo (PNG); served at ``/favicon.ico`` for browsers and auth public_paths."""
+    return send_from_directory(app.static_folder, "favicon.png", mimetype="image/png")
 
 
 def _import_in_person_core():
@@ -834,6 +1037,7 @@ def _import_in_person_core():
 
         rows_total = rsvp_inserted + sub_inserted
         _mark_all("success", rows_written=rows_total)
+        pw_invalidate_read_caches()
         return jsonify(
             {
                 "import_job_id": job_id,
@@ -875,7 +1079,7 @@ def _import_in_person_core():
 
 
 # RETURNING (xmax = 0): true for newly inserted row, false when ON CONFLICT chose UPDATE (PG heap tuple).
-_MDC_UPSERT_SQL = """
+_MDC_UPSERT_SQL_VIRTUAL = """
     INSERT INTO {table} (
       event_id, email, form_timestamp, utm_source, utm_medium, utm_campaign, utm_term, utm_content,
       org_name, org_state, org_city, class_stream, portfolio, domain, designation, designation_years_experience,
@@ -924,8 +1128,59 @@ _MDC_UPSERT_SQL = """
     RETURNING (xmax = 0) AS was_insert
     """
 
-_IN_PERSON_MDC_UPSERT = text(_MDC_UPSERT_SQL.format(table=TABLE_IN_PERSON_MDC))
-_VIRTUAL_MDC_UPSERT = text(_MDC_UPSERT_SQL.format(table=TABLE_VIRTUAL_MDC))
+_MDC_UPSERT_SQL_IN_PERSON = """
+    INSERT INTO {table} (
+      event_id, email, form_timestamp, utm_source, utm_medium, utm_campaign, utm_term, utm_content,
+      org_name, org_state, org_city, class_stream, portfolio, domain, designation, designation_years_experience,
+      founded_info, degree,
+      profile_name, full_name, mobile, whatsapp, country, state, city, dob, gender, occupation,
+      github_url, linkedin_url, attendance_city, prompt_war_on, session_label
+    ) VALUES (
+      :event_id, :email, :form_timestamp, :utm_source, :utm_medium, :utm_campaign, :utm_term, :utm_content,
+      :org_name, :org_state, :org_city, :class_stream, :portfolio, :domain, :designation, :designation_years_experience,
+      :founded_info, :degree,
+      :profile_name, :full_name, :mobile, :whatsapp, :country, :state, :city, :dob, :gender, :occupation,
+      :github_url, :linkedin_url, :attendance_city, :prompt_war_on, :session_label
+    )
+    ON CONFLICT ON CONSTRAINT uq_ip_mdc_event_email_pw_session DO UPDATE SET
+      email = EXCLUDED.email,
+      form_timestamp = EXCLUDED.form_timestamp,
+      utm_source = EXCLUDED.utm_source,
+      utm_medium = EXCLUDED.utm_medium,
+      utm_campaign = EXCLUDED.utm_campaign,
+      utm_term = EXCLUDED.utm_term,
+      utm_content = EXCLUDED.utm_content,
+      org_name = EXCLUDED.org_name,
+      org_state = EXCLUDED.org_state,
+      org_city = EXCLUDED.org_city,
+      class_stream = EXCLUDED.class_stream,
+      portfolio = EXCLUDED.portfolio,
+      domain = EXCLUDED.domain,
+      designation = EXCLUDED.designation,
+      designation_years_experience = EXCLUDED.designation_years_experience,
+      founded_info = EXCLUDED.founded_info,
+      degree = EXCLUDED.degree,
+      profile_name = EXCLUDED.profile_name,
+      full_name = EXCLUDED.full_name,
+      mobile = EXCLUDED.mobile,
+      whatsapp = EXCLUDED.whatsapp,
+      country = EXCLUDED.country,
+      state = EXCLUDED.state,
+      city = EXCLUDED.city,
+      dob = EXCLUDED.dob,
+      gender = EXCLUDED.gender,
+      occupation = EXCLUDED.occupation,
+      github_url = EXCLUDED.github_url,
+      linkedin_url = EXCLUDED.linkedin_url,
+      attendance_city = EXCLUDED.attendance_city,
+      prompt_war_on = EXCLUDED.prompt_war_on,
+      session_label = EXCLUDED.session_label,
+      updated_at = now()
+    RETURNING (xmax = 0) AS was_insert
+    """
+
+_IN_PERSON_MDC_UPSERT = text(_MDC_UPSERT_SQL_IN_PERSON.format(table=TABLE_IN_PERSON_MDC))
+_VIRTUAL_MDC_UPSERT = text(_MDC_UPSERT_SQL_VIRTUAL.format(table=TABLE_VIRTUAL_MDC))
 
 _VCSR_UPSERT = text(
     """
@@ -1069,6 +1324,7 @@ def _import_in_person_main_data_center_core():
 
     rows_written = rows_created + rows_updated
     mark_archive_status(archived.id, "success", engine=engine, rows_written=rows_written)
+    pw_invalidate_read_caches()
     payload = {
         "status": "success",
         "rows_created": rows_created,
@@ -1077,7 +1333,9 @@ def _import_in_person_main_data_center_core():
         "rows_skipped": int(parse_stats.get("rows_skipped_no_email") or 0),
         "rows_read": int(parse_stats.get("rows_read") or 0),
         "rows_after_dedupe": int(parse_stats.get("rows_after_dedupe") or 0),
-        "duplicate_emails_collapsed": int(parse_stats.get("duplicate_emails_collapsed") or 0),
+        "duplicate_registration_keys_collapsed": int(
+            parse_stats.get("duplicate_registration_keys_collapsed") or 0
+        ),
         "archive_path": archived.stored_path,
     }
     return jsonify(payload)
@@ -1128,7 +1386,12 @@ def _import_virtual_main_data_center_core():
     rows_updated = 0
     try:
         with engine.begin() as conn:
-            batch = [{**r, "event_id": event_id} for r in rows]
+            batch = []
+            for r in rows:
+                d = {**r, "event_id": event_id}
+                d.pop("prompt_war_on", None)
+                d.pop("session_label", None)
+                batch.append(d)
             for row in batch:
                 res = conn.execute(_VIRTUAL_MDC_UPSERT, row)
                 was_insert = res.scalar_one()
@@ -1142,6 +1405,7 @@ def _import_virtual_main_data_center_core():
 
     rows_written = rows_created + rows_updated
     mark_archive_status(archived.id, "success", engine=engine, rows_written=rows_written)
+    pw_invalidate_read_caches()
     payload = {
         "status": "success",
         "rows_created": rows_created,
@@ -1150,7 +1414,9 @@ def _import_virtual_main_data_center_core():
         "rows_skipped": int(parse_stats.get("rows_skipped_no_email") or 0),
         "rows_read": int(parse_stats.get("rows_read") or 0),
         "rows_after_dedupe": int(parse_stats.get("rows_after_dedupe") or 0),
-        "duplicate_emails_collapsed": int(parse_stats.get("duplicate_emails_collapsed") or 0),
+        "duplicate_registration_keys_collapsed": int(
+            parse_stats.get("duplicate_registration_keys_collapsed") or 0
+        ),
         "archive_path": archived.stored_path,
     }
     return jsonify(payload)
@@ -1328,6 +1594,7 @@ def _import_virtual_challenge_submissions_core():
             )
 
         mark_archive_status(archived.id, "success", engine=engine, rows_written=len(rows))
+        pw_invalidate_read_caches()
         id_to_title = {int(c["id"]): (c.get("title") or "") for c in challenges}
         sheets_disp: dict[str, dict] = {}
         for sn, info in (parse_stats.get("sheets") or {}).items():
@@ -1458,21 +1725,55 @@ def _import_in_person_action_center_core():
             mark_archive_status(archived.id, "failed", engine=engine, error="event must be in_person kind")
             return jsonify({"error": "event must be in_person kind"}), 400
 
+        # MDC link is a participant lookup, not a PW assignment gate. Vision MDC exports do not
+        # carry per-PW dates, so most rows live under the legacy date / empty session label.
+        # Prefer the row tagged for this exact PW; otherwise legacy; otherwise any row for that email.
+        sl_norm = session_label_imp.strip().lower()
         m_stmt = text(
             f"""
-            SELECT id, email_normalized, btrim(COALESCE(attendance_city, '')) AS ac
+            SELECT id, email_normalized, btrim(COALESCE(attendance_city, '')) AS ac,
+                   prompt_war_on, lower(btrim(COALESCE(session_label, ''))) AS sln
             FROM {TABLE_IN_PERSON_MDC}
-            WHERE event_id = :eid AND email_normalized IN :emails
+            WHERE event_id = :eid
+              AND email_normalized IN :emails
             """
         ).bindparams(bindparam("emails", expanding=True))
-        mrows = conn.execute(m_stmt, {"eid": event_id, "emails": emails_set}).mappings().all()
-        mdc_by_email = {str(r["email_normalized"]): int(r["id"]) for r in mrows}
-        mdc_ac_by_email = {str(r["email_normalized"]): (str(r["ac"]) or "") for r in mrows}
+        mrows = conn.execute(
+            m_stmt,
+            {"eid": event_id, "emails": emails_set},
+        ).mappings().all()
+
+        def _match_priority(pw_on_row, sln_row: str) -> int:
+            """Lower is better: 0 = exact PW match, 1 = legacy fallback, 2 = any other tagged row."""
+            if pw_on_row == pw_on and sln_row == sl_norm:
+                return 0
+            if pw_on_row == IPCSR_LEGACY_PROMPT_WAR_DATE and not sln_row:
+                return 1
+            return 2
+
+        per_email: dict[str, dict] = {}
+        for r in mrows:
+            em = str(r["email_normalized"])
+            pwd_cell = r["prompt_war_on"]
+            if isinstance(pwd_cell, datetime):
+                pwd_cell = pwd_cell.date()
+            sln_cell = str(r["sln"] or "")
+            cand = {
+                "id": int(r["id"]),
+                "ac": str(r["ac"]) or "",
+                "rank": _match_priority(pwd_cell, sln_cell),
+            }
+            cur = per_email.get(em)
+            if cur is None or cand["rank"] < cur["rank"]:
+                per_email[em] = cand
+        mdc_by_email = {em: v["id"] for em, v in per_email.items()}
+        mdc_ac_by_email = {em: v["ac"] for em, v in per_email.items()}
 
     missing = [e for e in emails_set if e not in mdc_by_email]
     if missing:
         msg = (
             "Leader email(s) not found in In-person Main Data Center for this event "
+            "(any PW assignment) "
             f"(showing up to 20 of {len(missing)}): {', '.join(missing[:20])}"
         )
         mark_archive_status(archived.id, "failed", engine=engine, error=msg)
@@ -1567,6 +1868,7 @@ def _import_in_person_action_center_core():
             )
 
         mark_archive_status(archived.id, "success", engine=engine, rows_written=len(rows))
+        pw_invalidate_read_caches()
         sheets_disp: dict[str, dict] = {}
         for sn, info in (parse_stats.get("sheets") or {}).items():
             sk = str(info.get("sheet_kind") or "")
@@ -1828,7 +2130,7 @@ def api_in_person_mdc_registration(reg_id: int):
                            utm_term, utm_content, org_name, org_state, org_city, class_stream, portfolio,
                            domain, designation, designation_years_experience, founded_info, degree, profile_name, full_name, mobile,
                            whatsapp, country, state, city, dob, gender, occupation, github_url,
-                           linkedin_url, attendance_city, created_at, updated_at
+                           linkedin_url, attendance_city, prompt_war_on, session_label, created_at, updated_at
                     FROM {TABLE_IN_PERSON_MDC}
                     WHERE id = :id AND event_id = :eid
                     """
@@ -1849,14 +2151,11 @@ def api_in_person_mdc_registration(reg_id: int):
                            github_repository_link, source_sheet_name, export_created_at
                     FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS}
                     WHERE event_id = :eid
-                      AND leader_email_normalized = (
-                        SELECT email_normalized FROM {TABLE_IN_PERSON_MDC}
-                        WHERE id = :rid AND event_id = :eid2
-                      )
+                      AND in_person_mdc_registration_id = :rid
                     ORDER BY sheet_kind ASC, team_name ASC
                     """
                 ),
-                {"eid": eid, "eid2": eid, "rid": reg_id},
+                {"eid": eid, "rid": reg_id},
             ).mappings().all()
         team_submissions = []
         for s in subs:
@@ -1873,6 +2172,80 @@ def api_in_person_mdc_registration(reg_id: int):
     except Exception as exc:  # noqa: BLE001
         base["team_submissions"] = []
         base["team_submissions_error"] = str(exc)
+    try:
+        with engine.connect() as conn:
+            sess_rows = conn.execute(
+                text(
+                    f"""
+                    SELECT id AS registration_id, attendance_city, prompt_war_on, session_label, form_timestamp
+                    FROM {TABLE_IN_PERSON_MDC}
+                    WHERE event_id = :eid
+                      AND email_normalized = (
+                        SELECT email_normalized FROM {TABLE_IN_PERSON_MDC}
+                        WHERE id = :rid AND event_id = :eid
+                      )
+                    ORDER BY prompt_war_on DESC NULLS LAST, id DESC
+                    """
+                ),
+                {"eid": eid, "rid": reg_id},
+            ).mappings().all()
+        participated_pw: list[dict] = []
+        for sr in sess_rows:
+            rd = dict(sr)
+            rid = int(rd["registration_id"])
+            pwo = rd.get("prompt_war_on")
+            if isinstance(pwo, datetime):
+                pwo = pwo.date()
+            city = str(rd.get("attendance_city") or "").strip()
+            sl = str(rd.get("session_label") or "")
+            fts = rd.get("form_timestamp")
+            fts_out = _format_dt_display(fts) if fts is not None else None
+            if isinstance(pwo, date):
+                city_disp = city or "(Unknown)"
+                participated_pw.append(
+                    {
+                        "registration_id": rid,
+                        "attendance_city": rd.get("attendance_city"),
+                        "session_label": sl,
+                        "prompt_war_on_iso": pwo.isoformat(),
+                        "pw_session_display": _ipcsr_pw_session_display(
+                            city=city_disp, prompt_war_on=pwo, session_label=sl
+                        ),
+                        "form_timestamp": fts_out,
+                        "is_current": rid == int(reg_id),
+                    }
+                )
+            else:
+                participated_pw.append(
+                    {
+                        "registration_id": rid,
+                        "attendance_city": rd.get("attendance_city"),
+                        "session_label": sl,
+                        "prompt_war_on_iso": None,
+                        "pw_session_display": "—",
+                        "form_timestamp": fts_out,
+                        "is_current": rid == int(reg_id),
+                    }
+                )
+        base["participated_pw_sessions"] = participated_pw
+    except Exception as exc:  # noqa: BLE001
+        base["participated_pw_sessions"] = []
+        base["participated_pw_sessions_error"] = str(exc)
+    try:
+        with engine.connect() as conn:
+            base["audit_log"] = _load_mdc_registration_audit_timeline(
+                conn,
+                table_name=TABLE_IN_PERSON_MDC,
+                reg_id=reg_id,
+                entity_name="in_person_main_data_center_registrations",
+                module="in_person",
+            )
+    except Exception as exc:  # noqa: BLE001
+        base["audit_log"] = {
+            "available": True,
+            "rows": [],
+            "message": f"Could not load audit history: {exc}",
+        }
     return jsonify(base)
 
 
@@ -1904,7 +2277,59 @@ def api_virtual_mdc_registration(reg_id: int):
         return jsonify({"error": str(exc)}), 500
     if not row:
         return jsonify({"error": "not found"}), 404
-    return jsonify(_serialize_mdc_row_json(dict(row)))
+    base = _serialize_mdc_row_json(dict(row))
+    try:
+        with engine.connect() as conn:
+            ch_rows = conn.execute(
+                text(
+                    """
+                    SELECT DISTINCT c.id AS challenge_id, c.title, c.slug, c.status, c.import_sheet_suffix,
+                           c.opens_at, c.closes_at, c.created_at, c.updated_at
+                    FROM virtual_challenge_submission_rows s
+                    JOIN challenges c ON c.id = s.challenge_id AND c.event_id = s.event_id
+                    WHERE s.event_id = :eid
+                      AND (
+                        s.virtual_mdc_registration_id = :rid
+                        OR s.leader_email_normalized = (
+                          SELECT email_normalized FROM virtual_main_data_center_registrations
+                          WHERE id = :rid AND event_id = :eid
+                        )
+                      )
+                    ORDER BY c.closes_at NULLS LAST, c.id ASC
+                    """
+                ),
+                {"eid": eid, "rid": reg_id},
+            ).mappings().all()
+        participated: list[dict] = []
+        for cr in ch_rows:
+            d = dict(cr)
+            for k in ("opens_at", "closes_at", "created_at", "updated_at"):
+                ts = d.get(k)
+                if ts is not None and hasattr(ts, "isoformat"):
+                    d[k] = ts.isoformat()
+                elif ts is not None:
+                    d[k] = str(ts)
+            participated.append(d)
+        base["participated_challenges"] = participated
+    except Exception as exc:  # noqa: BLE001
+        base["participated_challenges"] = []
+        base["participated_challenges_error"] = str(exc)
+    try:
+        with engine.connect() as conn:
+            base["audit_log"] = _load_mdc_registration_audit_timeline(
+                conn,
+                table_name=TABLE_VIRTUAL_MDC,
+                reg_id=reg_id,
+                entity_name="virtual_main_data_center_registrations",
+                module="virtual",
+            )
+    except Exception as exc:  # noqa: BLE001
+        base["audit_log"] = {
+            "available": True,
+            "rows": [],
+            "message": f"Could not load audit history: {exc}",
+        }
+    return jsonify(base)
 
 
 @app.get("/api/funnel")
@@ -2231,6 +2656,7 @@ def credits_grant():
                 {"pid": participant_id, "eid": ev_for_balance, "delta": float(delta_dec)},
             )
 
+        pw_invalidate_read_caches()
         return jsonify({"ok": True, "ledger_id": int(ledger_id), "event_id": ev_for_balance})
     except Exception as exc:  # noqa: BLE001
         return jsonify({"error": str(exc)}), 500
@@ -2361,10 +2787,11 @@ def _fmt_credits(n: float) -> str:
     return sign + f"{ax:,.2f}"
 
 
-def _load_mdc_brief(event_id: int, *, mode: str) -> dict:
+def _load_mdc_brief_uncached(event_id: int, *, mode: str, conn: Connection | None = None) -> dict:
     """Compact Main Data Center stats for the Overview dashboard.
 
     Keeps query count low (~5) per module so the overview stays cheap.
+    Pass ``conn`` to reuse an open connection (e.g. overview dashboard).
     """
     table = _mdc_table_for_mode(mode)
     is_virtual = mode == "virtual"
@@ -2378,81 +2805,97 @@ def _load_mdc_brief(event_id: int, *, mode: str) -> dict:
         "average_age": None,
         "error": None,
     }
-    try:
-        with engine.connect() as conn:
-            out["total"] = int(
-                conn.execute(
-                    text(f"SELECT COUNT(*) FROM {table} WHERE event_id = :e"),
-                    {"e": event_id},
-                ).scalar()
-                or 0
-            )
-            out["last7"] = int(
-                conn.execute(
-                    text(
-                        f"""
-                        SELECT COUNT(*) FROM {table}
-                        WHERE event_id = :e
-                          AND form_timestamp IS NOT NULL
-                          AND form_timestamp >= now() - interval '7 days'
-                        """
-                    ),
-                    {"e": event_id},
-                ).scalar()
-                or 0
-            )
-            if is_virtual:
-                city_expr = "NULLIF(btrim(city), '')"
-            else:
-                city_expr = "COALESCE(NULLIF(btrim(attendance_city), ''), NULLIF(btrim(city), ''))"
-            row = conn.execute(
+
+    def _fill(c: Connection) -> None:
+        out["total"] = int(
+            c.execute(
+                text(f"SELECT COUNT(*) FROM {table} WHERE event_id = :e"),
+                {"e": event_id},
+            ).scalar()
+            or 0
+        )
+        out["last7"] = int(
+            c.execute(
                 text(
                     f"""
-                    SELECT {city_expr} AS label, COUNT(*)::BIGINT AS cnt
-                    FROM {table}
+                    SELECT COUNT(*) FROM {table}
                     WHERE event_id = :e
-                    GROUP BY 1
-                    HAVING {city_expr} IS NOT NULL
-                    ORDER BY cnt DESC, label ASC
-                    LIMIT 1
-                    """
-                ),
-                {"e": event_id},
-            ).fetchone()
-            if row and row[0]:
-                out["top_city"] = str(row[0])
-                out["top_city_count"] = int(row[1] or 0)
-            row = conn.execute(
-                text(
-                    f"""
-                    SELECT INITCAP(lower(btrim(state))) AS label, COUNT(*)::BIGINT AS cnt
-                    FROM {table}
-                    WHERE event_id = :e AND state IS NOT NULL AND btrim(state) <> ''
-                    GROUP BY 1
-                    ORDER BY cnt DESC, label ASC
-                    LIMIT 1
-                    """
-                ),
-                {"e": event_id},
-            ).fetchone()
-            if row and row[0]:
-                out["top_state"] = str(row[0])
-                out["top_state_count"] = int(row[1] or 0)
-            avg = conn.execute(
-                text(
-                    f"""
-                    SELECT AVG(EXTRACT(YEAR FROM AGE(CURRENT_DATE, dob)))::double precision
-                    FROM {table}
-                    WHERE event_id = :e AND dob IS NOT NULL
+                      AND form_timestamp IS NOT NULL
+                      AND form_timestamp >= now() - interval '7 days'
                     """
                 ),
                 {"e": event_id},
             ).scalar()
-            if avg is not None:
-                out["average_age"] = round(float(avg), 1)
+            or 0
+        )
+        if is_virtual:
+            city_expr = "NULLIF(btrim(city), '')"
+        else:
+            city_expr = "COALESCE(NULLIF(btrim(attendance_city), ''), NULLIF(btrim(city), ''))"
+        row = c.execute(
+            text(
+                f"""
+                SELECT {city_expr} AS label, COUNT(*)::BIGINT AS cnt
+                FROM {table}
+                WHERE event_id = :e
+                GROUP BY 1
+                HAVING {city_expr} IS NOT NULL
+                ORDER BY cnt DESC, label ASC
+                LIMIT 1
+                """
+            ),
+            {"e": event_id},
+        ).fetchone()
+        if row and row[0]:
+            out["top_city"] = str(row[0])
+            out["top_city_count"] = int(row[1] or 0)
+        row = c.execute(
+            text(
+                f"""
+                SELECT INITCAP(lower(btrim(state))) AS label, COUNT(*)::BIGINT AS cnt
+                FROM {table}
+                WHERE event_id = :e AND state IS NOT NULL AND btrim(state) <> ''
+                GROUP BY 1
+                ORDER BY cnt DESC, label ASC
+                LIMIT 1
+                """
+            ),
+            {"e": event_id},
+        ).fetchone()
+        if row and row[0]:
+            out["top_state"] = str(row[0])
+            out["top_state_count"] = int(row[1] or 0)
+        avg = c.execute(
+            text(
+                f"""
+                SELECT AVG(EXTRACT(YEAR FROM AGE(CURRENT_DATE, dob)))::double precision
+                FROM {table}
+                WHERE event_id = :e AND dob IS NOT NULL
+                """
+            ),
+            {"e": event_id},
+        ).scalar()
+        if avg is not None:
+            out["average_age"] = round(float(avg), 1)
+
+    try:
+        if conn is not None:
+            _fill(conn)
+        else:
+            with engine.connect() as c:
+                _fill(c)
     except Exception as exc:  # noqa: BLE001
         out["error"] = str(exc)
     return out
+
+
+def _load_mdc_brief(event_id: int, *, mode: str, conn: Connection | None = None) -> dict:
+    if conn is not None:
+        return _load_mdc_brief_uncached(event_id, mode=mode, conn=conn)
+    key = ("mdc_brief", str(mode), int(event_id))
+    return _PW_CACHE_HOT.get_or_set(
+        key, lambda: _load_mdc_brief_uncached(event_id, mode=mode, conn=None)
+    )
 
 
 def _empty_score_rollup() -> dict[str, object]:
@@ -2571,7 +3014,7 @@ def _in_person_ipcsr_score_rollup(conn, event_id: int) -> dict[str, object]:
     return out
 
 
-def _fetch_overview_stats(
+def _fetch_overview_stats_uncached(
     in_person_event_id: int,
     virtual_event_id: int,
     *,
@@ -2628,24 +3071,29 @@ def _fetch_overview_stats(
             else:
                 v_stats_challenge = dict(_empty_score_rollup())
             ipcsr_stats = _in_person_ipcsr_score_rollup(conn, in_person_event_id)
+            mdc_ip = _load_mdc_brief(in_person_event_id, mode="in_person", conn=conn)
+            mdc_v = _load_mdc_brief(virtual_event_id, mode="virtual", conn=conn)
+            ip_ac_global = _in_person_submission_leaderboard(
+                in_person_event_id, None, 10, conn=conn
+            )
+            v_ac_global = _virtual_global_submission_leaderboard(
+                event_id=virtual_event_id, limit=10, conn=conn
+            )
+            ip_ac_cities = _in_person_pw_options(in_person_event_id, conn=conn)
+            if resolved_cid is not None:
+                v_arena_top3 = _submission_leaderboard_payload(
+                    event_id=int(virtual_event_id),
+                    challenge_id=int(resolved_cid),
+                    limit=10,
+                    offset=0,
+                    conn=conn,
+                )
+            else:
+                v_arena_top3 = {"rows": [], "total": 0, "error": None, "challenge": None}
         total_reg = rsvp_d + reg_v
         conv = (100.0 * sub_d / rsvp_d) if rsvp_d else 0.0
-        mdc_ip = _load_mdc_brief(in_person_event_id, mode="in_person")
-        mdc_v = _load_mdc_brief(virtual_event_id, mode="virtual")
         mdc_total = (mdc_ip.get("total") or 0) + (mdc_v.get("total") or 0)
         mdc_last7 = (mdc_ip.get("last7") or 0) + (mdc_v.get("last7") or 0)
-        ip_ac_global = _in_person_submission_leaderboard(in_person_event_id, None, 10)
-        v_ac_global = _virtual_global_submission_leaderboard(event_id=virtual_event_id, limit=10)
-        ip_ac_cities = _in_person_pw_options(in_person_event_id)
-        if resolved_cid is not None:
-            v_arena_top3 = _submission_leaderboard_payload(
-                event_id=int(virtual_event_id),
-                challenge_id=int(resolved_cid),
-                limit=10,
-                offset=0,
-            )
-        else:
-            v_arena_top3 = {"rows": [], "total": 0, "error": None, "challenge": None}
         return {
             "total_registrations_fmt": _fmt_int(total_reg),
             "submissions_fmt": _fmt_int(sub_d),
@@ -2723,6 +3171,28 @@ def _fetch_overview_stats(
         }
 
 
+def _fetch_overview_stats(
+    in_person_event_id: int,
+    virtual_event_id: int,
+    *,
+    arena_challenge_id: int | None = None,
+) -> dict:
+    key = (
+        "overview",
+        int(in_person_event_id),
+        int(virtual_event_id),
+        int(arena_challenge_id) if arena_challenge_id is not None else None,
+    )
+    return _PW_CACHE_HOT.get_or_set(
+        key,
+        lambda: _fetch_overview_stats_uncached(
+            in_person_event_id,
+            virtual_event_id,
+            arena_challenge_id=arena_challenge_id,
+        ),
+    )
+
+
 def _audit_logs_schema_ok(conn) -> bool:
     row = conn.execute(
         text(
@@ -2741,6 +3211,199 @@ def _fmt_audit_ts(value: datetime | None) -> str:
     else:
         value = value.replace(tzinfo=timezone.utc)
     return value.strftime("%Y-%m-%d %H:%M:%S") + " UTC"
+
+
+def _audit_sanitize_for_json(
+    obj: object,
+    *,
+    depth: int = 0,
+    max_depth: int = 10,
+    max_str: int = 400,
+    max_dict_items: int = 80,
+    max_list_items: int = 120,
+) -> object:
+    """Make nested audit payloads JSON-safe (truncate long strings, cap depth/size)."""
+    if depth > max_depth:
+        return "…"
+    if obj is None:
+        return None
+    if isinstance(obj, datetime):
+        v = obj if obj.tzinfo else obj.replace(tzinfo=timezone.utc)
+        return v.astimezone(timezone.utc).isoformat()
+    if isinstance(obj, date):
+        return obj.isoformat()
+    if isinstance(obj, Decimal):
+        return float(obj)
+    if isinstance(obj, dict):
+        out: dict[str, object] = {}
+        for i, (k, v) in enumerate(obj.items()):
+            if i >= max_dict_items:
+                out["_truncated"] = True
+                break
+            out[str(k)] = _audit_sanitize_for_json(
+                v, depth=depth + 1, max_depth=max_depth, max_str=max_str
+            )
+        return out
+    if isinstance(obj, (list, tuple)):
+        return [
+            _audit_sanitize_for_json(x, depth=depth + 1, max_depth=max_depth, max_str=max_str)
+            for x in obj[:max_list_items]
+        ]
+    if isinstance(obj, str):
+        if len(obj) > max_str:
+            return obj[:max_str] + "…"
+        return obj
+    if isinstance(obj, (int, float, bool)):
+        return obj
+    return str(obj)[:max_str]
+
+
+def _audit_jsonb_as_dict(value: object) -> dict | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            out = json.loads(value)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        return out if isinstance(out, dict) else None
+    return None
+
+
+def _load_mdc_registration_audit_timeline(
+    conn,
+    *,
+    table_name: str,
+    reg_id: int,
+    entity_name: str,
+    module: str,
+    data_limit: int = 200,
+    event_limit: int = 100,
+    combined_max: int = 250,
+) -> dict[str, object]:
+    """Row-level audit + VIEW events for one MDC registration (Master Audit Log)."""
+    if not _audit_logs_schema_ok(conn):
+        return {
+            "available": False,
+            "rows": [],
+            "message": "Audit tables are not present. Apply database/audit.sql to enable history.",
+        }
+    pk = json.dumps({"id": int(reg_id)})
+    rows_merge: list[tuple[datetime, dict[str, object]]] = []
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+    def _coerce_ts(v: object) -> datetime:
+        if isinstance(v, datetime):
+            if v.tzinfo is None:
+                return v.replace(tzinfo=timezone.utc)
+            return v.astimezone(timezone.utc)
+        return epoch
+
+    try:
+        drows = conn.execute(
+            text(
+                """
+                SELECT occurred_at, op, changed_columns, changes, new_row,
+                       principal, principal_email, request_id, source, statement_tag
+                FROM audit.audit_data_changes
+                WHERE schema_name = 'public'
+                  AND table_name = :tbl
+                  AND record_pk @> CAST(:pk AS jsonb)
+                ORDER BY occurred_at ASC
+                LIMIT :lim
+                """
+            ),
+            {"tbl": table_name, "pk": pk, "lim": data_limit},
+        ).mappings().all()
+        for r in drows:
+            oc = r["occurred_at"]
+            t = _coerce_ts(oc)
+            cols_raw = r.get("changed_columns")
+            if isinstance(cols_raw, list):
+                cols_list = [str(c) for c in cols_raw]
+            elif cols_raw is None:
+                cols_list = []
+            else:
+                cols_list = [str(cols_raw)]
+            ch_d = _audit_jsonb_as_dict(r.get("changes"))
+            op = (r.get("op") or "").strip()
+            if op == "INSERT":
+                summary = "Registration row inserted"
+            elif op == "UPDATE":
+                summary = "Updated: " + (", ".join(cols_list) if cols_list else "(no column list)")
+            elif op == "DELETE":
+                summary = "Registration row deleted"
+            else:
+                summary = op or "Data change"
+            entry: dict[str, object] = {
+                "kind": "data",
+                "occurred_at": t.isoformat(),
+                "occurred_at_fmt": _fmt_audit_ts(oc if isinstance(oc, datetime) else None),
+                "op": op,
+                "summary": summary[:500],
+                "principal": r.get("principal") or "",
+                "principal_email": r.get("principal_email") or "",
+                "request_id": r.get("request_id") or "",
+                "source": r.get("source") or "",
+                "statement_tag": r.get("statement_tag") or "",
+                "changed_columns": cols_list,
+                "changes": _audit_sanitize_for_json(ch_d) if ch_d else None,
+            }
+            nr = _audit_jsonb_as_dict(r.get("new_row"))
+            if op == "INSERT" and nr:
+                entry["new_row_columns"] = [str(k) for k in list(nr.keys())[:40]]
+            rows_merge.append((t, entry))
+
+        evrows = conn.execute(
+            text(
+                """
+                SELECT occurred_at, action, endpoint, module, entity,
+                       principal, principal_email, request_id, source, extra
+                FROM audit.audit_events
+                WHERE record_pk @> CAST(:pk AS jsonb)
+                  AND action = 'VIEW'
+                  AND COALESCE(entity, '') = :ent
+                  AND COALESCE(module, '') = :mod
+                ORDER BY occurred_at ASC
+                LIMIT :lim
+                """
+            ),
+            {"pk": pk, "ent": entity_name, "mod": module, "lim": event_limit},
+        ).mappings().all()
+        for r in evrows:
+            oc = r["occurred_at"]
+            t = _coerce_ts(oc)
+            ex_d = _audit_jsonb_as_dict(r.get("extra"))
+            ep = r.get("endpoint") or ""
+            summary = "Detail viewed" + (f" — {ep}" if ep else "")
+            entry = {
+                "kind": "event",
+                "occurred_at": t.isoformat(),
+                "occurred_at_fmt": _fmt_audit_ts(oc if isinstance(oc, datetime) else None),
+                "op": str(r.get("action") or "VIEW"),
+                "summary": summary[:500],
+                "principal": r.get("principal") or "",
+                "principal_email": r.get("principal_email") or "",
+                "request_id": r.get("request_id") or "",
+                "source": r.get("source") or "",
+                "endpoint": ep,
+                "module": r.get("module") or "",
+                "entity": r.get("entity") or "",
+                "extra": _audit_sanitize_for_json(ex_d) if ex_d else None,
+            }
+            rows_merge.append((t, entry))
+
+        rows_merge.sort(key=lambda x: x[0])
+        merged = [x[1] for x in rows_merge[:combined_max]]
+        return {"available": True, "rows": merged, "message": None}
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "available": True,
+            "rows": [],
+            "message": f"Could not load audit history: {exc}",
+        }
 
 
 def _parse_logs_window_hours(raw: str | None) -> int | None:
@@ -3013,7 +3676,7 @@ def _normalize_mdc_stats_date_range(
     return d0, d1
 
 
-def _load_mdc_stats(
+def _load_mdc_stats_uncached(
     event_id: int,
     *,
     mode: str = "in_person",
@@ -3055,6 +3718,7 @@ def _load_mdc_stats(
         "hourly_counts": [0] * 24,
         "state_distribution": [],
         "city_pivot": [],
+        "pw_session_rsvp": [],
         "gender_breakdown": [],
         "top_occupations": [],
     }
@@ -3397,6 +4061,108 @@ def _load_mdc_stats(
             crows = conn.execute(text(city_pivot_sql), qp).mappings().all()
             out["city_pivot"] = [{"city": str(r["city_label"]), "count": int(r["cnt"])} for r in crows]
 
+            if not is_virtual:
+                # PW session list is all-time for the event (not scoped to MDC registration date range).
+                pw_rsvp_sql = f"""
+                    SELECT DISTINCT
+                           COALESCE(NULLIF(btrim(attendance_city), ''), NULLIF(btrim(city), ''), '(Unknown)') AS city_label,
+                           prompt_war_on,
+                           btrim(COALESCE(session_label, '')) AS session_label_raw
+                    FROM {table}
+                    WHERE event_id = :eid
+                      AND prompt_war_on <> DATE '1970-01-01'
+                    ORDER BY prompt_war_on ASC, city_label ASC, session_label_raw ASC
+                    LIMIT 80
+                    """
+                prsvp = conn.execute(text(pw_rsvp_sql), qp).mappings().all()
+                rsvp_rows: list[dict] = []
+                for r in prsvp:
+                    city = str(r["city_label"])
+                    pwo = r["prompt_war_on"]
+                    if isinstance(pwo, datetime):
+                        pwo = pwo.date()
+                    elif not isinstance(pwo, date):
+                        continue
+                    sl = str(r["session_label_raw"] or "")
+                    rsvp_rows.append(
+                        {
+                            "session_display": _ipcsr_pw_session_display(
+                                city=city, prompt_war_on=pwo, session_label=sl
+                            ),
+                            "city": city,
+                            "prompt_war_on": pwo.isoformat(),
+                            "session_label": sl,
+                            "rsvp_sent": 0,
+                            "rsvp_accepted": 0,
+                            "attended": 0,
+                        }
+                    )
+                # Merge main-challenge sessions so RSVP rows match the sticky PW bar; neither branch
+                # uses the MDC registration date filter.
+                by_key: dict[tuple[str, str, str], dict] = {
+                    _pw_session_rsvp_row_key(
+                        row["city"], row["prompt_war_on"], row["session_label"]
+                    ): row
+                    for row in rsvp_rows
+                }
+                try:
+                    sub_rows = conn.execute(
+                        text(
+                            f"""
+                            SELECT DISTINCT
+                                   btrim(attendance_city) AS city_raw,
+                                   prompt_war_on,
+                                   btrim(COALESCE(session_label, '')) AS session_label_raw
+                            FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS}
+                            WHERE event_id = :eid
+                              AND sheet_kind = 'main'
+                              AND attendance_city IS NOT NULL
+                              AND btrim(attendance_city) <> ''
+                              AND prompt_war_on IS NOT NULL
+                              AND prompt_war_on <> DATE '1970-01-01'
+                            """
+                        ),
+                        {"eid": event_id},
+                    ).mappings().all()
+                except Exception:  # noqa: BLE001
+                    sub_rows = ()
+                for sr in sub_rows:
+                    cr = sr.get("city_raw")
+                    if not cr or not str(cr).strip():
+                        continue
+                    city_s = str(cr).strip()
+                    pwo_s = sr["prompt_war_on"]
+                    if isinstance(pwo_s, datetime):
+                        pwo_s = pwo_s.date()
+                    elif not isinstance(pwo_s, date):
+                        continue
+                    sl_s = str(sr.get("session_label_raw") or "")
+                    k = _pw_session_rsvp_row_key(city_s, pwo_s, sl_s)
+                    if k in by_key:
+                        continue
+                    by_key[k] = {
+                        "session_display": _ipcsr_pw_session_display(
+                            city=city_s, prompt_war_on=pwo_s, session_label=sl_s
+                        ),
+                        "city": city_s,
+                        "prompt_war_on": pwo_s.isoformat(),
+                        "session_label": sl_s,
+                        "rsvp_sent": 0,
+                        "rsvp_accepted": 0,
+                        "attended": 0,
+                    }
+                merged_rsvp = sorted(
+                    by_key.values(),
+                    key=lambda row: (
+                        row["prompt_war_on"],
+                        str(row["city"]).lower(),
+                        row["session_label"],
+                    ),
+                )
+                out["pw_session_rsvp"] = merged_rsvp[:80]
+            else:
+                out["pw_session_rsvp"] = []
+
             grows = conn.execute(
                 text(
                     f"""
@@ -3431,7 +4197,31 @@ def _load_mdc_stats(
     return out
 
 
+def _load_mdc_stats(
+    event_id: int,
+    *,
+    mode: str = "in_person",
+    date_from: date | None = None,
+    date_to: date | None = None,
+) -> dict:
+    key = (
+        "mdc_stats",
+        str(mode),
+        int(event_id),
+        date_from.isoformat() if date_from else None,
+        date_to.isoformat() if date_to else None,
+    )
+    return _PW_CACHE_HOT.get_or_set(
+        key,
+        lambda: _load_mdc_stats_uncached(
+            event_id, mode=mode, date_from=date_from, date_to=date_to
+        ),
+    )
+
+
 def _serialize_mdc_row_json(row: dict) -> dict:
+    pw_cell = row.get("prompt_war_on")
+    sl_cell = row.get("session_label") or ""
     out: dict = {}
     for k, v in row.items():
         if k == "email_normalized":
@@ -3442,6 +4232,91 @@ def _serialize_mdc_row_json(row: dict) -> dict:
             out[k] = _format_dt_display(v)
         else:
             out[k] = v
+    if pw_cell is not None:
+        pwo = pw_cell
+        if isinstance(pwo, datetime):
+            pwo = pwo.date()
+        if isinstance(pwo, date):
+            out["prompt_war_on_iso"] = pwo.isoformat()
+            city_disp = (str(row.get("attendance_city") or row.get("city") or "").strip()) or "(Unknown)"
+            out["pw_session_display"] = _ipcsr_pw_session_display(
+                city=city_disp,
+                prompt_war_on=pwo,
+                session_label=str(sl_cell) if sl_cell is not None else "",
+            )
+    return out
+
+
+_IP_SUBMISSION_SESSION_TOKEN_MAX = 600
+
+
+def _encode_ip_submission_session_token(city: str, prompt_war_on: date, session_label: str) -> str:
+    payload = json.dumps(
+        {
+            "c": (city or "").strip()[:500],
+            "d": prompt_war_on.isoformat()
+            if isinstance(prompt_war_on, date)
+            else str(prompt_war_on or "")[:32],
+            "l": (session_label or "").strip()[:IPCSR_SESSION_LABEL_MAX_LEN],
+        },
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+    raw = base64.urlsafe_b64encode(payload.encode("utf-8")).decode("ascii")
+    return raw[:_IP_SUBMISSION_SESSION_TOKEN_MAX]
+
+
+def _decode_ip_submission_session_token(raw: str | None) -> tuple[str, date, str] | None:
+    s = (raw or "").strip()
+    if not s or len(s) > _IP_SUBMISSION_SESSION_TOKEN_MAX:
+        return None
+    try:
+        pad = (-len(s)) % 4
+        if pad:
+            s += "=" * pad
+        blob = base64.urlsafe_b64decode(s.encode("ascii"))
+        obj = json.loads(blob.decode("utf-8"))
+        if not isinstance(obj, dict):
+            return None
+        c = str(obj.get("c") or "").strip()[:500]
+        d_raw = str(obj.get("d") or "").strip()[:32]
+        l = str(obj.get("l") or "").strip()[:IPCSR_SESSION_LABEL_MAX_LEN]
+        if not d_raw:
+            return None
+        pwo = date.fromisoformat(d_raw[:10])
+        return c, pwo, l
+    except (ValueError, TypeError, json.JSONDecodeError, OSError):
+        return None
+
+
+def _load_ip_submission_session_filter_options(conn: Connection, event_id: int) -> list[dict]:
+    """Distinct PW sessions from in-person workbook imports (for roster filter)."""
+    try:
+        rows = conn.execute(
+            text(
+                f"""
+                SELECT DISTINCT attendance_city, prompt_war_on, session_label
+                FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS}
+                WHERE event_id = :eid
+                ORDER BY prompt_war_on DESC NULLS LAST, attendance_city ASC NULLS LAST, session_label ASC
+                """
+            ),
+            {"eid": int(event_id)},
+        ).mappings().all()
+    except Exception:  # noqa: BLE001
+        return []
+    out: list[dict] = []
+    for r in rows:
+        city = str(r.get("attendance_city") or "").strip()
+        pwo = r.get("prompt_war_on")
+        if isinstance(pwo, datetime):
+            pwo = pwo.date()
+        if not isinstance(pwo, date):
+            continue
+        sl = str(r.get("session_label") or "")
+        token = _encode_ip_submission_session_token(city, pwo, sl)
+        disp = _ipcsr_pw_session_display(city=city or "(Unknown)", prompt_war_on=pwo, session_label=sl)
+        out.append({"token": token, "label": disp})
     return out
 
 
@@ -3550,6 +4425,14 @@ def _parse_mdc_users_advanced_from_request(args) -> dict[str, object] | None:
         raw = (args.get(f"af_{col}") or "").strip()[:200]
         if raw:
             text[col] = raw
+    raw_pc = (args.get("participated_challenge_id") or "").strip()[:12]
+    participated_challenge_id: int | None = None
+    if raw_pc.isdigit():
+        participated_challenge_id = int(raw_pc)
+    ss_raw = (args.get("submission_session") or "").strip()[:_IP_SUBMISSION_SESSION_TOKEN_MAX]
+    ip_submission_session = _decode_ip_submission_session_token(ss_raw) if ss_raw else None
+    submission_session_token = ss_raw if ip_submission_session else ""
+
     def _norm_dt_local(val: str | None) -> str:
         s = (val or "").strip()[:40]
         if not s:
@@ -3586,6 +4469,8 @@ def _parse_mdc_users_advanced_from_request(args) -> dict[str, object] | None:
         and dob_to is None
         and designation_years_min is None
         and designation_years_max is None
+        and participated_challenge_id is None
+        and ip_submission_session is None
     ):
         return None
     return {
@@ -3597,6 +4482,9 @@ def _parse_mdc_users_advanced_from_request(args) -> dict[str, object] | None:
         "designation_years_min": designation_years_min,
         "designation_years_max": designation_years_max,
         "raw": raw_filters,
+        "participated_challenge_id": participated_challenge_id,
+        "submission_session_token": submission_session_token,
+        "ip_submission_session": ip_submission_session,
     }
 
 
@@ -3646,6 +4534,9 @@ def _mdc_users_preserve_query_dict(
     attendance_city: str | None,
     challenge_id: int | None,
     advanced: dict[str, object] | None,
+    *,
+    mdc_pw_on_iso: str = "",
+    mdc_session_label: str = "",
 ) -> dict[str, str]:
     """Flat query-string parts (no page) for pagination, export, and per-page form."""
     out: dict[str, str] = {}
@@ -3655,6 +4546,10 @@ def _mdc_users_preserve_query_dict(
         out["attendance_city"] = attendance_city
     if challenge_id:
         out["challengeId"] = str(int(challenge_id))
+    if mdc_pw_on_iso.strip():
+        out["mdc_pw_on"] = mdc_pw_on_iso.strip()[:32]
+    if (mdc_session_label or "").strip():
+        out["mdc_session_label"] = mdc_session_label.strip()[:200]
     if not advanced:
         return out
     for col, val in (advanced.get("text") or {}).items():
@@ -3672,6 +4567,15 @@ def _mdc_users_preserve_query_dict(
         out["designation_years_min"] = str(raw["designation_years_min"])
     if raw.get("designation_years_max"):
         out["designation_years_max"] = str(raw["designation_years_max"])
+    pcid = advanced.get("participated_challenge_id")
+    if pcid is not None:
+        try:
+            out["participated_challenge_id"] = str(int(pcid))
+        except (TypeError, ValueError):
+            pass
+    sst = (advanced.get("submission_session_token") or "").strip()
+    if sst:
+        out["submission_session"] = sst[:_IP_SUBMISSION_SESSION_TOKEN_MAX]
     return out
 
 
@@ -3683,13 +4587,22 @@ def _mdc_users_build_filter(
     mode: str = "in_person",
     challenge_id: int | None = None,
     advanced: dict[str, object] | None = None,
+    mdc_pw_on: date | None = None,
+    mdc_session_label: str | None = None,
 ) -> tuple[str, dict]:
     """Build WHERE clause; `search` must already be trimmed (empty means no text filter)."""
+    table = _mdc_table_for_mode(mode)
     conditions = ["event_id = :eid"]
     params: dict = {"eid": event_id}
     if attendance_city:
         conditions.append("btrim(COALESCE(attendance_city, '')) = :acity")
         params["acity"] = attendance_city
+    if mode == "in_person" and mdc_pw_on is not None:
+        conditions.append("prompt_war_on = :mdc_pw_on")
+        params["mdc_pw_on"] = mdc_pw_on
+    if mode == "in_person" and (mdc_session_label or "").strip():
+        conditions.append("lower(btrim(COALESCE(session_label, ''))) = :mdc_sln")
+        params["mdc_sln"] = mdc_session_label.strip().lower()[:IPCSR_SESSION_LABEL_MAX_LEN]
     if search:
         conditions.append(
             "("
@@ -3699,6 +4612,37 @@ def _mdc_users_build_filter(
         )
         params["q"] = f"%{search}%"
     _mdc_users_advanced_apply_sql(advanced, conditions, params)
+    if advanced:
+        pcid = advanced.get("participated_challenge_id")
+        if mode == "virtual" and pcid is not None:
+            try:
+                pc_int = int(pcid)
+            except (TypeError, ValueError):
+                pc_int = 0
+            if pc_int > 0:
+                ch = _get_virtual_challenge(pc_int)
+                if ch and int(ch.get("event_id") or 0) == int(event_id):
+                    conditions.append(
+                        "EXISTS (SELECT 1 FROM virtual_challenge_submission_rows s "
+                        f"WHERE s.event_id = :eid AND s.challenge_id = :part_ch_id "
+                        f"AND (s.virtual_mdc_registration_id = {table}.id "
+                        f"OR s.leader_email_normalized = {table}.email_normalized))"
+                    )
+                    params["part_ch_id"] = pc_int
+        ip_sess = advanced.get("ip_submission_session")
+        if mode == "in_person" and ip_sess is not None:
+            city, pwo, sl = ip_sess
+            conditions.append(
+                "EXISTS (SELECT 1 FROM in_person_challenge_submission_rows s "
+                "WHERE s.event_id = :eid "
+                "AND s.attendance_city_normalized = lower(btrim(:ss_city)) "
+                "AND s.prompt_war_on = :ss_pwo "
+                "AND lower(btrim(COALESCE(s.session_label, ''))) = lower(btrim(:ss_sl)) "
+                f"AND s.leader_email_normalized = {table}.email_normalized)"
+            )
+            params["ss_city"] = (city or "").strip()[:500]
+            params["ss_pwo"] = pwo
+            params["ss_sl"] = (sl or "").strip()[:IPCSR_SESSION_LABEL_MAX_LEN]
     extra_where, extra_params = _virtual_challenge_filter_sql(challenge_id, mode=mode)
     if extra_where:
         conditions.append(extra_where.lstrip().removeprefix("AND ").strip())
@@ -3784,12 +4728,23 @@ def _load_virtual_challenges(event_id: int) -> list[dict]:
             d["eligible_count"] = int(d.get("eligible_count") or 0)
             d["total_registrations"] = total
             out.append(d)
+        cohort = _virtual_challenge_submission_cohort_stats(event_id)
+        for d in out:
+            cid = int(d["id"])
+            c = cohort.get(cid) or {}
+            d["submission_distinct_teams"] = int(c.get("submission_distinct_teams") or 0)
+            d["submission_fresh_vs_prior_challenge"] = int(c.get("submission_fresh_vs_prior_challenge") or 0)
+            d["submission_returning_from_prior_challenge"] = int(
+                c.get("submission_returning_from_prior_challenge") or 0
+            )
+            d["submission_prior_challenge_id"] = c.get("submission_prior_challenge_id")
+            d["submission_prior_challenge_title"] = c.get("submission_prior_challenge_title")
         return out
     except Exception:  # noqa: BLE001
         return []
 
 
-def _load_virtual_challenges_brief(event_id: int) -> list[dict]:
+def _load_virtual_challenges_brief_uncached(event_id: int) -> list[dict]:
     """Lightweight challenge list for picker dropdowns (id, title, dates, status)."""
     try:
         with engine.connect() as conn:
@@ -3810,6 +4765,99 @@ def _load_virtual_challenges_brief(event_id: int) -> list[dict]:
         return [dict(r) for r in rows]
     except Exception:  # noqa: BLE001
         return []
+
+
+def _load_virtual_challenges_brief(event_id: int) -> list[dict]:
+    key = ("v_challenges_brief", int(event_id))
+    return _PW_CACHE_WARM.get_or_set(key, lambda: _load_virtual_challenges_brief_uncached(event_id))
+
+
+def _virtual_challenge_submission_cohort_stats(event_id: int) -> dict[int, dict]:
+    """Per challenge: distinct teams (normalized name + email) and split vs the **chronologically prior** arena round.
+
+    Prior round = previous row when challenges are ordered by ``closes_at``, ``opens_at``, ``id``
+    (earlier real-world round first). This is independent of admin UI ordering (e.g. live tab first).
+
+    *Fresh* = no row on that prior round; *returning* = at least one row on both this round and the prior.
+    """
+    try:
+        with engine.connect() as conn:
+            ev = conn.execute(
+                text("SELECT kind FROM events WHERE id = :eid"),
+                {"eid": int(event_id)},
+            ).fetchone()
+            if not ev or str(ev[0]) != "virtual":
+                return {}
+            ch_ord = "ORDER BY c.closes_at ASC NULLS LAST, c.opens_at ASC NULLS LAST, c.id ASC"
+            rows = conn.execute(
+                text(
+                    f"""
+                    WITH ordered_ch AS (
+                      SELECT c.id,
+                             LAG(c.id) OVER ({ch_ord}) AS prev_challenge_id,
+                             LAG(c.title) OVER ({ch_ord}) AS prev_challenge_title
+                      FROM challenges c
+                      WHERE c.event_id = :eid
+                    ),
+                    distinct_submitters AS (
+                      SELECT r.challenge_id,
+                             r.team_name_normalized,
+                             r.leader_email_normalized
+                      FROM virtual_challenge_submission_rows r
+                      WHERE r.event_id = :eid
+                      GROUP BY r.challenge_id, r.team_name_normalized, r.leader_email_normalized
+                    ),
+                    labeled AS (
+                      SELECT ds.challenge_id,
+                             oc.prev_challenge_id,
+                             oc.prev_challenge_title,
+                             EXISTS (
+                               SELECT 1
+                               FROM virtual_challenge_submission_rows p
+                               WHERE p.event_id = :eid
+                                 AND p.challenge_id = oc.prev_challenge_id
+                                 AND p.team_name_normalized = ds.team_name_normalized
+                                 AND p.leader_email_normalized = ds.leader_email_normalized
+                             ) AS in_prev
+                      FROM distinct_submitters ds
+                      JOIN ordered_ch oc ON oc.id = ds.challenge_id
+                    ),
+                    agg AS (
+                      SELECT challenge_id,
+                             COUNT(*)::BIGINT AS distinct_teams,
+                             COUNT(*) FILTER (WHERE prev_challenge_id IS NOT NULL AND in_prev)::BIGINT
+                               AS returning_from_prior,
+                             COUNT(*) FILTER (WHERE prev_challenge_id IS NULL OR NOT in_prev)::BIGINT
+                               AS fresh_vs_prior
+                      FROM labeled
+                      GROUP BY challenge_id
+                    )
+                    SELECT oc.id AS challenge_id,
+                           oc.prev_challenge_id,
+                           oc.prev_challenge_title,
+                           COALESCE(a.distinct_teams, 0)::BIGINT AS distinct_teams,
+                           COALESCE(a.returning_from_prior, 0)::BIGINT AS returning_from_prior,
+                           COALESCE(a.fresh_vs_prior, 0)::BIGINT AS fresh_vs_prior
+                    FROM ordered_ch oc
+                    LEFT JOIN agg a ON a.challenge_id = oc.id
+                    """
+                ),
+                {"eid": int(event_id)},
+            ).mappings().all()
+        out_map: dict[int, dict] = {}
+        for r in rows:
+            cid = int(r["challenge_id"])
+            pid = r.get("prev_challenge_id")
+            out_map[cid] = {
+                "submission_distinct_teams": int(r["distinct_teams"] or 0),
+                "submission_returning_from_prior_challenge": int(r["returning_from_prior"] or 0),
+                "submission_fresh_vs_prior_challenge": int(r["fresh_vs_prior"] or 0),
+                "submission_prior_challenge_id": int(pid) if pid is not None else None,
+                "submission_prior_challenge_title": (r.get("prev_challenge_title") or "").strip() or None,
+            }
+        return out_map
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def _resolve_virtual_arena_challenge_id(
@@ -3995,28 +5043,38 @@ def _load_mdc_advanced_select_options(
     columns: tuple[str, ...] = MDC_USERS_ADVANCED_TEXT_COLUMNS,
     per_column_limit: int = MDC_USERS_ADVANCED_SELECT_LIMIT,
 ) -> dict[str, list[str]]:
-    """Distinct non-empty values per advanced-filter column (dropdown options, cap per column)."""
+    """Distinct non-empty values per advanced-filter column (dropdown options, cap per column).
+
+    One round-trip: ``UNION ALL`` of per-column limited DISTINCT subqueries (columns are
+    identifiers from ``MDC_USERS_ADVANCED_TEXT_COLUMNS`` only).
+    """
     table = _mdc_table_for_mode(mode)
     out: dict[str, list[str]] = {c: [] for c in MDC_USERS_ADVANCED_TEXT_COLUMNS}
     lim = int(per_column_limit)
-    for col in columns:
-        if col not in MDC_USERS_ADVANCED_TEXT_COLUMNS:
-            continue
-        try:
-            rows = conn.execute(
-                text(
-                    f"""
-                    SELECT DISTINCT btrim({col}) AS v
-                    FROM {table}
-                    WHERE event_id = :eid AND {col} IS NOT NULL AND btrim({col}) <> ''
-                    ORDER BY 1 ASC
-                    LIMIT :lim
-                    """
-                ),
-                {"eid": event_id, "lim": lim},
-            ).scalars().all()
-            out[col] = [str(x) for x in rows if x]
-        except Exception:  # noqa: BLE001
+    valid_cols = [c for c in columns if c in MDC_USERS_ADVANCED_TEXT_COLUMNS]
+    if not valid_cols:
+        return out
+    parts: list[str] = []
+    for col in valid_cols:
+        parts.append(
+            f"""(SELECT '{col}'::text AS col_key, v FROM (
+                SELECT DISTINCT btrim({col})::text AS v
+                FROM {table}
+                WHERE event_id = :eid AND {col} IS NOT NULL AND btrim({col}) <> ''
+                ORDER BY 1 ASC
+                LIMIT :lim
+            ) sq)"""
+        )
+    sql = " UNION ALL ".join(parts)
+    try:
+        rows = conn.execute(text(sql), {"eid": event_id, "lim": lim}).mappings().all()
+        for r in rows:
+            ck = r.get("col_key")
+            v = r.get("v")
+            if ck in out and v:
+                out[str(ck)].append(str(v))
+    except Exception:  # noqa: BLE001
+        for col in valid_cols:
             out[col] = []
     return out
 
@@ -4069,6 +5127,8 @@ def _mdc_users_reset_advanced_qs(
     attendance_city: str | None,
     challenge_id: int | None,
     per_page: int,
+    mdc_pw_on_iso: str = "",
+    mdc_session_label: str = "",
 ) -> str:
     """Querystring that drops every advanced-filter param while keeping search, dropdowns, per-page."""
     params: dict[str, str] = {"per_page": str(per_page)}
@@ -4078,6 +5138,10 @@ def _mdc_users_reset_advanced_qs(
         params["attendance_city"] = attendance_city
     if challenge_id:
         params["challengeId"] = str(int(challenge_id))
+    if mdc_pw_on_iso.strip():
+        params["mdc_pw_on"] = mdc_pw_on_iso.strip()[:32]
+    if (mdc_session_label or "").strip():
+        params["mdc_session_label"] = mdc_session_label.strip()[:200]
     return urlencode(params)
 
 
@@ -4091,6 +5155,8 @@ def _load_mdc_users_page(
     mode: str = "in_person",
     challenge_id: int | None = None,
     advanced: dict[str, object] | None = None,
+    mdc_pw_on: date | None = None,
+    mdc_session_label: str | None = None,
 ) -> dict:
     """Paginated Main Data Center registrations for the Vision roster table."""
     table = _mdc_table_for_mode(mode)
@@ -4101,16 +5167,118 @@ def _load_mdc_users_page(
     ac = None if mode == "virtual" else ((attendance_city or "").strip()[:200] or None)
     cid = int(challenge_id) if (mode == "virtual" and challenge_id) else None
     adv_active = bool(advanced)
-    preserve = _mdc_users_preserve_query_dict(search_s, ac, cid, advanced)
+    pw_iso = mdc_pw_on.isoformat() if mdc_pw_on is not None else ""
+    sl_f = (mdc_session_label or "").strip()
+    preserve = _mdc_users_preserve_query_dict(
+        search_s,
+        ac,
+        cid,
+        advanced,
+        mdc_pw_on_iso=pw_iso,
+        mdc_session_label=sl_f,
+    )
     export_query = urlencode(preserve)
     pagination_body = {"per_page": str(per_page), **preserve}
     preserve_query_str = urlencode(pagination_body)
     advanced_text = dict((advanced or {}).get("text") or {})
     advanced_raw = dict((advanced or {}).get("raw") or {})
-    advanced_count = len(advanced_text) + sum(1 for v in advanced_raw.values() if v)
+    adv_part = 0
+    if advanced:
+        if advanced.get("participated_challenge_id"):
+            adv_part += 1
+        if (advanced.get("submission_session_token") or "").strip():
+            adv_part += 1
+    advanced_count = len(advanced_text) + sum(1 for v in advanced_raw.values() if v) + adv_part
+    participation_challenge_options: list[dict] = []
+    participation_submission_session_options: list[dict] = []
+    if mode == "virtual":
+        participation_challenge_options = [
+            {"id": int(c["id"]), "title": str(c.get("title") or "")}
+            for c in _load_virtual_challenges_brief(event_id)
+        ]
+    else:
+        try:
+            with engine.connect() as _conn_opts:
+                participation_submission_session_options = _load_ip_submission_session_filter_options(
+                    _conn_opts, event_id
+                )
+        except Exception:  # noqa: BLE001
+            participation_submission_session_options = []
     advanced_chips = _mdc_users_active_chips(advanced, preserve=preserve, per_page=per_page)
+    base_chip = dict(preserve)
+    base_chip["per_page"] = str(per_page)
+    if mode == "in_person":
+        if pw_iso:
+            rm = dict(base_chip)
+            rm.pop("mdc_pw_on", None)
+            advanced_chips.append(
+                {
+                    "key": "mdc_pw_on",
+                    "label": "PW date",
+                    "value": pw_iso,
+                    "remove_qs": urlencode(rm),
+                }
+            )
+        if sl_f:
+            rm = dict(base_chip)
+            rm.pop("mdc_session_label", None)
+            advanced_chips.append(
+                {
+                    "key": "mdc_session_label",
+                    "label": "PW session label",
+                    "value": sl_f,
+                    "remove_qs": urlencode(rm),
+                }
+            )
+    if advanced:
+        pcid = advanced.get("participated_challenge_id")
+        if pcid is not None and mode == "virtual":
+            try:
+                pc_int = int(pcid)
+            except (TypeError, ValueError):
+                pc_int = None
+            if pc_int:
+                ch_title = next(
+                    (
+                        str(c.get("title") or "")
+                        for c in participation_challenge_options
+                        if int(c["id"]) == pc_int
+                    ),
+                    f"#{pc_int}",
+                )
+                rm = dict(base_chip)
+                rm.pop("participated_challenge_id", None)
+                advanced_chips.append(
+                    {
+                        "key": "participated_challenge_id",
+                        "label": "Submitted in challenge",
+                        "value": ch_title,
+                        "remove_qs": urlencode(rm),
+                    }
+                )
+        sst = (advanced.get("submission_session_token") or "").strip()
+        if sst and mode == "in_person":
+            sess_lab = next(
+                (o["label"] for o in participation_submission_session_options if o["token"] == sst),
+                sst[:48] + ("…" if len(sst) > 48 else ""),
+            )
+            rm = dict(base_chip)
+            rm.pop("submission_session", None)
+            advanced_chips.append(
+                {
+                    "key": "submission_session",
+                    "label": "Submitted in PW session (workbook)",
+                    "value": sess_lab,
+                    "remove_qs": urlencode(rm),
+                }
+            )
     reset_advanced_qs = _mdc_users_reset_advanced_qs(
-        search_s=search_s, attendance_city=ac, challenge_id=cid, per_page=per_page
+        search_s=search_s,
+        attendance_city=ac,
+        challenge_id=cid,
+        per_page=per_page,
+        mdc_pw_on_iso=pw_iso,
+        mdc_session_label=sl_f,
     )
     out: dict = {
         "error": None,
@@ -4139,6 +5307,16 @@ def _load_mdc_users_page(
         "advanced_chips": advanced_chips,
         "reset_advanced_qs": reset_advanced_qs,
         "preserve_items": list(preserve.items()),
+        "mdc_pw_on": pw_iso,
+        "mdc_session_label": sl_f,
+        "participation_challenge_options": participation_challenge_options,
+        "participation_submission_session_options": participation_submission_session_options,
+        "selected_participated_challenge_id": advanced.get("participated_challenge_id")
+        if advanced
+        else None,
+        "selected_submission_session": (advanced.get("submission_session_token") or "").strip()
+        if advanced
+        else "",
     }
     try:
         with engine.connect() as conn:
@@ -4147,7 +5325,14 @@ def _load_mdc_users_page(
                 conn, event_id, mode=mode
             )
             where_sql, params = _mdc_users_build_filter(
-                event_id, search_s, ac, mode=mode, challenge_id=cid, advanced=advanced
+                event_id,
+                search_s,
+                ac,
+                mode=mode,
+                challenge_id=cid,
+                advanced=advanced,
+                mdc_pw_on=mdc_pw_on,
+                mdc_session_label=mdc_session_label,
             )
             total = int(
                 conn.execute(
@@ -4159,11 +5344,13 @@ def _load_mdc_users_page(
             params_page = dict(params)
             params_page["lim"] = per_page
             params_page["off"] = offset
+            extra_cols = ", prompt_war_on, session_label" if mode == "in_person" else ""
             rows = conn.execute(
                 text(
                     f"""
                     SELECT id, full_name, email, city, state, country, attendance_city, occupation,
                            mobile, profile_name, form_timestamp, designation, designation_years_experience
+                           {extra_cols}
                     FROM {table}
                     WHERE {where_sql}
                     ORDER BY form_timestamp DESC NULLS LAST, id DESC
@@ -4174,7 +5361,21 @@ def _load_mdc_users_page(
             ).mappings().all()
         out["total"] = total
         out["total_pages"] = max(1, (total + per_page - 1) // per_page) if total else 1
-        out["rows"] = [dict(r) for r in rows]
+        row_dicts = [dict(r) for r in rows]
+        if mode == "in_person":
+            for d in row_dicts:
+                pwo = d.get("prompt_war_on")
+                if isinstance(pwo, datetime):
+                    pwo = pwo.date()
+                if isinstance(pwo, date):
+                    city_disp = (str(d.get("attendance_city") or d.get("city") or "").strip()) or "(Unknown)"
+                    d["pw_session_display"] = _ipcsr_pw_session_display(
+                        city=city_disp,
+                        prompt_war_on=pwo,
+                        session_label=str(d.get("session_label") or ""),
+                    )
+                    d["prompt_war_on_iso"] = pwo.isoformat()
+        out["rows"] = row_dicts
     except Exception as exc:  # noqa: BLE001
         out["error"] = str(exc)
     return out
@@ -4188,14 +5389,24 @@ def _fetch_mdc_users_export_rows(
     mode: str = "in_person",
     challenge_id: int | None = None,
     advanced: dict[str, object] | None = None,
+    mdc_pw_on: date | None = None,
+    mdc_session_label: str | None = None,
 ) -> tuple[list[dict], str | None]:
     table = _mdc_table_for_mode(mode)
     search_s = (search or "").strip()[:200]
     ac = None if mode == "virtual" else ((attendance_city or "").strip()[:200] or None)
     cid = int(challenge_id) if (mode == "virtual" and challenge_id) else None
     where_sql, params = _mdc_users_build_filter(
-        event_id, search_s, ac, mode=mode, challenge_id=cid, advanced=advanced
+        event_id,
+        search_s,
+        ac,
+        mode=mode,
+        challenge_id=cid,
+        advanced=advanced,
+        mdc_pw_on=mdc_pw_on,
+        mdc_session_label=mdc_session_label,
     )
+    extra_cols = ", prompt_war_on, session_label" if mode == "in_person" else ""
     try:
         with engine.connect() as conn:
             rows = conn.execute(
@@ -4203,6 +5414,7 @@ def _fetch_mdc_users_export_rows(
                     f"""
                     SELECT id, full_name, email, city, state, country, attendance_city, occupation,
                            mobile, profile_name, form_timestamp, designation, designation_years_experience
+                           {extra_cols}
                     FROM {table}
                     WHERE {where_sql}
                     ORDER BY form_timestamp DESC NULLS LAST, id DESC
@@ -4210,7 +5422,21 @@ def _fetch_mdc_users_export_rows(
                 ),
                 params,
             ).mappings().all()
-        return [dict(r) for r in rows], None
+        row_dicts = [dict(r) for r in rows]
+        if mode == "in_person":
+            for d in row_dicts:
+                pwo = d.get("prompt_war_on")
+                if isinstance(pwo, datetime):
+                    pwo = pwo.date()
+                if isinstance(pwo, date):
+                    city_disp = (str(d.get("attendance_city") or d.get("city") or "").strip()) or "(Unknown)"
+                    d["pw_session_display"] = _ipcsr_pw_session_display(
+                        city=city_disp,
+                        prompt_war_on=pwo,
+                        session_label=str(d.get("session_label") or ""),
+                    )
+                    d["prompt_war_on_iso"] = pwo.isoformat()
+        return row_dicts, None
     except Exception as exc:  # noqa: BLE001
         return [], str(exc)
 
@@ -4224,7 +5450,11 @@ def _mdc_users_rows_to_csv(rows: list[dict], *, mode: str = "in_person") -> byte
         "city",
         "state",
         "country",
-        *([] if not include_attendance else ["attendance_city"]),
+        *(
+            []
+            if not include_attendance
+            else ["attendance_city", "pw_session_display", "prompt_war_on_iso", "session_label"]
+        ),
         "occupation",
         "mobile",
         "profile_name",
@@ -4246,6 +5476,9 @@ def _mdc_users_rows_to_csv(rows: list[dict], *, mode: str = "in_person") -> byte
         ]
         if include_attendance:
             row_vals.append(r.get("attendance_city") or "")
+            row_vals.append(r.get("pw_session_display") or "")
+            row_vals.append(r.get("prompt_war_on_iso") or "")
+            row_vals.append(r.get("session_label") or "")
         row_vals.extend(
             [
                 r.get("occupation") or "",
@@ -4378,6 +5611,7 @@ def _submission_leaderboard_payload(
     challenge_id: int,
     limit: int,
     offset: int,
+    conn: Connection | None = None,
 ) -> dict:
     """
     Team rows from virtual_challenge_submission_rows for one challenge.
@@ -4386,62 +5620,69 @@ def _submission_leaderboard_payload(
     limit = min(max(int(limit or 50), 1), 500)
     offset = max(int(offset or 0), 0)
     out: dict = {"rows": [], "total": 0, "error": None, "challenge": None}
-    try:
-        with engine.connect() as conn:
-            ch = _validate_virtual_submission_challenge(conn, event_id=event_id, challenge_id=challenge_id)
-            if not ch:
-                out["error"] = "challenge not found"
-                return out
-            out["challenge"] = {"id": int(ch["id"]), "title": ch.get("title") or "", "event_id": int(ch["event_id"])}
-            total = conn.execute(
-                text(
-                    """
-                    SELECT COUNT(*)::BIGINT
+
+    def _fill(c: Connection) -> None:
+        ch = _validate_virtual_submission_challenge(c, event_id=event_id, challenge_id=challenge_id)
+        if not ch:
+            out["error"] = "challenge not found"
+            return
+        out["challenge"] = {"id": int(ch["id"]), "title": ch.get("title") or "", "event_id": int(ch["event_id"])}
+        total = c.execute(
+            text(
+                """
+                SELECT COUNT(*)::BIGINT
+                FROM virtual_challenge_submission_rows
+                WHERE event_id = :eid AND challenge_id = :cid
+                """
+            ),
+            {"eid": int(event_id), "cid": int(challenge_id)},
+        ).scalar()
+        out["total"] = int(total or 0)
+        rows = c.execute(
+            text(
+                """
+                WITH ranked AS (
+                    SELECT id,
+                           team_name,
+                           leader_name,
+                           leader_email,
+                           total_score,
+                           export_created_at,
+                           ROW_NUMBER() OVER (
+                             ORDER BY total_score DESC NULLS LAST,
+                                      export_created_at ASC NULLS LAST,
+                                      id ASC
+                           ) AS rank
                     FROM virtual_challenge_submission_rows
                     WHERE event_id = :eid AND challenge_id = :cid
-                    """
-                ),
-                {"eid": int(event_id), "cid": int(challenge_id)},
-            ).scalar()
-            out["total"] = int(total or 0)
-            rows = conn.execute(
-                text(
-                    """
-                    WITH ranked AS (
-                        SELECT id,
-                               team_name,
-                               leader_name,
-                               leader_email,
-                               total_score,
-                               export_created_at,
-                               ROW_NUMBER() OVER (
-                                 ORDER BY total_score DESC NULLS LAST,
-                                          export_created_at ASC NULLS LAST,
-                                          id ASC
-                               ) AS rank
-                        FROM virtual_challenge_submission_rows
-                        WHERE event_id = :eid AND challenge_id = :cid
-                    )
-                    SELECT rank, team_name, leader_name, leader_email, total_score,
-                           export_created_at AS submitted_at
-                    FROM ranked
-                    ORDER BY rank
-                    LIMIT :lim OFFSET :off
-                    """
-                ),
-                {"eid": int(event_id), "cid": int(challenge_id), "lim": limit, "off": offset},
-            ).mappings().all()
-            for r in rows:
-                d = dict(r)
-                if d.get("total_score") is not None:
-                    d["total_score"] = float(d["total_score"])
-                sa = d.get("submitted_at")
-                if sa is not None and hasattr(sa, "isoformat"):
-                    d["submitted_at"] = sa.isoformat()
-                elif sa is not None:
-                    d["submitted_at"] = str(sa)
-                d["rank"] = int(d["rank"])
-                out["rows"].append(d)
+                )
+                SELECT rank, team_name, leader_name, leader_email, total_score,
+                       export_created_at AS submitted_at
+                FROM ranked
+                ORDER BY rank
+                LIMIT :lim OFFSET :off
+                """
+            ),
+            {"eid": int(event_id), "cid": int(challenge_id), "lim": limit, "off": offset},
+        ).mappings().all()
+        for r in rows:
+            d = dict(r)
+            if d.get("total_score") is not None:
+                d["total_score"] = float(d["total_score"])
+            sa = d.get("submitted_at")
+            if sa is not None and hasattr(sa, "isoformat"):
+                d["submitted_at"] = sa.isoformat()
+            elif sa is not None:
+                d["submitted_at"] = str(sa)
+            d["rank"] = int(d["rank"])
+            out["rows"].append(d)
+
+    try:
+        if conn is not None:
+            _fill(conn)
+        else:
+            with engine.connect() as c:
+                _fill(c)
     except Exception as exc:  # noqa: BLE001
         out["error"] = str(exc)
     return out
@@ -4454,6 +5695,7 @@ def _virtual_global_submission_leaderboard(
     offset: int = 0,
     page: int | None = None,
     per_page: int | None = None,
+    conn: Connection | None = None,
 ) -> dict:
     """
     Aggregate ``virtual_challenge_submission_rows`` across all virtual arena challenges
@@ -4523,68 +5765,75 @@ def _virtual_global_submission_leaderboard(
                         GROUP BY team_name_normalized, leader_email_normalized
                     )
     """
+
+    def _fill(c: Connection) -> None:
+        total = int(
+            c.execute(
+                text(_vcsr_global_base + " SELECT COUNT(*)::BIGINT FROM agg "),
+                {"eid": int(event_id)},
+            ).scalar()
+            or 0
+        )
+        out["total"] = total
+        rows = c.execute(
+            text(
+                _vcsr_global_base
+                + """
+                , ranked AS (
+                    SELECT team_name_normalized,
+                           leader_email_normalized,
+                           team_name,
+                           leader_name,
+                           leader_email,
+                           average_score,
+                           submitted_at,
+                           arena_count,
+                           ROW_NUMBER() OVER (
+                               ORDER BY average_score DESC NULLS LAST,
+                                        submitted_at ASC NULLS LAST,
+                                        team_name_normalized ASC,
+                                        leader_email_normalized ASC
+                           )::BIGINT AS rank
+                    FROM agg
+                )
+                SELECT r.rank,
+                       r.team_name,
+                       r.leader_name,
+                       r.leader_email,
+                       r.average_score,
+                       r.submitted_at,
+                       r.arena_count
+                FROM ranked r
+                ORDER BY r.rank
+                LIMIT :lim OFFSET :off
+                """
+            ),
+            {"eid": int(event_id), "lim": eff_lim, "off": eff_off},
+        ).mappings().all()
+        if paginate:
+            out["page"] = int(pg)
+            out["per_page"] = int(pp)
+            out["total_pages"] = max(1, (total + pp - 1) // pp) if total else 1
+        for r in rows:
+            d = dict(r)
+            if d.get("average_score") is not None:
+                d["average_score"] = float(d["average_score"])
+            sa = d.get("submitted_at")
+            if sa is not None and hasattr(sa, "isoformat"):
+                d["submitted_at"] = sa.isoformat()
+            elif sa is not None:
+                d["submitted_at"] = str(sa)
+            d["rank"] = int(d["rank"])
+            ac = d.get("arena_count")
+            d["arena_count"] = int(ac) if ac is not None else 0
+            out["rows"].append(d)
+
     try:
-        with engine.connect() as conn:
-            total = int(
-                conn.execute(
-                    text(_vcsr_global_base + " SELECT COUNT(*)::BIGINT FROM agg "),
-                    {"eid": int(event_id)},
-                ).scalar()
-                or 0
-            )
-            out["total"] = total
-            rows = conn.execute(
-                text(
-                    _vcsr_global_base
-                    + """
-                    , ranked AS (
-                        SELECT team_name_normalized,
-                               leader_email_normalized,
-                               team_name,
-                               leader_name,
-                               leader_email,
-                               average_score,
-                               submitted_at,
-                               arena_count,
-                               ROW_NUMBER() OVER (
-                                   ORDER BY average_score DESC NULLS LAST,
-                                            submitted_at ASC NULLS LAST,
-                                            team_name_normalized ASC,
-                                            leader_email_normalized ASC
-                               )::BIGINT AS rank
-                        FROM agg
-                    )
-                    SELECT r.rank,
-                           r.team_name,
-                           r.leader_name,
-                           r.leader_email,
-                           r.average_score,
-                           r.submitted_at,
-                           r.arena_count
-                    FROM ranked r
-                    ORDER BY r.rank
-                    LIMIT :lim OFFSET :off
-                    """
-                ),
-                {"eid": int(event_id), "lim": eff_lim, "off": eff_off},
-            ).mappings().all()
-            if paginate:
-                out["page"] = int(pg)
-                out["per_page"] = int(pp)
-                out["total_pages"] = max(1, (total + pp - 1) // pp) if total else 1
-            for r in rows:
-                d = dict(r)
-                if d.get("average_score") is not None:
-                    d["average_score"] = float(d["average_score"])
-                sa = d.get("submitted_at")
-                if sa is not None and hasattr(sa, "isoformat"):
-                    d["submitted_at"] = sa.isoformat()
-                elif sa is not None:
-                    d["submitted_at"] = str(sa)
-                d["rank"] = int(d["rank"])
-                ac = d.get("arena_count")
-                d["arena_count"] = int(ac) if ac is not None else 0
-                out["rows"].append(d)
+        if conn is not None:
+            _fill(conn)
+        else:
+            with engine.connect() as c:
+                _fill(c)
     except Exception as exc:  # noqa: BLE001
         out["error"] = str(exc)
     return out
@@ -4599,6 +5848,7 @@ def _in_person_submission_leaderboard(
     session_label: str = "",
     page: int | None = None,
     per_page: int | None = None,
+    conn: Connection | None = None,
 ) -> dict:
     """
     Main-challenge team rows from in_person_challenge_submission_rows (warmup excluded).
@@ -4637,102 +5887,116 @@ def _in_person_submission_leaderboard(
             "session_label": eff_sl if eff_pw else None,
         },
     }
-    try:
-        with engine.connect() as conn:
-            base_where = f"event_id = :eid AND sheet_kind = 'main'"
-            params: dict = {"eid": int(event_id)}
-            if attendance_city and str(attendance_city).strip():
-                base_where += " AND lower(btrim(attendance_city)) = lower(btrim(:acity))"
-                params["acity"] = str(attendance_city).strip()
-                base_where += " AND prompt_war_on = :pwon AND session_label_normalized = lower(btrim(:slab))"
-                params["pwon"] = eff_pw
-                params["slab"] = eff_sl
-            total = conn.execute(
-                text(
-                    f"""
-                    SELECT COUNT(*)::BIGINT
+
+    def _fill(c: Connection) -> None:
+        base_where = f"event_id = :eid AND sheet_kind = 'main'"
+        params: dict = {"eid": int(event_id)}
+        if attendance_city and str(attendance_city).strip():
+            base_where += " AND lower(btrim(attendance_city)) = lower(btrim(:acity))"
+            params["acity"] = str(attendance_city).strip()
+            base_where += " AND prompt_war_on = :pwon AND session_label_normalized = lower(btrim(:slab))"
+            params["pwon"] = eff_pw
+            params["slab"] = eff_sl
+        total = c.execute(
+            text(
+                f"""
+                SELECT COUNT(*)::BIGINT
+                FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS}
+                WHERE {base_where}
+                """
+            ),
+            params,
+        ).scalar()
+        out["total"] = int(total or 0)
+        row_params = dict(params)
+        if paginate:
+            row_params["lim"] = pp
+            row_params["off"] = (pg - 1) * pp
+            out["page"] = int(pg)
+            out["per_page"] = int(pp)
+            tot = out["total"]
+            out["total_pages"] = max(1, (tot + pp - 1) // pp) if tot else 1
+            limit_sql = "LIMIT :lim OFFSET :off"
+        else:
+            row_params["lim"] = limit
+            limit_sql = "LIMIT :lim"
+        rows = c.execute(
+            text(
+                f"""
+                WITH ranked AS (
+                    SELECT id,
+                           team_name,
+                           leader_name,
+                           leader_email,
+                           attendance_city,
+                           total_score,
+                           export_created_at,
+                           ROW_NUMBER() OVER (
+                             ORDER BY total_score DESC NULLS LAST,
+                                      export_created_at ASC NULLS LAST,
+                                      id ASC
+                           ) AS rank
                     FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS}
                     WHERE {base_where}
-                    """
-                ),
-                params,
-            ).scalar()
-            out["total"] = int(total or 0)
-            row_params = dict(params)
-            if paginate:
-                row_params["lim"] = pp
-                row_params["off"] = (pg - 1) * pp
-                out["page"] = int(pg)
-                out["per_page"] = int(pp)
-                tot = out["total"]
-                out["total_pages"] = max(1, (tot + pp - 1) // pp) if tot else 1
-                limit_sql = "LIMIT :lim OFFSET :off"
-            else:
-                row_params["lim"] = limit
-                limit_sql = "LIMIT :lim"
-            rows = conn.execute(
-                text(
-                    f"""
-                    WITH ranked AS (
-                        SELECT id,
-                               team_name,
-                               leader_name,
-                               leader_email,
-                               attendance_city,
-                               total_score,
-                               export_created_at,
-                               ROW_NUMBER() OVER (
-                                 ORDER BY total_score DESC NULLS LAST,
-                                          export_created_at ASC NULLS LAST,
-                                          id ASC
-                               ) AS rank
-                        FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS}
-                        WHERE {base_where}
-                    )
-                    SELECT rank, team_name, leader_name, leader_email, attendance_city, total_score,
-                           export_created_at AS submitted_at
-                    FROM ranked
-                    ORDER BY rank
-                    {limit_sql}
-                    """
-                ),
-                row_params,
-            ).mappings().all()
-            for r in rows:
-                d = dict(r)
-                if d.get("total_score") is not None:
-                    d["total_score"] = float(d["total_score"])
-                sa = d.get("submitted_at")
-                if sa is not None and hasattr(sa, "isoformat"):
-                    d["submitted_at"] = sa.isoformat()
-                elif sa is not None:
-                    d["submitted_at"] = str(sa)
-                d["rank"] = int(d["rank"])
-                out["rows"].append(d)
+                )
+                SELECT rank, team_name, leader_name, leader_email, attendance_city, total_score,
+                       export_created_at AS submitted_at
+                FROM ranked
+                ORDER BY rank
+                {limit_sql}
+                """
+            ),
+            row_params,
+        ).mappings().all()
+        for r in rows:
+            d = dict(r)
+            if d.get("total_score") is not None:
+                d["total_score"] = float(d["total_score"])
+            sa = d.get("submitted_at")
+            if sa is not None and hasattr(sa, "isoformat"):
+                d["submitted_at"] = sa.isoformat()
+            elif sa is not None:
+                d["submitted_at"] = str(sa)
+            d["rank"] = int(d["rank"])
+            out["rows"].append(d)
+
+    try:
+        if conn is not None:
+            _fill(conn)
+        else:
+            with engine.connect() as c:
+                _fill(c)
     except Exception as exc:  # noqa: BLE001
         out["error"] = str(exc)
     return out
 
 
-def _in_person_pw_options(event_id: int) -> list[dict]:
+def _in_person_pw_options(event_id: int, conn: Connection | None = None) -> list[dict]:
     """Distinct Prompt War sessions (city + date + label) with main-challenge team counts."""
+
+    def _query(c: Connection):
+        return c.execute(
+            text(
+                f"""
+                SELECT attendance_city AS city,
+                       prompt_war_on,
+                       session_label,
+                       COUNT(*)::BIGINT AS team_count
+                FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS}
+                WHERE event_id = :eid AND sheet_kind = 'main'
+                GROUP BY attendance_city, prompt_war_on, session_label
+                ORDER BY attendance_city ASC, prompt_war_on DESC, session_label ASC
+                """
+            ),
+            {"eid": int(event_id)},
+        ).mappings().all()
+
     try:
-        with engine.connect() as conn:
-            rows = conn.execute(
-                text(
-                    f"""
-                    SELECT attendance_city AS city,
-                           prompt_war_on,
-                           session_label,
-                           COUNT(*)::BIGINT AS team_count
-                    FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS}
-                    WHERE event_id = :eid AND sheet_kind = 'main'
-                    GROUP BY attendance_city, prompt_war_on, session_label
-                    ORDER BY attendance_city ASC, prompt_war_on DESC, session_label ASC
-                    """
-                ),
-                {"eid": int(event_id)},
-            ).mappings().all()
+        if conn is not None:
+            rows = _query(conn)
+        else:
+            with engine.connect() as c:
+                rows = _query(c)
         out: list[dict] = []
         for r in rows:
             c = r.get("city")
@@ -4766,7 +6030,8 @@ def _in_person_pw_options(event_id: int) -> list[dict]:
 def _virtual_arena_challenge_stats(*, event_id: int, challenge_id: int) -> dict:
     """
     Per-arena-challenge: registration counts at opens_at / closes_at (MDC),
-    submission totals, distinct MDC-linked rows.
+    submission totals, distinct MDC-linked rows, and fresh vs returning submitter
+    counts vs the chronologically prior challenge (``closes_at``, ``opens_at``, ``id``).
     """
     out: dict = {
         "error": None,
@@ -4780,6 +6045,11 @@ def _virtual_arena_challenge_stats(*, event_id: int, challenge_id: int) -> dict:
         "registrations_at_close": 0,
         "total_submissions": 0,
         "unique_mdc_submissions": 0,
+        "submission_distinct_teams": 0,
+        "submission_fresh_vs_prior_challenge": 0,
+        "submission_returning_from_prior_challenge": 0,
+        "submission_prior_challenge_id": None,
+        "submission_prior_challenge_title": None,
     }
     try:
         with engine.connect() as conn:
@@ -4847,6 +6117,15 @@ def _virtual_arena_challenge_stats(*, event_id: int, challenge_id: int) -> dict:
             if sub_row:
                 out["total_submissions"] = int(sub_row["total"] or 0)
                 out["unique_mdc_submissions"] = int(sub_row["uniq_mdc"] or 0)
+        cohort = _virtual_challenge_submission_cohort_stats(int(event_id))
+        cc = cohort.get(int(challenge_id)) or {}
+        out["submission_distinct_teams"] = int(cc.get("submission_distinct_teams") or 0)
+        out["submission_fresh_vs_prior_challenge"] = int(cc.get("submission_fresh_vs_prior_challenge") or 0)
+        out["submission_returning_from_prior_challenge"] = int(
+            cc.get("submission_returning_from_prior_challenge") or 0
+        )
+        out["submission_prior_challenge_id"] = cc.get("submission_prior_challenge_id")
+        out["submission_prior_challenge_title"] = cc.get("submission_prior_challenge_title")
     except Exception as exc:  # noqa: BLE001
         out["error"] = str(exc)
     return out
@@ -5394,8 +6673,18 @@ def in_person_users():
     ac_raw = request.args.get("attendance_city")
     ac = (ac_raw or "").strip()[:200] or None
     advanced = _parse_mdc_users_advanced_from_request(request.args)
+    mdc_pw_raw = (request.args.get("mdc_pw_on") or "").strip()
+    mdc_pw_d = _parse_ipcsr_prompt_war_date_from_form(mdc_pw_raw) if mdc_pw_raw else None
+    mdc_sl = (request.args.get("mdc_session_label") or "").strip()[:200] or None
     users = _load_mdc_users_page(
-        DEFAULT_IN_PERSON_EVENT_ID, page, per_page, q, ac, advanced=advanced
+        DEFAULT_IN_PERSON_EVENT_ID,
+        page,
+        per_page,
+        q,
+        ac,
+        advanced=advanced,
+        mdc_pw_on=mdc_pw_d,
+        mdc_session_label=mdc_sl,
     )
     return render_template(
         "in_person_users.html",
@@ -5424,6 +6713,8 @@ def in_person_users():
                 "dob_to",
                 "designation_years_min",
                 "designation_years_max",
+                "participated_challenge_id",
+                "submission_session",
             )
         )[:40],
     },
@@ -5433,8 +6724,16 @@ def in_person_users_export_csv():
     ac_raw = request.args.get("attendance_city")
     ac = (ac_raw or "").strip()[:200] or None
     advanced = _parse_mdc_users_advanced_from_request(request.args)
+    mdc_pw_raw = (request.args.get("mdc_pw_on") or "").strip()
+    mdc_pw_d = _parse_ipcsr_prompt_war_date_from_form(mdc_pw_raw) if mdc_pw_raw else None
+    mdc_sl = (request.args.get("mdc_session_label") or "").strip()[:200] or None
     rows, err = _fetch_mdc_users_export_rows(
-        DEFAULT_IN_PERSON_EVENT_ID, q, ac, advanced=advanced
+        DEFAULT_IN_PERSON_EVENT_ID,
+        q,
+        ac,
+        advanced=advanced,
+        mdc_pw_on=mdc_pw_d,
+        mdc_session_label=mdc_sl,
     )
     if err:
         return Response(err, status=500, mimetype="text/plain; charset=utf-8")
@@ -5495,6 +6794,8 @@ def virtual_users():
                 "dob_to",
                 "designation_years_min",
                 "designation_years_max",
+                "participated_challenge_id",
+                "submission_session",
             )
         )[:40],
     },
@@ -5647,6 +6948,7 @@ def virtual_challenges_create():
             error=f"Could not create challenge: {exc}",
             open_create="1",
         )), 303
+    pw_invalidate_read_caches()
     return redirect(url_for(
         "virtual_challenges", virtualEventId=event_id, ok="Challenge created.",
     )), 303
@@ -5695,6 +6997,7 @@ def virtual_challenges_update(cid: int):
             "virtual_challenges", virtualEventId=event_id, edit=cid,
             error=f"Could not update challenge: {exc}",
         )), 303
+    pw_invalidate_read_caches()
     return redirect(url_for(
         "virtual_challenges", virtualEventId=event_id, ok="Challenge updated.",
     )), 303
@@ -5723,6 +7026,7 @@ def virtual_challenges_delete(cid: int):
             "virtual_challenges", virtualEventId=event_id,
             error=f"Could not delete challenge: {exc}",
         )), 303
+    pw_invalidate_read_caches()
     return redirect(url_for(
         "virtual_challenges", virtualEventId=event_id, ok="Challenge deleted.",
     )), 303
@@ -5867,12 +7171,48 @@ _register_cdi_page_id_redirects()
 def main():
     mode = "DEBUG" if DEBUG_MODE else "PROD"
     register_with_portal(MODULE_PAGES, module_name=MODULE_DISPLAY_NAME, base_url=MODULE_BASE_URL)
+    if DEBUG_MODE:
+        print(
+            f"Prompt Wars [{mode}] listening on http://{APP_HOST}:{APP_PORT}"
+            f" (reloader={'on' if USE_RELOADER else 'off'})",
+            file=sys.stderr,
+        )
+        app.run(host=APP_HOST, port=APP_PORT, debug=True, use_reloader=USE_RELOADER)
+        return
+    from waitress import serve  # noqa: WPS433
+
+    threads = int(os.environ.get("WAITRESS_THREADS", "64"))
+    channel_timeout = int(os.environ.get("WAITRESS_CHANNEL_TIMEOUT", "120"))
+    cleanup_interval = int(os.environ.get("WAITRESS_CLEANUP_INTERVAL", "30"))
+    # Waitress default max_request_body_size is 1 GiB; raise for large Vision exports (override via env).
+    max_request_body_size = 200 * 1024 * 1024 * 1024  # 200 GiB default (Waitress has no true "unlimited")
+    _w_body_raw = (os.environ.get("WAITRESS_MAX_REQUEST_BODY_BYTES") or "").strip()
+    if _w_body_raw:
+        try:
+            max_request_body_size = int(_w_body_raw)
+        except ValueError:
+            print(
+                f"Prompt Wars: invalid WAITRESS_MAX_REQUEST_BODY_BYTES={_w_body_raw!r}, using default",
+                file=sys.stderr,
+            )
+            max_request_body_size = 200 * 1024 * 1024 * 1024
+    if max_request_body_size <= 0:
+        max_request_body_size = 200 * 1024 * 1024 * 1024
     print(
-        f"Prompt Wars [{mode}] listening on http://{APP_HOST}:{APP_PORT}"
-        f" (reloader={'on' if USE_RELOADER else 'off'})",
+        f"Prompt Wars [PROD/waitress] http://{APP_HOST}:{APP_PORT} threads={threads} "
+        f"channel_timeout={channel_timeout}s max_request_body_size={max_request_body_size}",
         file=sys.stderr,
     )
-    app.run(host=APP_HOST, port=APP_PORT, debug=DEBUG_MODE, use_reloader=USE_RELOADER)
+    serve(
+        app,
+        host=APP_HOST,
+        port=APP_PORT,
+        threads=threads,
+        channel_timeout=channel_timeout,
+        cleanup_interval=cleanup_interval,
+        asyncore_use_poll=True,
+        max_request_body_size=max_request_body_size,
+    )
 
 
 if __name__ == "__main__":

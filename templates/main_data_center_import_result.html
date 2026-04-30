@@ -40,12 +40,12 @@
             <span class="tabular-nums font-medium text-slate-900">{{ "{:,}".format(stats.rows_written or 0) }}</span>
           </li>
           <li class="flex justify-between gap-4 border-b border-slate-100 py-2">
-            <span>Rows after dedupe (unique emails in file)</span>
+            <span>Rows after dedupe (unique email + PW session keys in file)</span>
             <span class="tabular-nums font-medium text-slate-900">{{ "{:,}".format(stats.rows_after_dedupe or 0) }}</span>
           </li>
           <li class="flex justify-between gap-4 py-2">
-            <span>Duplicate emails in file (last row kept)</span>
-            <span class="tabular-nums font-medium text-slate-900">{{ "{:,}".format(stats.duplicate_emails_collapsed or 0) }}</span>
+            <span>Duplicate registration keys in file (last row kept)</span>
+            <span class="tabular-nums font-medium text-slate-900">{{ "{:,}".format(stats.duplicate_registration_keys_collapsed or stats.duplicate_emails_collapsed or 0) }}</span>
           </li>
         </ul>
       </div>

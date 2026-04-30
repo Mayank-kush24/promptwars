@@ -9,8 +9,9 @@ Two coordinated layers, both mandatory at boot:
     auto-attaches the trigger to every newly created table - so any future
     module/entity is covered automatically without code changes.
 
-  * Layer B: a Flask + SQLAlchemy middleware (this package) captures every
-    HTTP request, every SQL statement (incl. SELECT), and auth events into
+    * Layer B: a Flask + SQLAlchemy middleware (this package) captures every
+    HTTP request, SQL writes (SELECT/TXN optional via AUDIT_SQL_SELECTS), and
+    auth events into
     a bounded in-process queue drained by an async batch worker thread that
     bulk-INSERTs into audit.audit_events.
 
@@ -107,6 +108,7 @@ def install(app, engine: Engine, *, audit_engine: Engine | None = None) -> Async
         flush_interval_ms=_env_int("AUDIT_FLUSH_INTERVAL_MS", 250),
         flush_batch=_env_int("AUDIT_FLUSH_BATCH", 500),
         block_ms=_env_int("AUDIT_QUEUE_BLOCK_MS", 500),
+        drop_oldest=_env_bool("AUDIT_QUEUE_DROP_OLDEST", True),
     )
     sink.start()
 
