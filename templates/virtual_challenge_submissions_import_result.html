@@ -11,13 +11,23 @@
     {% if stats and stats.get('merge_policy') %}
       <p class="text-xs text-slate-600 max-w-3xl">{{ stats.merge_policy }}</p>
     {% endif %}
+    {% if stats and stats.get('parse_stats') %}
+      {% set ps = stats.parse_stats %}
+      {% if ps.get('rows_collapsed_duplicate_leader_email') and ps.rows_collapsed_duplicate_leader_email > 0 %}
+        <p class="text-xs text-amber-950 max-w-3xl mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+          Parsed <strong>{{ "{:,}".format(ps.rows_parsed_with_team_email or 0) }}</strong> sheet rows with team + leader email;
+          <strong>{{ "{:,}".format(ps.rows_collapsed_duplicate_leader_email) }}</strong> duplicated the same leader email on the same challenge (last row kept),
+          so <strong>{{ "{:,}".format(stats.rows_written or 0) }}</strong> distinct rows were written.
+        </p>
+      {% endif %}
+    {% endif %}
 
     {% if stats %}
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-md">
         <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
-          <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Rows written</p>
+          <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Distinct submissions upserted</p>
           <p class="font-display text-3xl text-slate-900 tabular-nums mt-1">{{ "{:,}".format(stats.rows_written or 0) }}</p>
-          <p class="text-xs text-slate-500 mt-2">Upserted into virtual_challenge_submission_rows</p>
+          <p class="text-xs text-slate-500 mt-2">One row per (challenge, leader email) in virtual_challenge_submission_rows</p>
         </div>
         <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
           <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Import job</p>
@@ -35,7 +45,7 @@
                 <span class="font-mono text-xs text-slate-800">{{ name }}</span>
                 <span class="tabular-nums text-xs">
                   Challenge #{{ info.challenge_id }}{% if info.challenge_title %} — {{ info.challenge_title }}{% endif %}
-                  · {{ info.rows_written }} row(s) upserted
+                  · {{ info.rows_parsed or info.rows_written }} row(s) parsed (team + email)
                 </span>
               </li>
             {% endfor %}
@@ -64,14 +74,14 @@
     {% if error_detail and error_detail.get('parse_stats') and error_detail.parse_stats.get('sheets') %}
       <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
         <h2 class="font-display text-headline-md text-slate-900 mb-sm">Sheets detected in your file</h2>
-        <p class="text-xs text-slate-500 mb-md">These tabs matched a challenge. Row counts are rows with Team Name + Leader Email before the MDC email check.</p>
+        <p class="text-xs text-slate-500 mb-md">These tabs matched a challenge. Row counts are rows with Team Name + Leader Email before the registration email check.</p>
         <ul class="text-sm text-slate-600 space-y-1 list-none pl-0">
           {% for name, info in error_detail.parse_stats.sheets.items() %}
             <li class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-1 border-b border-slate-100 py-2">
               <span class="font-mono text-xs text-slate-800">{{ name }}</span>
               <span class="tabular-nums text-xs">
                 Challenge #{{ info.challenge_id }}{% if info.challenge_title %} — {{ info.challenge_title }}{% endif %}
-                · {{ info.rows_written }} row(s) parsed
+                · {{ info.rows_parsed or info.rows_written }} row(s) parsed
               </span>
             </li>
           {% endfor %}
@@ -80,8 +90,8 @@
     {% endif %}
     {% if error_detail and error_detail.get('missing_emails') %}
       <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
-        <h2 class="font-display text-headline-md text-slate-900 mb-sm">Emails not in Virtual Main Data Center</h2>
-        <p class="text-xs text-slate-500 mb-sm">Add these people via <strong>Virtual Main Data Center</strong> import first (event #{{ error_detail.virtual_event_id or '—' }}), then re-run this import.</p>
+        <h2 class="font-display text-headline-md text-slate-900 mb-sm">Emails not in virtual registrations</h2>
+        <p class="text-xs text-slate-500 mb-sm">Add these people via <strong>Virtual · Import</strong> registrations first (event #{{ error_detail.virtual_event_id or '—' }}), then re-run this import.</p>
         <ul class="text-xs font-mono text-slate-700 list-disc pl-5 space-y-0.5 max-h-48 overflow-y-auto">
           {% for em in error_detail.missing_emails %}
             <li>{{ em }}</li>

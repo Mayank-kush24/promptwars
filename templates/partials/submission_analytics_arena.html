@@ -1,0 +1,327 @@
+{# Shared Submission Analytics (Virtual arena challenge or In-person Action Center session). Expects: submission_analytics_mode ('virtual'|'in_person'), analytics_theme ('violet'|'emerald'), arena_stats, and mode-specific context from the parent template. #}
+{% set is_v = submission_analytics_mode == 'virtual' %}
+{% set n_arena_ch = (virtual_challenges or [])|length %}
+<section class="rounded-2xl border-2 {% if is_v %}border-violet-200/90 shadow-[0_4px_22px_rgba(31,22,53,0.08),0_1px_2px_rgba(31,22,53,0.04)]{% else %}border-emerald-200/90 shadow-[0_4px_22px_rgba(6,78,59,0.07),0_1px_2px_rgba(6,78,59,0.04)]{% endif %} bg-white/95 px-4 sm:px-6 py-5 sm:py-6 mb-0" aria-labelledby="pw-submission-analytics-heading">
+  <div class="pb-4 mb-5 border-b border-slate-200/90 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between lg:gap-6">
+    <div class="min-w-0 flex-1">
+      <h2 id="pw-submission-analytics-heading" class="font-display text-headline-md sm:text-headline-lg text-slate-900 tracking-tight leading-tight">Submission Analytics</h2>
+      {% if is_v %}
+      <p class="text-xs text-slate-500 mt-1.5">Metrics and breakdowns for the selected arena challenge.</p>
+      {% else %}
+      <p class="text-xs text-slate-500 mt-1.5">Metrics and breakdowns for the selected Action Center session (main sheet).</p>
+      {% endif %}
+    </div>
+    <div class="flex flex-col gap-2 items-stretch lg:items-end shrink-0 w-full lg:w-auto min-w-0">
+      {% if is_v %}
+      {% if n_arena_ch > 5 %}
+      <form method="get" action="{{ url_for('virtual_page') }}" class="flex flex-wrap items-end gap-3 w-full lg:justify-end">
+        <input type="hidden" name="virtualEventId" value="{{ virtual_event_id }}" />
+        <input type="hidden" name="inPersonEventId" value="{{ in_person_event_id }}" />
+        <input type="hidden" name="standingsView" value="{{ standings_view_value }}" />
+        {% if active_challenge_id %}<input type="hidden" name="challengeId" value="{{ active_challenge_id }}" />{% endif %}
+        <label class="flex flex-col gap-1 flex-1 min-w-0 w-full lg:max-w-md">
+          <span class="text-[10px] font-bold uppercase tracking-widest text-slate-500 lg:text-right">Arena challenge</span>
+          <select name="arenaChallengeId" onchange="this.form.submit()"
+                  class="px-3 py-2.5 rounded-xl border border-violet-200/90 bg-white text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-400/40 w-full">
+            {% for ch in (virtual_challenges or []) %}
+              <option value="{{ ch.id }}" {% if challenge_id and ch.id == challenge_id %}selected{% endif %}>{{ ch.title }} ({{ ch.status }})</option>
+            {% else %}
+              <option value="">No challenges yet</option>
+            {% endfor %}
+          </select>
+        </label>
+      </form>
+      {% else %}
+      <div class="flex flex-wrap gap-2 justify-start lg:justify-end">
+        {% for ch in (virtual_challenges or []) %}
+          {% if active_challenge_id %}
+            {% set chip_href = url_for('virtual_page', virtualEventId=virtual_event_id, inPersonEventId=in_person_event_id, arenaChallengeId=ch.id, challengeId=active_challenge_id, standingsView=standings_view_value) %}
+          {% else %}
+            {% set chip_href = url_for('virtual_page', virtualEventId=virtual_event_id, inPersonEventId=in_person_event_id, arenaChallengeId=ch.id, standingsView=standings_view_value) %}
+          {% endif %}
+          <a href="{{ chip_href }}"
+             class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold border transition-colors no-underline
+               {% if challenge_id and ch.id == challenge_id %}pw-arena-chip-active{% else %}border-slate-200 bg-white/90 text-slate-600 hover:border-violet-200 hover:bg-violet-50/50{% endif %}">
+            <span class="truncate max-w-[10rem] sm:max-w-[14rem]">{{ ch.title }}</span>
+            <span class="shrink-0 text-[10px] uppercase tracking-wide opacity-80">({{ ch.status }})</span>
+          </a>
+        {% else %}
+          <span class="text-sm text-slate-500">No challenges yet.</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% if challenge_id and arena_stats and not arena_stats.error and arena_stats.closes_at_display %}
+      <span class="inline-flex items-center gap-1 text-xs text-slate-500 tabular-nums lg:self-end">
+        <span class="material-symbols-outlined text-[16px] text-slate-400">event</span>
+        {{ arena_stats.closes_at_display }}
+      </span>
+      {% endif %}
+      {% else %}
+      {% if ip_ac_session_display %}
+      <span class="inline-flex items-center gap-1 text-xs text-slate-600 font-medium tabular-nums lg:self-end">
+        <span class="material-symbols-outlined text-[16px] text-emerald-600">calendar_month</span>
+        {{ ip_ac_session_display }}
+      </span>
+      {% endif %}
+      {% endif %}
+    </div>
+  </div>
+  {% if arena_stats.error %}
+  <div class="glass-panel rounded-xl p-4 text-sm text-rose-800 border border-rose-200/80">{{ arena_stats.error }}</div>
+  {% else %}
+  {% if is_v %}
+  <div class="glass-panel pw-bento rounded-xl border border-slate-200/80 bg-white/95 shadow-sm overflow-hidden">
+    <div class="grid grid-cols-2 lg:grid-cols-3 gap-0">
+      {% if is_v %}
+      <div class="p-4 sm:p-5 border-r border-b border-slate-100 lg:border-b-0">
+        <div class="flex justify-between items-start gap-2">
+          <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">At open</span>
+          <span class="material-symbols-outlined text-slate-400 text-[20px] shrink-0">door_front</span>
+        </div>
+        {% if arena_stats.opens_at_set %}
+        <p class="font-display text-2xl text-slate-900 tabular-nums leading-tight mt-2">{{ "{:,}".format(arena_stats.registrations_at_open or 0) }}</p>
+        <p class="text-[11px] text-slate-500 mt-1 truncate" title="{{ arena_stats.opens_at_display or '' }}">≤ {{ arena_stats.opens_at_display or "—" }}</p>
+        {% else %}
+        <p class="text-sm text-slate-500 mt-3 leading-snug">Set <span class="font-mono text-xs">opens_at</span> on the challenge to show this.</p>
+        {% endif %}
+      </div>
+      <div class="p-4 sm:p-5 border-b border-slate-100 lg:border-b-0 lg:border-r lg:border-slate-100">
+        <div class="flex justify-between items-start gap-2">
+          <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">At close</span>
+          <span class="material-symbols-outlined text-violet-500 text-[20px] shrink-0">groups</span>
+        </div>
+        <p class="font-display text-2xl text-slate-900 tabular-nums leading-tight mt-2">{{ "{:,}".format(arena_stats.registrations_at_close or 0) }}</p>
+        <p class="text-[11px] text-slate-500 mt-1 truncate" title="{{ arena_stats.closes_at_display or '' }}">≤ {{ arena_stats.closes_at_display or "—" }}</p>
+        {% if arena_stats.opens_at_set and arena_stats.registrations_at_open is not none %}
+        <p class="mt-2 inline-flex items-center rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold px-2 py-0.5 border border-emerald-100">
+          +{{ "{:,}".format((arena_stats.registrations_at_close or 0) - (arena_stats.registrations_at_open or 0)) }} during window
+        </p>
+        {% endif %}
+      </div>
+      {% else %}
+      <div class="p-4 sm:p-5 border-r border-b border-slate-100 lg:border-b-0">
+        <div class="flex justify-between items-start gap-2">
+          <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">MDC registrations</span>
+          <span class="material-symbols-outlined text-slate-400 text-[20px] shrink-0">app_registration</span>
+        </div>
+        <p class="font-display text-2xl text-slate-900 tabular-nums leading-tight mt-2">{{ "{:,}".format(arena_stats.registrations_at_open or 0) }}</p>
+        <p class="text-[11px] text-slate-500 mt-1 leading-snug">Rows in Main Data Center for this city, <span class="font-mono text-[10px]">prompt_war_on</span>, and session label.</p>
+      </div>
+      <div class="p-4 sm:p-5 border-b border-slate-100 lg:border-b-0 lg:border-r lg:border-slate-100">
+        <div class="flex justify-between items-start gap-2">
+          <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Linked in Action Center</span>
+          <span class="material-symbols-outlined text-emerald-600 text-[20px] shrink-0">link</span>
+        </div>
+        <p class="font-display text-2xl text-slate-900 tabular-nums leading-tight mt-2">{{ "{:,}".format(arena_stats.registrations_at_close or 0) }}</p>
+        <p class="text-[11px] text-slate-500 mt-1 leading-snug">Main-sheet submission rows with a non-null <span class="font-mono text-[10px]">in_person_mdc_registration_id</span>.</p>
+      </div>
+      {% endif %}
+      <div class="p-4 sm:p-5 {% if is_v %}bg-[var(--pw-accent-soft)]{% else %}bg-emerald-50/90{% endif %} col-span-2 lg:col-span-1 border-t border-slate-100 lg:border-t-0 lg:border-l lg:border-slate-100">
+        <div class="flex justify-between items-start gap-2">
+          <span class="text-[10px] font-bold uppercase tracking-wider {% if is_v %}text-violet-800{% else %}text-emerald-900{% endif %}">Unique submissions</span>
+          <span class="material-symbols-outlined {% if is_v %}text-violet-600{% else %}text-emerald-700{% endif %} text-[20px] shrink-0">link</span>
+        </div>
+        <p class="font-display text-2xl {% if is_v %}text-violet-950{% else %}text-emerald-950{% endif %} tabular-nums leading-tight mt-2">{{ "{:,}".format(arena_stats.unique_mdc_submissions or 0) }}</p>
+      </div>
+    </div>
+    <div class="border-t border-slate-100">
+    <div class="flex flex-col divide-y divide-slate-100 sm:flex-row sm:divide-y-0 sm:divide-x sm:divide-slate-100">
+      <div class="p-4 sm:p-5 flex-1 min-w-0">
+        <div class="flex justify-between items-start gap-2">
+          <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total teams</span>
+          <span class="material-symbols-outlined text-slate-400 text-[20px] shrink-0">leaderboard</span>
+        </div>
+        <p class="font-display text-2xl text-slate-900 tabular-nums leading-tight mt-2">{{ "{:,}".format(arena_stats.total_submissions or 0) }}</p>
+      </div>
+      <div class="p-4 sm:p-5 flex-1 min-w-0">
+        <div class="flex justify-between items-start gap-2">
+          <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">{% if is_v %}New this challenge{% else %}New this session{% endif %}</span>
+          <span class="material-symbols-outlined text-emerald-500 text-[20px] shrink-0">person_add</span>
+        </div>
+        <p class="font-display text-2xl text-slate-900 tabular-nums leading-tight mt-2">{{ "{:,}".format(arena_stats.submission_fresh_vs_prior_challenge or 0) }}</p>
+        <p class="text-[11px] text-slate-500 mt-1 leading-snug">{% if is_v %}Teams on this import with no submission on the earlier challenge{% else %}Distinct team leaders on this import with no submission on the earlier Prompt War session{% endif %}{% if arena_stats.submission_prior_challenge_title %} (<span class="font-medium text-slate-700">{{ arena_stats.submission_prior_challenge_title }}</span>){% endif %}.</p>
+      </div>
+      <div class="p-4 sm:p-5 flex-1 min-w-0">
+        <div class="flex justify-between items-start gap-2">
+          <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Returning</span>
+          <span class="material-symbols-outlined {% if is_v %}text-violet-500{% else %}text-emerald-600{% endif %} text-[20px] shrink-0">history</span>
+        </div>
+        <p class="font-display text-2xl text-slate-900 tabular-nums leading-tight mt-2">{{ "{:,}".format(arena_stats.submission_returning_from_prior_challenge or 0) }}</p>
+        <p class="text-[11px] text-slate-500 mt-1 leading-snug">{% if is_v %}Teams that also submitted on the earlier challenge.{% else %}Leaders who also submitted on the earlier session (ordered by <span class="font-mono text-[10px]">in_person_pw_sessions</span>).{% endif %}</p>
+      </div>
+    </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% set scx = arena_stats.get('submission_crossover') %}
+  {% if scx and not scx.get('error') %}
+  <div class="mt-5 rounded-xl border border-slate-200/80 bg-white/95 p-5 shadow-sm">
+    <p class="text-[11px] text-slate-500 mb-4">Distinct team leaders by <span class="font-mono text-[11px]">leader_email_normalized</span>.</p>
+    <dl class="grid grid-cols-1 sm:grid-cols-2 gap-6 text-sm max-w-2xl">
+      {% if is_v %}
+      <div class="min-w-0">
+        <dt class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Submission</dt>
+        <dd class="font-display text-2xl tabular-nums text-slate-900 mt-1">{{ "{:,}".format(scx.distinct_v_leaders or 0) }}</dd>
+        <p class="text-[11px] text-slate-500 mt-1">This arena challenge.</p>
+      </div>
+      <div class="min-w-0">
+        <dt class="text-[10px] font-bold uppercase tracking-wider text-violet-800">Submission from in-person PW</dt>
+        <dd class="font-display text-2xl tabular-nums text-violet-950 mt-1">{{ "{:,}".format(scx.both_tracks or 0) }}</dd>
+        <p class="text-[11px] text-slate-500 mt-1">Also have an in-person Action Center main-sheet row (any session).</p>
+      </div>
+      {% else %}
+      <div class="min-w-0">
+        <dt class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Submission</dt>
+        <dd class="font-display text-2xl tabular-nums text-slate-900 mt-1">{{ "{:,}".format(scx.distinct_ip_leaders or 0) }}</dd>
+        <p class="text-[11px] text-slate-500 mt-1">This session (main sheet).</p>
+      </div>
+      <div class="min-w-0">
+        <dt class="text-[10px] font-bold uppercase tracking-wider text-emerald-800">Submission from Virtual PW</dt>
+        <dd class="font-display text-2xl tabular-nums text-emerald-950 mt-1">{{ "{:,}".format(scx.both_tracks or 0) }}</dd>
+        <p class="text-[11px] text-slate-500 mt-1">Same leader email also on a virtual arena row (any challenge).</p>
+      </div>
+      {% endif %}
+    </dl>
+  </div>
+  {% elif scx and scx.get('error') %}
+  <div class="mt-5 rounded-xl border border-amber-200/80 bg-amber-50/90 p-4 text-xs text-amber-900">Submission crossover unavailable: {{ scx.error }}</div>
+  {% endif %}
+
+  {% set _tot_teams = arena_stats.total_submissions or 0 %}
+  {% set _seg_st = arena_stats.team_segment_student or 0 %}
+  {% set _seg_pr = arena_stats.team_segment_professional or 0 %}
+  <div class="mt-5 rounded-xl border border-slate-200/80 bg-white/95 p-5 shadow-sm">
+    <h3 class="font-display text-headline-md text-slate-900">Teams by registration occupation</h3>
+    <p class="text-xs text-slate-500 mt-1 mb-4">Registration occupation: <span class="font-mono text-[11px]">COLLEGE_STUDENT</span> counts as student; <span class="font-mono text-[11px]">PROFESSIONAL</span>, <span class="font-mono text-[11px]">STARTUP</span>, and <span class="font-mono text-[11px]">FREELANCE</span> count as professional (matching is case-insensitive).</p>
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+      <div class="flex flex-col gap-3 text-sm">
+        <div class="flex flex-wrap gap-x-6 gap-y-2">
+          <div>
+            <p class="text-[10px] font-bold uppercase tracking-wider {% if is_v %}text-violet-800{% else %}text-emerald-800{% endif %}">Student</p>
+            <p class="font-display text-xl tabular-nums text-slate-900">{{ "{:,}".format(_seg_st) }} <span class="text-sm font-semibold text-slate-500">({{ (100 * _seg_st / _tot_teams)|round(1) if _tot_teams else "0" }}%)</span></p>
+          </div>
+          <div>
+            <p class="text-[10px] font-bold uppercase tracking-wider {% if is_v %}text-indigo-800{% else %}text-teal-800{% endif %}">Professional</p>
+            <p class="font-display text-xl tabular-nums text-slate-900">{{ "{:,}".format(_seg_pr) }} <span class="text-sm font-semibold text-slate-500">({{ (100 * _seg_pr / _tot_teams)|round(1) if _tot_teams else "0" }}%)</span></p>
+          </div>
+        </div>
+        {% set _sn = arena_stats.submission_score_agg_n or 0 %}
+        <div class="mt-1 rounded-xl border {% if is_v %}border-violet-100/90 bg-violet-50/50{% else %}border-emerald-100/90 bg-emerald-50/50{% endif %} px-3 py-3 sm:px-4 sm:py-3.5">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">Imported score (per submission row)</p>
+          {% if _sn > 0 %}
+          <dl class="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-2.5 text-xs sm:text-sm">
+            <div class="min-w-0">
+              <dt class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Min</dt>
+              <dd class="font-display text-base tabular-nums text-slate-900 mt-0.5">{% if arena_stats.submission_score_min is not none %}{{ "{:,.6g}".format(arena_stats.submission_score_min) }}{% else %}—{% endif %}</dd>
+            </div>
+            <div class="min-w-0">
+              <dt class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Max</dt>
+              <dd class="font-display text-base tabular-nums text-slate-900 mt-0.5">{% if arena_stats.submission_score_max is not none %}{{ "{:,.6g}".format(arena_stats.submission_score_max) }}{% else %}—{% endif %}</dd>
+            </div>
+            <div class="min-w-0">
+              <dt class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Average</dt>
+              <dd class="font-display text-base tabular-nums text-slate-900 mt-0.5">{% if arena_stats.submission_score_avg is not none %}{{ "{:,.6g}".format(arena_stats.submission_score_avg) }}{% else %}—{% endif %}</dd>
+            </div>
+            <div class="min-w-0">
+              <dt class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Median</dt>
+              <dd class="font-display text-base tabular-nums text-slate-900 mt-0.5">{% if arena_stats.submission_score_median is not none %}{{ "{:,.6g}".format(arena_stats.submission_score_median) }}{% else %}—{% endif %}</dd>
+            </div>
+            <div class="min-w-0">
+              <dt class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Std dev</dt>
+              <dd class="font-display text-base tabular-nums text-slate-900 mt-0.5" title="Sample standard deviation; requires at least two scored rows.">{% if arena_stats.submission_score_stddev is not none %}{{ "{:,.6g}".format(arena_stats.submission_score_stddev) }}{% else %}—{% endif %}</dd>
+            </div>
+          </dl>
+          {% else %}
+          <p class="text-xs text-slate-500">No rows with a numeric <span class="font-mono text-[11px]">total_score</span> yet.</p>
+          {% endif %}
+        </div>
+      </div>
+      <div id="pwArenaSegmentHost" class="relative h-[260px] w-full max-w-[320px] mx-auto">
+        <canvas id="pwArenaSegmentDonut" aria-label="Teams by student and professional segments"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-5">
+    <div class="rounded-xl border border-slate-200/80 bg-white/95 p-5 shadow-sm min-w-0">
+      <h3 class="font-display text-headline-md text-slate-900">Students · attempts per team</h3>
+      <p class="text-xs text-slate-500 mt-1 mb-3">Teams with registration occupation <span class="font-mono text-[11px]">COLLEGE_STUDENT</span>, using <span class="font-mono text-[11px]">attempts_completed</span> on each submission row. {% if is_v %}Upload the challenge-wide sheet on <a href="{{ url_for('virtual_import', virtualEventId=virtual_event_id) }}" class="text-violet-700 font-semibold hover:underline">Virtual · Import</a> to populate counts.{% else %}Populate counts on <a href="{{ url_for('in_person_import') }}" class="text-emerald-700 font-semibold hover:underline">In-person · Import</a> via the Action Center workbook or the <strong>Challenge attempt counts</strong> (CSV / XLSX) section for a PW session.{% endif %} Bar counts sum to the student total above; <span class="font-medium text-slate-700">Not reported</span> means missing or below 1.</p>
+      <p id="pwAttemptFunnelStudentsHint" class="text-xs text-slate-500 mb-2 hidden"></p>
+      <div class="relative mt-1 h-[220px] w-full">
+        <canvas id="pwAttemptFunnelStudentsChart" aria-label="Student attempt distribution"></canvas>
+      </div>
+      {% set _stsn = arena_stats.submission_score_student_n or 0 %}
+      <div class="mt-4 rounded-xl border {% if is_v %}border-violet-100/90 bg-violet-50/50{% else %}border-emerald-100/90 bg-emerald-50/50{% endif %} px-3 py-3 sm:px-4 sm:py-3.5">
+        <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">Imported score (students)</p>
+        <p class="text-[11px] text-slate-500 mb-2"><span class="font-mono text-[11px]">total_score</span> for student-segment rows (same registrations as the attempt chart).</p>
+        {% if _stsn > 0 %}
+        <dl class="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-2.5 text-xs sm:text-sm">
+          <div class="min-w-0">
+            <dt class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Min</dt>
+            <dd class="font-display text-base tabular-nums text-slate-900 mt-0.5">{% if arena_stats.submission_score_student_min is not none %}{{ "{:,.6g}".format(arena_stats.submission_score_student_min) }}{% else %}—{% endif %}</dd>
+          </div>
+          <div class="min-w-0">
+            <dt class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Max</dt>
+            <dd class="font-display text-base tabular-nums text-slate-900 mt-0.5">{% if arena_stats.submission_score_student_max is not none %}{{ "{:,.6g}".format(arena_stats.submission_score_student_max) }}{% else %}—{% endif %}</dd>
+          </div>
+          <div class="min-w-0">
+            <dt class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Average</dt>
+            <dd class="font-display text-base tabular-nums text-slate-900 mt-0.5">{% if arena_stats.submission_score_student_avg is not none %}{{ "{:,.6g}".format(arena_stats.submission_score_student_avg) }}{% else %}—{% endif %}</dd>
+          </div>
+          <div class="min-w-0">
+            <dt class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Median</dt>
+            <dd class="font-display text-base tabular-nums text-slate-900 mt-0.5">{% if arena_stats.submission_score_student_median is not none %}{{ "{:,.6g}".format(arena_stats.submission_score_student_median) }}{% else %}—{% endif %}</dd>
+          </div>
+          <div class="min-w-0">
+            <dt class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Std dev</dt>
+            <dd class="font-display text-base tabular-nums text-slate-900 mt-0.5" title="Sample standard deviation; needs at least two scored rows in this segment.">{% if arena_stats.submission_score_student_stddev is not none %}{{ "{:,.6g}".format(arena_stats.submission_score_student_stddev) }}{% else %}—{% endif %}</dd>
+          </div>
+        </dl>
+        {% else %}
+        <p class="text-xs text-slate-500">No student rows with a numeric <span class="font-mono text-[11px]">total_score</span> yet.</p>
+        {% endif %}
+      </div>
+    </div>
+    <div class="rounded-xl border border-slate-200/80 bg-white/95 p-5 shadow-sm min-w-0">
+      <h3 class="font-display text-headline-md text-slate-900">Professionals · attempts per team</h3>
+      <p class="text-xs text-slate-500 mt-1 mb-3">Teams with <span class="font-mono text-[11px]">PROFESSIONAL</span>, <span class="font-mono text-[11px]">STARTUP</span>, or <span class="font-mono text-[11px]">FREELANCE</span> registration occupation. Same import as students. Bar counts sum to the professional total above; <span class="font-medium text-slate-700">Not reported</span> means missing or below 1.</p>
+      <p id="pwAttemptFunnelProfessionalsHint" class="text-xs text-slate-500 mb-2 hidden"></p>
+      <div class="relative mt-1 h-[220px] w-full">
+        <canvas id="pwAttemptFunnelProfessionalsChart" aria-label="Professional attempt distribution"></canvas>
+      </div>
+      {% set _prsn = arena_stats.submission_score_professional_n or 0 %}
+      <div class="mt-4 rounded-xl border {% if is_v %}border-violet-100/90 bg-violet-50/50{% else %}border-emerald-100/90 bg-emerald-50/50{% endif %} px-3 py-3 sm:px-4 sm:py-3.5">
+        <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-2">Imported score (professionals)</p>
+        <p class="text-[11px] text-slate-500 mb-2"><span class="font-mono text-[11px]">total_score</span> for professional-segment rows (same registrations as the attempt chart).</p>
+        {% if _prsn > 0 %}
+        <dl class="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-2.5 text-xs sm:text-sm">
+          <div class="min-w-0">
+            <dt class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Min</dt>
+            <dd class="font-display text-base tabular-nums text-slate-900 mt-0.5">{% if arena_stats.submission_score_professional_min is not none %}{{ "{:,.6g}".format(arena_stats.submission_score_professional_min) }}{% else %}—{% endif %}</dd>
+          </div>
+          <div class="min-w-0">
+            <dt class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Max</dt>
+            <dd class="font-display text-base tabular-nums text-slate-900 mt-0.5">{% if arena_stats.submission_score_professional_max is not none %}{{ "{:,.6g}".format(arena_stats.submission_score_professional_max) }}{% else %}—{% endif %}</dd>
+          </div>
+          <div class="min-w-0">
+            <dt class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Average</dt>
+            <dd class="font-display text-base tabular-nums text-slate-900 mt-0.5">{% if arena_stats.submission_score_professional_avg is not none %}{{ "{:,.6g}".format(arena_stats.submission_score_professional_avg) }}{% else %}—{% endif %}</dd>
+          </div>
+          <div class="min-w-0">
+            <dt class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Median</dt>
+            <dd class="font-display text-base tabular-nums text-slate-900 mt-0.5">{% if arena_stats.submission_score_professional_median is not none %}{{ "{:,.6g}".format(arena_stats.submission_score_professional_median) }}{% else %}—{% endif %}</dd>
+          </div>
+          <div class="min-w-0">
+            <dt class="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Std dev</dt>
+            <dd class="font-display text-base tabular-nums text-slate-900 mt-0.5" title="Sample standard deviation; needs at least two scored rows in this segment.">{% if arena_stats.submission_score_professional_stddev is not none %}{{ "{:,.6g}".format(arena_stats.submission_score_professional_stddev) }}{% else %}—{% endif %}</dd>
+          </div>
+        </dl>
+        {% else %}
+        <p class="text-xs text-slate-500">No professional rows with a numeric <span class="font-mono text-[11px]">total_score</span> yet.</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</section>

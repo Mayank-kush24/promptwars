@@ -13,8 +13,10 @@
       <select class="w-full min-w-0 cursor-pointer appearance-none rounded-xl border border-emerald-200/90 bg-white py-2.5 pl-3 pr-10 text-sm font-medium text-slate-800 shadow-sm transition-colors hover:border-emerald-300 focus:border-emerald-400 focus:outline-none focus:ring-2 focus:ring-emerald-200/80"
               aria-label="Prompt War session"
               onchange="var u = this.options[this.selectedIndex].getAttribute('data-url'); if (u) window.location.href = u;">
+        {% if global_leaderboards_enabled|default(true) %}
         <option data-url="{% if bar_mode == 'leaderboard' %}{{ url_for('in_person_leaderboard', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, challengeId=challenge_id) }}{% else %}{{ url_for('in_person_page', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id) }}{% endif %}"
                 {% if not ip_action_center_city %}selected{% endif %}>All PWs (global)</option>
+        {% endif %}
         {% for pw in (in_person_action_pw_options or []) %}
         {% set _chip_active = ip_action_center_city == pw.city and (ip_ac_pw_date_iso or '') == (pw.prompt_war_on_iso or '') and (ip_ac_session_label or '') == (pw.session_label or '') %}
         <option data-url="{% if bar_mode == 'leaderboard' %}{{ url_for('in_person_leaderboard', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, challengeId=challenge_id, ipActionCenterCity=pw.city, ipPromptWarDate=pw.prompt_war_on_iso, ipPromptWarLabel=pw.session_label) }}{% else %}{{ url_for('in_person_page', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, ipActionCenterCity=pw.city, ipPromptWarDate=pw.prompt_war_on_iso, ipPromptWarLabel=pw.session_label) }}{% endif %}"
@@ -27,11 +29,13 @@
     </div>
     {% else %}
     <div class="flex flex-wrap gap-2">
+      {% if global_leaderboards_enabled|default(true) %}
       <a href="{% if bar_mode == 'leaderboard' %}{{ url_for('in_person_leaderboard', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, challengeId=challenge_id) }}{% else %}{{ url_for('in_person_page', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id) }}{% endif %}"
          class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold border transition-colors no-underline
            {% if bar_mode == 'leaderboard' %}{% if not ip_action_center_city %}border-emerald-500 bg-emerald-50 text-emerald-900{% else %}border-slate-200 bg-white/90 text-slate-600 hover:border-emerald-200 hover:bg-emerald-50/50{% endif %}{% else %}{% if not ip_action_center_city %}pw-ip-arena-chip-active{% else %}border-slate-200 bg-white/90 text-slate-600 hover:border-emerald-200 hover:bg-emerald-50/50{% endif %}{% endif %}">
         All PWs (global)
       </a>
+      {% endif %}
       {% for pw in (in_person_action_pw_options or []) %}
         {% set _chip_active = ip_action_center_city == pw.city and (ip_ac_pw_date_iso or '') == (pw.prompt_war_on_iso or '') and (ip_ac_session_label or '') == (pw.session_label or '') %}
         <a href="{% if bar_mode == 'leaderboard' %}{{ url_for('in_person_leaderboard', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, challengeId=challenge_id, ipActionCenterCity=pw.city, ipPromptWarDate=pw.prompt_war_on_iso, ipPromptWarLabel=pw.session_label) }}{% else %}{{ url_for('in_person_page', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, ipActionCenterCity=pw.city, ipPromptWarDate=pw.prompt_war_on_iso, ipPromptWarLabel=pw.session_label) }}{% endif %}"

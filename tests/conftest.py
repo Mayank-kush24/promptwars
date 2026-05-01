@@ -91,6 +91,12 @@ MDC_PAGE_STUB: dict = {
     "mdc_date_from": None,
     "mdc_date_to": None,
     "mdc_filter_by_registration_date": False,
+    "mdc_crossover_both_tracks": 12,
+    "mdc_crossover_virtual_distinct": 42,
+    "mdc_crossover_in_person_distinct": 38,
+    "mdc_crossover_in_person_only": 26,
+    "mdc_crossover_virtual_only": 30,
+    "mdc_crossover_virtual_reg_ip_action_center": None,
 }
 
 
@@ -247,6 +253,7 @@ def virtual_stub(monkeypatch, app_mod):
             d["attendance_cities"] = []
             d["skip_attendance_city"] = True
             d["pw_session_rsvp"] = []
+            d["mdc_crossover_virtual_reg_ip_action_center"] = 7
         else:
             d["skip_attendance_city"] = False
         return d
@@ -339,6 +346,46 @@ def virtual_stub(monkeypatch, app_mod):
             "registrations_at_close": 42,
             "total_submissions": 2,
             "unique_mdc_submissions": 2,
+            "submission_fresh_vs_prior_challenge": 0,
+            "submission_returning_from_prior_challenge": 0,
+            "submission_prior_challenge_title": None,
+            "team_segment_student": 1,
+            "team_segment_professional": 1,
+            "team_segment_other": 0,
+            "team_segment_unknown": 0,
+            "attempt_buckets_student": [{"label": "1", "count": 1}, {"label": "4", "count": 2}],
+            "attempt_buckets_professional": [{"label": "2", "count": 1}, {"label": "5", "count": 3}],
+            "submission_score_student_n": 2,
+            "submission_score_student_min": 70.0,
+            "submission_score_student_max": 95.0,
+            "submission_score_student_avg": 82.5,
+            "submission_score_student_median": 82.5,
+            "submission_score_student_stddev": 12.5,
+            "submission_score_professional_n": 2,
+            "submission_score_professional_min": 65.0,
+            "submission_score_professional_max": 99.0,
+            "submission_score_professional_avg": 82.0,
+            "submission_score_professional_median": 82.0,
+            "submission_score_professional_stddev": 17.0,
+            "submission_score_agg_n": 2,
+            "submission_score_min": 80.0,
+            "submission_score_max": 100.0,
+            "submission_score_avg": 90.0,
+            "submission_score_median": 90.0,
+            "submission_score_p25": 85.0,
+            "submission_score_p75": 95.0,
+            "submission_score_stddev": 10.0,
+            "submission_score_range": 20.0,
+            "submission_prior_challenge_id": None,
+            "submission_distinct_teams": 2,
+            "submission_crossover": {
+                "error": None,
+                "distinct_ip_leaders": 10,
+                "distinct_v_leaders": 8,
+                "both_tracks": 3,
+                "ip_only": 7,
+                "v_only": 5,
+            },
         },
     )
     return leaderboard, distribution, bins

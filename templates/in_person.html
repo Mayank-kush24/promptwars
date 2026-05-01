@@ -125,7 +125,7 @@
 {% endif %}
 {% endmacro %}
 
-{# Bounds sticky Prompt War bar: it sticks only while this block is on screen, then scrolls away before Main Data Center. #}
+{# Bounds sticky Prompt War bar: it sticks only while this block is on screen, then scrolls away before Registrations. #}
 <div class="pw-ip-ac-sticky-boundary min-w-0">
 <section id="action-center-leaderboard" class="flex flex-col gap-sm mb-lg">
   <h2 class="font-display text-headline-lg text-slate-900 leading-tight">Action Center · Main challenge</h2>
@@ -196,12 +196,19 @@
     </div>
   </div>
 </div>
+
+{% if ip_action_center_city and ip_arena_stats %}
+{% set submission_analytics_mode = 'in_person' %}
+{% set analytics_theme = 'emerald' %}
+{% set arena_stats = ip_arena_stats %}
+{% include 'partials/submission_analytics_arena.html' %}
+{% endif %}
 </div>
 
 <section id="main-data-center" class="flex flex-col gap-sm mt-xl">
   <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-8">
     <div class="min-w-0 flex-1">
-      <h2 class="font-display text-headline-lg text-slate-900 leading-tight">Main Data Center</h2>
+      <h2 class="font-display text-headline-lg text-slate-900 leading-tight">Registrations</h2>
       <p id="mdcTzNote" class="text-xs text-slate-500"></p>
     </div>
     {% if not data_center.error and data_center.chart_date_min and data_center.chart_date_max %}
@@ -216,50 +223,65 @@
 
 {% if data_center.error %}
   <div class="bg-white rounded-2xl border border-amber-200 text-amber-900 p-md text-sm">
-    Main Data Center stats unavailable: {{ data_center.error }}
+    Registration stats unavailable: {{ data_center.error }}
     <span class="block mt-1 text-xs text-amber-800">If you just added this feature, apply <code class="rounded bg-amber-100 px-1">database/init.sql</code> so the table exists.</span>
   </div>
 {% else %}
-  {# Snapshot pills — full width row at xl (5 equal columns); sm–lg: 2- or 3-column responsive grid #}
-  <div class="grid w-full grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-2 md:gap-3">
-    <div class="flex w-full min-w-0 items-center gap-2 rounded-full border border-lime-200 bg-white px-3 sm:px-4 py-2 shadow-sm">
-      <span class="material-symbols-outlined shrink-0 text-lime-600 text-[20px]">groups</span>
-      <div class="min-w-0 flex-1">
-        <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total registrations</p>
-        <p id="mdcPillTotalReg" class="font-display text-base sm:text-lg text-slate-900 tabular-nums leading-tight">{{ "{:,}".format(data_center.total_registrations or 0) }}</p>
+  <div class="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm" role="region" aria-label="Registration summary">
+    <div class="flex flex-col">
+      <div class="flex flex-col divide-y divide-slate-200 sm:flex-row sm:divide-y-0 sm:divide-x sm:divide-slate-200">
+      <div class="flex min-w-0 flex-1 items-center gap-3 px-4 py-4 sm:gap-3.5 sm:px-5 sm:py-5">
+        <span class="material-symbols-outlined shrink-0 text-[26px] leading-none text-lime-600" aria-hidden="true">groups</span>
+        <div class="min-w-0">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total registrations</p>
+          <p id="mdcPillTotalReg" class="font-display text-xl font-bold tabular-nums leading-tight text-slate-900 sm:text-2xl">{{ "{:,}".format(data_center.total_registrations or 0) }}</p>
+        </div>
       </div>
-    </div>
-    <div class="flex w-full min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 sm:px-4 py-2 shadow-sm">
-      <span class="material-symbols-outlined shrink-0 text-amber-500 text-[20px]">pin_drop</span>
-      <div class="min-w-0 flex-1">
-        <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Top city</p>
-        <p id="mdcPillTopCity" class="font-display text-base sm:text-lg text-slate-900 leading-tight truncate" title="{{ data_center.pill_top_city or '—' }}">{{ data_center.pill_top_city or "—" }}</p>
-        {% if data_center.pill_top_city_count %}<p id="mdcPillTopCityMeta" class="text-[11px] text-slate-500 tabular-nums truncate">{{ "{:,}".format(data_center.pill_top_city_count) }} in top bucket</p>{% else %}<p id="mdcPillTopCityMeta" class="text-[11px] text-slate-500 tabular-nums truncate hidden"></p>{% endif %}
+      <div class="flex min-w-0 flex-1 items-center gap-3 px-4 py-4 sm:gap-3.5 sm:px-5 sm:py-5">
+        <span class="material-symbols-outlined shrink-0 text-[26px] leading-none text-yellow-500" aria-hidden="true">cake</span>
+        <div class="min-w-0">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Average age</p>
+          <p id="mdcPillAvgAge" class="font-display text-xl font-bold tabular-nums leading-tight text-slate-900 sm:text-2xl truncate">
+            {% if data_center.average_age is not none %}{{ data_center.average_age }} yrs{% else %}—{% endif %}
+          </p>
+          {% if data_center.with_dob_count %}<p id="mdcPillDobMeta" class="mt-0.5 text-[11px] leading-snug text-slate-500 truncate">{{ "{:,}".format(data_center.with_dob_count) }} DOB</p>{% else %}<p id="mdcPillDobMeta" class="mt-0.5 text-[11px] leading-snug text-slate-500 truncate hidden"></p>{% endif %}
+        </div>
       </div>
-    </div>
-    <div class="flex w-full min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 sm:px-4 py-2 shadow-sm">
-      <span class="material-symbols-outlined shrink-0 text-emerald-600 text-[20px]">map</span>
-      <div class="min-w-0 flex-1">
-        <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Top state</p>
-        <p id="mdcPillTopState" class="font-display text-base sm:text-lg text-slate-900 leading-tight truncate" title="{{ data_center.pill_top_state or '—' }}">{{ data_center.pill_top_state or "—" }}</p>
-        {% if data_center.pill_top_state_count %}<p id="mdcPillTopStateMeta" class="text-[11px] text-slate-500 tabular-nums truncate">{{ "{:,}".format(data_center.pill_top_state_count) }} in top bucket</p>{% else %}<p id="mdcPillTopStateMeta" class="text-[11px] text-slate-500 tabular-nums truncate hidden"></p>{% endif %}
+      <div class="flex min-w-0 flex-1 items-center gap-3 px-4 py-4 sm:gap-3.5 sm:px-5 sm:py-5">
+        <span class="material-symbols-outlined shrink-0 text-[26px] leading-none text-lime-700" aria-hidden="true">trending_up</span>
+        <div class="min-w-0">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Last 7 days</p>
+          <p id="mdcPillLast7" class="font-display text-xl font-bold tabular-nums leading-tight text-slate-900 sm:text-2xl truncate">{{ "{:,}".format(data_center.registrations_last_7_days or 0) }}</p>
+        </div>
       </div>
-    </div>
-    <div class="flex w-full min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 sm:px-4 py-2 shadow-sm">
-      <span class="material-symbols-outlined shrink-0 text-yellow-500 text-[20px]">cake</span>
-      <div class="min-w-0 flex-1">
-        <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Average age</p>
-        <p id="mdcPillAvgAge" class="font-display text-base sm:text-lg text-slate-900 tabular-nums leading-tight truncate">
-          {% if data_center.average_age is not none %}{{ data_center.average_age }} yrs{% else %}—{% endif %}
-        </p>
-        {% if data_center.with_dob_count %}<p id="mdcPillDobMeta" class="text-[11px] text-slate-500 truncate">{{ "{:,}".format(data_center.with_dob_count) }} with DOB</p>{% else %}<p id="mdcPillDobMeta" class="text-[11px] text-slate-500 truncate hidden"></p>{% endif %}
+      {% if data_center.mdc_crossover_both_tracks is not none %}
+      <div class="flex min-w-0 flex-1 items-center gap-3 px-4 py-4 sm:gap-3.5 sm:px-5 sm:py-5">
+        <span class="material-symbols-outlined shrink-0 text-[26px] leading-none text-violet-600" aria-hidden="true">compare_arrows</span>
+        <div class="min-w-0">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Also in virtual PW</p>
+          <p id="mdcPillCrossover" class="font-display text-xl font-bold tabular-nums leading-tight text-slate-900 sm:text-2xl truncate">{{ "{:,}".format(data_center.mdc_crossover_both_tracks or 0) }}</p>
+          <p id="mdcPillCrossoverMeta" class="mt-0.5 text-[11px] tabular-nums leading-snug text-slate-500 truncate">of {{ "{:,}".format(data_center.mdc_crossover_in_person_only|default(0)) }} distinct in-person emails</p>
+        </div>
       </div>
-    </div>
-    <div class="col-span-1 flex w-full min-w-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-3 sm:px-4 py-2 shadow-sm sm:col-span-2 lg:col-span-1">
-      <span class="material-symbols-outlined shrink-0 text-lime-700 text-[20px]">trending_up</span>
-      <div class="min-w-0 flex-1">
-        <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Last 7 days</p>
-        <p id="mdcPillLast7" class="font-display text-base sm:text-lg text-slate-900 tabular-nums leading-tight truncate">{{ "{:,}".format(data_center.registrations_last_7_days or 0) }}</p>
+      {% endif %}
+      </div>
+      <div class="flex flex-col divide-y divide-slate-200 border-t border-slate-200 sm:flex-row sm:divide-y-0 sm:divide-x sm:divide-slate-200">
+      <div class="flex min-w-0 flex-1 items-start gap-3 px-4 py-4 sm:gap-3.5 sm:px-5 sm:py-5 sm:basis-0 sm:min-w-[12rem]">
+        <span class="material-symbols-outlined shrink-0 text-[26px] leading-none text-amber-500 mt-0.5" aria-hidden="true">pin_drop</span>
+        <div class="min-w-0 flex-1">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Top city</p>
+          <p id="mdcPillTopCity" class="font-display text-xl font-bold leading-snug text-slate-900 sm:text-2xl break-words" title="{{ data_center.pill_top_city or '—' }}">{{ data_center.pill_top_city or "—" }}</p>
+          {% if data_center.pill_top_city_count %}<p id="mdcPillTopCityMeta" class="mt-0.5 text-[11px] tabular-nums leading-snug text-slate-500">{{ "{:,}".format(data_center.pill_top_city_count) }} in top</p>{% else %}<p id="mdcPillTopCityMeta" class="mt-0.5 text-[11px] tabular-nums leading-snug text-slate-500 hidden"></p>{% endif %}
+        </div>
+      </div>
+      <div class="flex min-w-0 flex-1 items-start gap-3 px-4 py-4 sm:gap-3.5 sm:px-5 sm:py-5 sm:basis-0 sm:min-w-[12rem]">
+        <span class="material-symbols-outlined shrink-0 text-[26px] leading-none text-emerald-600 mt-0.5" aria-hidden="true">map</span>
+        <div class="min-w-0 flex-1">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Top state</p>
+          <p id="mdcPillTopState" class="font-display text-xl font-bold leading-snug text-slate-900 sm:text-2xl break-words" title="{{ data_center.pill_top_state or '—' }}">{{ data_center.pill_top_state or "—" }}</p>
+          {% if data_center.pill_top_state_count %}<p id="mdcPillTopStateMeta" class="mt-0.5 text-[11px] tabular-nums leading-snug text-slate-500">{{ "{:,}".format(data_center.pill_top_state_count) }} in top</p>{% else %}<p id="mdcPillTopStateMeta" class="mt-0.5 text-[11px] tabular-nums leading-snug text-slate-500 hidden"></p>{% endif %}
+        </div>
+      </div>
       </div>
     </div>
   </div>
@@ -274,29 +296,36 @@
       </div>
     </div>
     <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm overflow-x-auto min-w-0">
-      <h3 class="font-display text-headline-md text-slate-900 mb-sm">PW sessions · RSVP (Hawkeye)</h3>
-      <p class="text-xs text-slate-500 mb-md max-w-prose">Per dated Prompt War session. RSVP and attendance counts will populate when the Hawkeye API is connected.</p>
+      <div class="flex flex-wrap items-start justify-between gap-3 mb-md">
+        <div>
+          <h3 class="font-display text-headline-md text-slate-900 mb-sm">Hawkeye · RSVP</h3>
+          <p class="text-xs text-slate-500 max-w-prose">
+            Per PW session: Hawkeye snapshot for attendance; <strong>RSVP sent</strong> and <strong>RSVP accepted</strong> prefer
+            <a href="{{ url_for('in_person_import') }}" class="text-emerald-700 font-medium underline-offset-2 hover:underline">imported email lists</a>
+            when present, otherwise Hawkeye.
+          </p>
+        </div>
+        <a href="{{ url_for('in_person_settings', inPersonEventId=in_person_event_id) }}"
+           class="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50 no-underline">
+          <span class="material-symbols-outlined text-[16px] text-slate-500">settings</span>
+          Configure
+        </a>
+      </div>
+
+      <div id="hawkeye-dash-error" class="hidden mb-md rounded-xl border border-slate-200 bg-slate-50 text-slate-700 px-4 py-3 text-sm">Stats unavailable</div>
+
       <div class="max-h-[360px] overflow-y-auto">
-        <table class="w-full text-left text-sm min-w-[400px]">
+        <table class="w-full text-left text-sm min-w-[480px]">
           <thead class="sticky top-0 bg-white z-[1] shadow-[0_1px_0_0_rgb(226_232_240)]">
             <tr class="border-b border-slate-200 text-slate-500">
-              <th class="py-2 pr-4 text-[11px] font-semibold uppercase tracking-wider">Session</th>
+              <th class="py-2 pr-4 text-[11px] font-semibold uppercase tracking-wider">PW event</th>
               <th class="py-2 pl-2 text-[11px] font-semibold uppercase tracking-wider text-right">RSVP sent</th>
               <th class="py-2 pl-2 text-[11px] font-semibold uppercase tracking-wider text-right">RSVP accepted</th>
               <th class="py-2 pl-2 text-[11px] font-semibold uppercase tracking-wider text-right">Attended</th>
             </tr>
           </thead>
-          <tbody id="mdcPwSessionRsvpTbody" class="text-slate-800">
-            {% for r in data_center.pw_session_rsvp or [] %}
-              <tr class="border-b border-slate-100">
-                <td class="py-2 pr-4 font-medium">{{ r.session_display }}</td>
-                <td class="py-2 pl-2 tabular-nums text-right">{{ "{:,}".format(r.rsvp_sent|int) }}</td>
-                <td class="py-2 pl-2 tabular-nums text-right">{{ "{:,}".format(r.rsvp_accepted|int) }}</td>
-                <td class="py-2 pl-2 tabular-nums text-right">{{ "{:,}".format(r.attended|int) }}</td>
-              </tr>
-            {% else %}
-              <tr><td colspan="4" class="py-lg text-center text-sm text-slate-500">No dated PW sessions in this range.</td></tr>
-            {% endfor %}
+          <tbody id="hawkeye-dash-tbody" class="text-slate-800">
+            <tr><td colspan="4" class="py-lg text-center text-sm text-slate-500">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -373,7 +402,7 @@
 
 {% block scripts %}
 <script id="pw-in-person-mdc" type="application/json">{{ data_center | tojson }}</script>
-<script id="pw-in-person-routes" type="application/json">{{ {"mdcUsersUrl": url_for("in_person_users"), "inPersonUsers": url_for("in_person_users"), "indiaGeoUrl": url_for("static", filename="geo/in-all-claimed.geo.json"), "mdcStatsApiUrl": url_for("api_in_person_mdc_stats", inPersonEventId=in_person_event_id), "inPersonEventId": in_person_event_id} | tojson }}</script>
+<script id="pw-in-person-routes" type="application/json">{{ {"mdcUsersUrl": url_for("in_person_users"), "inPersonUsersUrl": url_for("in_person_users"), "inPersonUsers": url_for("in_person_users"), "indiaGeoUrl": url_for("static", filename="geo/in-all-claimed.geo.json"), "mdcStatsApiUrl": url_for("api_in_person_mdc_stats", inPersonEventId=in_person_event_id, crossoverVirtualEventId=virtual_event_id), "inPersonEventId": in_person_event_id, "hawkeyeEventsUrl": url_for("api_in_person_hawkeye_events", event_id=in_person_event_id)} | tojson }}</script>
 <script>
   (function () {
     var elMdc = document.getElementById("pw-in-person-mdc");
@@ -381,6 +410,113 @@
     window.__PW_MDC__ = elMdc ? JSON.parse(elMdc.textContent || "null") : {};
     window.__PW_ROUTES__ = elRoutes ? JSON.parse(elRoutes.textContent || "{}") : {};
   })();
+</script>
+<script>
+  window.__PW__ = {
+    analyticsMode: "in_person",
+    submissionSessionToken: {{ (ip_submission_session_token_analytics or "")|tojson }},
+    inPersonEventId: {{ in_person_event_id|tojson }},
+    challengeId: null,
+    activeChallengeId: null,
+    virtualEventId: {{ virtual_event_id|tojson }},
+    arenaTeamSegments: {% if ip_arena_stats and not ip_arena_stats.error %} {{ {
+      "student": ip_arena_stats.team_segment_student or 0,
+      "professional": ip_arena_stats.team_segment_professional or 0,
+      "other": ip_arena_stats.team_segment_other or 0,
+      "unknown": ip_arena_stats.team_segment_unknown or 0,
+    } | tojson }} {% else %} null {% endif %},
+    attemptBucketsStudent: {% if ip_arena_stats and not ip_arena_stats.error %} {{ (ip_arena_stats.attempt_buckets_student or []) | tojson }} {% else %} [] {% endif %},
+    attemptBucketsProfessional: {% if ip_arena_stats and not ip_arena_stats.error %} {{ (ip_arena_stats.attempt_buckets_professional or []) | tojson }} {% else %} [] {% endif %},
+  };
+</script>
+<script src="{{ url_for('static', filename='pw_submission_analytics_charts.js') }}" defer></script>
+<script>
+(function () {
+  var r = window.__PW_ROUTES__ || {};
+  var eventsUrl = r.hawkeyeEventsUrl || "";
+  var tbody = document.getElementById("hawkeye-dash-tbody");
+  var errBox = document.getElementById("hawkeye-dash-error");
+  if (!tbody || !eventsUrl) return;
+
+  /* Dashboard-only: omit PW sessions by city slug (settings still lists all). */
+  var hiddenHawkeyeDashCities = { mumbai: true };
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  function fmtInt(n) {
+    var x = Number(n);
+    if (!isFinite(x)) return "—";
+    return x.toLocaleString();
+  }
+
+  function rowHtml(row) {
+    var name = row.display || ("Session " + (row.scope_key || ""));
+    var teams = '<div class="text-[11px] text-slate-400">' + escapeHtml(String(row.team_count || 0)) + ' team(s)</div>';
+    var l = row.latest;
+    if (!row.external_key) {
+      return (
+        '<tr class="border-b border-slate-100">' +
+          '<td class="py-2 pr-4"><div class="font-medium">' + escapeHtml(name) + '</div>' + teams +
+            '<div class="text-[11px] text-slate-400">Not configured</div></td>' +
+          '<td class="py-2 pl-2 tabular-nums text-right text-slate-400">—</td>' +
+          '<td class="py-2 pl-2 tabular-nums text-right text-slate-400">—</td>' +
+          '<td class="py-2 pl-2 tabular-nums text-right text-slate-400">—</td>' +
+        '</tr>'
+      );
+    }
+    if (!l) {
+      return (
+        '<tr class="border-b border-slate-100">' +
+          '<td class="py-2 pr-4"><div class="font-medium">' + escapeHtml(name) + '</div>' + teams +
+            '<div class="text-[11px] text-amber-700">Sync required</div></td>' +
+          '<td class="py-2 pl-2 tabular-nums text-right text-slate-400">—</td>' +
+          '<td class="py-2 pl-2 tabular-nums text-right text-slate-400">—</td>' +
+          '<td class="py-2 pl-2 tabular-nums text-right text-slate-400">—</td>' +
+        '</tr>'
+      );
+    }
+    var hawkName = l.hawkeye_event_name ? '<div class="text-[11px] text-slate-400">' + escapeHtml(l.hawkeye_event_name) + '</div>' : "";
+    return (
+      '<tr class="border-b border-slate-100">' +
+        '<td class="py-2 pr-4"><div class="font-medium">' + escapeHtml(name) + '</div>' + teams + hawkName + '</td>' +
+        '<td class="py-2 pl-2 tabular-nums text-right">' + fmtInt(l.rsvp_invite_sent) + '</td>' +
+        '<td class="py-2 pl-2 tabular-nums text-right">' + fmtInt(l.rsvp_accepted) + '</td>' +
+        '<td class="py-2 pl-2 tabular-nums text-right">' + fmtInt(l.checked_in_participants) + '</td>' +
+      '</tr>'
+    );
+  }
+
+  function load() {
+    if (errBox) errBox.classList.add("hidden");
+    fetch(eventsUrl, { credentials: "same-origin" })
+      .then(function (res) { return res.json().then(function (j) { return { ok: res.ok, j: j }; }); })
+      .then(function (x) {
+        if (!x.ok) throw new Error((x.j && x.j.error) || "Failed");
+        var rawRows = (x.j && x.j.events) || [];
+        var rows = rawRows.filter(function (row) {
+          return !hiddenHawkeyeDashCities[String(row.city || "").toLowerCase()];
+        });
+        if (!rows.length) {
+          var emptyMsg = rawRows.length
+            ? "No sessions to show here (some may be hidden from this table)."
+            : "No PW sessions yet — import an Action Center sheet first.";
+          tbody.innerHTML = '<tr><td colspan="4" class="py-lg text-center text-sm text-slate-500">' + emptyMsg + '</td></tr>';
+          return;
+        }
+        tbody.innerHTML = rows.map(rowHtml).join("");
+      })
+      .catch(function () {
+        tbody.innerHTML = '<tr><td colspan="4" class="py-lg text-center text-sm text-rose-600">Could not load Hawkeye stats.</td></tr>';
+        if (errBox) errBox.classList.remove("hidden");
+      });
+  }
+
+  load();
+})();
 </script>
 <script src="{{ url_for('static', filename='mdc_dashboard.js') }}" defer></script>
 {% endblock %}

@@ -8,6 +8,18 @@ from unittest.mock import MagicMock
 import pytest
 
 
+def test_leader_source_by_normalized_email_first_row_wins(app_mod):
+    rows = [
+        {"leader_email": "A@B.com", "leader_name": "First", "leader_phone": "1"},
+        {"leader_email": "a@b.com", "leader_name": "Second", "leader_phone": "2"},
+    ]
+    m = app_mod._leader_source_by_normalized_email(rows)
+    assert m["a@b.com"]["leader_email"] == "A@B.com"
+    assert m["a@b.com"]["leader_name"] == "First"
+    assert m["a@b.com"]["leader_phone"] == "1"
+
+
+
 def test_api_action_center_missing_attendance_city(client, no_admin_pw):
     resp = client.post(
         "/api/import/in-person/action-center",
@@ -64,7 +76,7 @@ def test_api_action_center_rejects_legacy_sentinel_date(client, no_admin_pw, mon
     )
     assert resp.status_code == 400
     body = resp.get_json()
-    assert body and "legacy" in (body.get("error") or "").lower()
+    assert body and "1970-01-01" in (body.get("error") or "")
 
 
 def test_api_action_center_city_not_in_mdc_options(client, no_admin_pw, monkeypatch, app_mod):
@@ -172,9 +184,10 @@ def test_api_action_center_missing_leader_emails_nothing_written(client, no_admi
         },
         content_type="multipart/form-data",
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 409
     body = resp.get_json()
     assert body.get("nothing_written") is True
+    assert body.get("needs_confirmation") is True
     assert "missing_emails" in body
     assert "missing@example.com" in body["missing_emails"]
 
@@ -191,7 +204,7 @@ def test_import_in_person_page_renders_action_center(client, no_admin_pw, monkey
     rv = client.get("/in-person/import")
     assert rv.status_code == 200
     assert b"Action Center" in rv.data
-    assert b"Mumbai" in rv.data
+    assert b"Loading sessions" in rv.data or b"/api/in-person/sessions" in rv.data
     assert b"prompt_war_on" in rv.data or b"Prompt War date" in rv.data
 
 
@@ -229,4 +242,4 @@ def test_api_attendance_cities_ok(client, no_admin_pw, monkeypatch, app_mod):
     resp = client.get("/api/in-person/attendance-cities")
     assert resp.status_code == 200
     body = resp.get_json()
-    assert body["attendance_cities"] == ["Pune", "Delhi"]
+    assert body["attendance_cities"] == ["Delhi", "Gurugram", "Pune"]

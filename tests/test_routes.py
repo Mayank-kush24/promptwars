@@ -51,19 +51,21 @@ def test_virtual_leaderboard_page_renders(client, no_admin_pw, monkeypatch, app_
             "scope": {},
         },
     )
-    monkeypatch.setattr(app_mod, "_load_virtual_challenges_brief", lambda _eid: [])
+    monkeypatch.setattr(
+        app_mod,
+        "_load_virtual_challenges_brief",
+        lambda _eid: [{"id": 1, "title": "Demo", "status": "live", "opens_at": None, "closes_at": None}],
+    )
     resp = client.get("/virtual/leaderboard")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
     assert "Submission leaderboard" in body
     assert "virtual_challenge_submission_rows" in body
-    assert "Global (all arenas)" in body
+    assert "Global (all arenas)" not in body
 
     resp_g = client.get("/virtual/leaderboard?global=1")
-    assert resp_g.status_code == 200
-    body_g = resp_g.get_data(as_text=True)
-    assert "Top teams across all virtual arenas." in body_g
-    assert "e@x.com" in body_g
+    assert resp_g.status_code == 302
+    assert "arenaChallengeId=1" in (resp_g.headers.get("Location") or "")
 
 
 def test_api_virtual_global_submission_leaderboard_ok(client, no_admin_pw, monkeypatch, app_mod):
@@ -137,6 +139,8 @@ def test_main_dashboard_renders(client, overview_stub):
     assert "Build with AI" in body
     assert "Build" in body and "with AI" in body
     assert "Live ·" in body and "IST" in body
+    assert "Virtual</a>" in body
+    assert "In-person</a>" in body
     # Stats section heading + a known card title
     assert "System overview" in body
     assert "At a glance" in body
@@ -145,12 +149,9 @@ def test_main_dashboard_renders(client, overview_stub):
     assert "Virtual PW" in body
     assert "In-person · Top 10" in body
     assert "Virtual · Top 10" in body
-    assert body.count("Leaderboard overview") >= 2
-    assert "Global (main challenge)" in body
-    assert "Global (all arenas)" in body
+    assert body.count("Leaderboard overview") >= 1
     assert "Min score" in body
     assert overview_stub["mdc_total_fmt"] in body
-    assert overview_stub["credits_fmt"] in body
     assert overview_stub["mdc_in_person"]["top_city"] in body
     assert overview_stub["mdc_virtual"]["top_city"] in body
 
@@ -164,13 +165,137 @@ def test_main_dashboard_accepts_event_overrides(client, overview_stub):
     assert "virtualEventId=8" in body
 
 
+def test_in_person_dashboard_redirect_uses_latest_pw_on_or_before_today_ist(
+    client, monkeypatch, app_mod
+):
+    """Default session is latest ``prompt_war_on`` on/before IST today, not a future placeholder row."""
+    from datetime import date
+
+    from tests.conftest import MDC_PAGE_STUB
+
+    monkeypatch.setattr(app_mod, "PW_GLOBAL_LEADERBOARDS_ENABLED", False)
+    monkeypatch.setattr(app_mod, "_in_person_pw_default_reference_date", lambda: date(2026, 5, 1))
+    pws = [
+        {
+            "pw_session_id": 1,
+            "city": "gurugram",
+            "prompt_war_on_iso": "2026-05-16",
+            "session_label": "",
+            "display": "Gurugram · 16 May 2026",
+            "team_count": 0,
+        },
+        {
+            "pw_session_id": 2,
+            "city": "ahmedabad",
+            "prompt_war_on_iso": "2026-05-04",
+            "session_label": "",
+            "display": "Ahmedabad · 04 May 2026",
+            "team_count": 77,
+        },
+        {
+            "pw_session_id": 3,
+            "city": "pune",
+            "prompt_war_on_iso": "2026-04-25",
+            "session_label": "",
+            "display": "Pune · 25 Apr 2026",
+            "team_count": 73,
+        },
+        {
+            "pw_session_id": 4,
+            "city": "mumbai",
+            "prompt_war_on_iso": "2026-04-12",
+            "session_label": "",
+            "display": "Mumbai · 12 Apr 2026",
+            "team_count": 106,
+        },
+    ]
+    monkeypatch.setattr(app_mod, "_in_person_pw_options", lambda *_a, **_k: list(pws))
+    monkeypatch.setattr(
+        app_mod,
+        "_load_mdc_stats",
+        lambda _eid, *args, mode="in_person", **kwargs: dict(MDC_PAGE_STUB),
+    )
+    monkeypatch.setattr(
+        app_mod,
+        "_in_person_submission_leaderboard",
+        lambda *_a, **_k: {
+            "rows": [],
+            "total": 0,
+            "error": None,
+            "scope": {},
+            "page": 1,
+            "per_page": 50,
+            "total_pages": 1,
+        },
+    )
+    resp = client.get("/in-person", follow_redirects=False)
+    assert resp.status_code == 302
+    loc = resp.headers.get("Location") or ""
+    assert "ipActionCenterCity=pune" in loc
+    assert "ipPromptWarDate=2026-04-25" in loc
+
+
+def test_in_person_dashboard_redirect_all_future_picks_earliest_upcoming(
+    client, monkeypatch, app_mod
+):
+    from datetime import date
+
+    from tests.conftest import MDC_PAGE_STUB
+
+    monkeypatch.setattr(app_mod, "PW_GLOBAL_LEADERBOARDS_ENABLED", False)
+    monkeypatch.setattr(app_mod, "_in_person_pw_default_reference_date", lambda: date(2026, 3, 1))
+    pws = [
+        {
+            "pw_session_id": 1,
+            "city": "hyderabad",
+            "prompt_war_on_iso": "2026-03-20",
+            "session_label": "",
+            "display": "Hyderabad · 20 Mar 2026",
+            "team_count": 115,
+        },
+        {
+            "pw_session_id": 2,
+            "city": "bengaluru",
+            "prompt_war_on_iso": "2026-03-28",
+            "session_label": "",
+            "display": "Bengaluru · 28 Mar 2026",
+            "team_count": 150,
+        },
+    ]
+    monkeypatch.setattr(app_mod, "_in_person_pw_options", lambda *_a, **_k: list(pws))
+    monkeypatch.setattr(
+        app_mod,
+        "_load_mdc_stats",
+        lambda _eid, *args, mode="in_person", **kwargs: dict(MDC_PAGE_STUB),
+    )
+    monkeypatch.setattr(
+        app_mod,
+        "_in_person_submission_leaderboard",
+        lambda *_a, **_k: {
+            "rows": [],
+            "total": 0,
+            "error": None,
+            "scope": {},
+            "page": 1,
+            "per_page": 50,
+            "total_pages": 1,
+        },
+    )
+    resp = client.get("/in-person", follow_redirects=False)
+    assert resp.status_code == 302
+    loc = resp.headers.get("Location") or ""
+    assert "ipActionCenterCity=hyderabad" in loc
+    assert "ipPromptWarDate=2026-03-20" in loc
+
+
 def test_in_person_page_renders(client, funnel_stub):
     resp = client.get("/in-person")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
+    assert "pw_submission_analytics_charts.js" in body
     assert "Mumbai" in body
     assert "Delhi" in body
-    assert "Main Data Center" in body
+    assert "Registrations" in body
     assert "42" in body
     assert "UTM source breakdown" in body
     assert "Attendance city" in body
@@ -183,8 +308,79 @@ def test_in_person_page_renders(client, funnel_stub):
     assert "api/in-person/main-data-center/stats" in body
     assert "Hawkeye" in body
     assert "City pivot" in body
-    assert "PW sessions · RSVP" in body
+    assert "Hawkeye · RSVP" in body
     assert "RSVP sent" in body
+    assert "api/in-person/hawkeye/events" in body
+    assert "Also in virtual PW" in body
+    assert "crossoverVirtualEventId" in body
+
+
+def test_in_person_page_submission_analytics_with_session(client, funnel_stub, monkeypatch, app_mod):
+    def _stub_stats(**_kw):
+        return {
+            "error": None,
+            "challenge_id": None,
+            "kpi_profile": "in_person_session",
+            "opens_at": None,
+            "closes_at": None,
+            "opens_at_display": None,
+            "closes_at_display": None,
+            "opens_at_set": True,
+            "registrations_at_open": 3,
+            "registrations_at_close": 2,
+            "total_submissions": 2,
+            "unique_mdc_submissions": 2,
+            "submission_distinct_teams": 2,
+            "submission_fresh_vs_prior_challenge": 2,
+            "submission_returning_from_prior_challenge": 0,
+            "submission_prior_challenge_id": None,
+            "submission_prior_challenge_title": None,
+            "team_segment_student": 1,
+            "team_segment_professional": 1,
+            "team_segment_other": 0,
+            "team_segment_unknown": 0,
+            "attempt_buckets_student": [{"label": "0", "count": 1}],
+            "attempt_buckets_professional": [{"label": "1", "count": 1}],
+            "submission_score_student_n": 0,
+            "submission_score_student_min": None,
+            "submission_score_student_max": None,
+            "submission_score_student_avg": None,
+            "submission_score_student_median": None,
+            "submission_score_student_stddev": None,
+            "submission_score_professional_n": 0,
+            "submission_score_professional_min": None,
+            "submission_score_professional_max": None,
+            "submission_score_professional_avg": None,
+            "submission_score_professional_median": None,
+            "submission_score_professional_stddev": None,
+            "submission_score_agg_n": 0,
+            "submission_score_min": None,
+            "submission_score_max": None,
+            "submission_score_avg": None,
+            "submission_score_median": None,
+            "submission_score_p25": None,
+            "submission_score_p75": None,
+            "submission_score_stddev": None,
+            "submission_score_range": None,
+            "submission_crossover": {
+                "error": None,
+                "distinct_ip_leaders": 5,
+                "distinct_v_leaders": 4,
+                "both_tracks": 2,
+                "ip_only": 3,
+                "v_only": 2,
+            },
+        }
+
+    monkeypatch.setattr(app_mod, "_in_person_action_center_stats", _stub_stats)
+    resp = client.get(
+        "/in-person?ipActionCenterCity=Mumbai&ipPromptWarDate=2026-04-21&ipPromptWarLabel="
+    )
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "Submission Analytics" in body
+    assert "Submission from Virtual PW" in body
+    assert "Teams by registration occupation" in body
 
 
 def test_api_in_person_mdc_stats_json(client, funnel_stub):
@@ -208,7 +404,7 @@ def test_in_person_leaderboard_page_renders(client, funnel_stub):
     body = resp.get_data(as_text=True)
     assert "Full leaderboard" in body
     assert "Per page" in body
-    assert "All PWs (global)" in body
+    assert "All PWs (global)" not in body
 
 
 def test_virtual_page_renders(client, virtual_stub):
@@ -216,17 +412,24 @@ def test_virtual_page_renders(client, virtual_stub):
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
     assert "Virtual · Standings" in body
-    assert "Global (all arenas)" in body
-    assert "Virtual Main Data Center" in body
+    assert "Sprint Alpha" in body
+    assert "Virtual registrations" in body
     assert "Alice" in body
     assert "Bob" in body
     assert "Attendance city" not in body
     assert "Top 400" in body
-    assert "Registrations at close" in body
-    assert "Unique MDC-linked" in body
+    assert "At close" in body
+    assert "Unique submissions" in body
+    assert "Submission Analytics" in body
+    assert "/virtual/import" in body
     assert "42" in body
     assert "mdcDateRangePanel" in body
     assert "api/virtual/main-data-center/stats" in body
+    assert "Also in in-person PW" in body
+    assert "In-person Action Center" in body
+    assert "mdcPillIpActionCenterOverlap" in body
+    assert "crossoverInPersonEventId" in body
+    assert "Submission from in-person PW" in body
 
 
 def test_api_virtual_mdc_stats_json(client, virtual_stub):
@@ -237,6 +440,7 @@ def test_api_virtual_mdc_stats_json(client, virtual_stub):
     assert payload["total_registrations"] == 42
     assert payload.get("skip_attendance_city") is True
     assert payload.get("pw_session_rsvp") == []
+    assert payload.get("mdc_crossover_virtual_reg_ip_action_center") == 7
 
 
 # ---------- Admin / CDI ---------------------------------------------------
@@ -310,12 +514,18 @@ def test_module_subpages_render(client, no_admin_pw, monkeypatch, app_mod):
             "mdc_pw_on": "",
             "mdc_session_label": "",
             "advanced_active": False,
+            "sort_key": None,
+            "sort_dir": "desc",
+            "sort_hrefs": {},
+            "roster_has_score_column": False,
         }
 
     monkeypatch.setattr(app_mod, "_load_mdc_users_page", _empty_mdc_users)
+    monkeypatch.setattr(app_mod, "_load_virtual_challenges_brief", lambda _eid: [])
     cases = (
         ("/overview/logs", "Overview · Logs"),
         ("/overview/settings", "Overview · Settings"),
+        ("/overview/submission-analytics", "Submission crossover"),
         ("/in-person/users", "In-person · Users"),
         ("/in-person/leaderboard", "Full leaderboard"),
         ("/in-person/settings", "In-person · Settings"),
@@ -407,6 +617,7 @@ def test_virtual_users_export_csv_omits_attendance_city_column(client, no_admin_
     assert "attendance_city" not in header
     assert "full_name" in header
     assert "city" in header
+    assert "imported_total_score" in header
 
 
 def test_in_person_users_shows_download_and_city_filter(client, no_admin_pw, monkeypatch, app_mod):
@@ -436,6 +647,10 @@ def test_in_person_users_shows_download_and_city_filter(client, no_admin_pw, mon
             "advanced_text": {},
             "advanced_raw": {},
             "preserve_items": preserve_items,
+            "sort_key": None,
+            "sort_dir": "desc",
+            "sort_hrefs": {},
+            "roster_has_score_column": False,
         }
 
     monkeypatch.setattr(app_mod, "_load_mdc_users_page", fake_load)
@@ -453,15 +668,21 @@ def test_module_import_pages_when_admin_open(client, no_admin_pw):
     assert resp_ip.status_code == 200
     body_ip = resp_ip.get_data(as_text=True)
     assert "In-person · Import" in body_ip
-    assert "Main Data Center" in body_ip
-    assert "Import Main Data Center" in body_ip
+    assert "Registrations · CSV" in body_ip
+    assert "Import registrations" in body_ip
+    assert "Challenge attempt counts" in body_ip
+    assert "/api/import/in-person/challenge-attempts" in body_ip
+    assert "/api/import/in-person/challenge-attempts/preview" in body_ip
     resp_v = client.get("/virtual/import")
     assert resp_v.status_code == 200
     body_v = resp_v.get_data(as_text=True)
     assert "Virtual · Import" in body_v
-    assert "Virtual Main Data Center" in body_v
+    assert "Virtual registrations" in body_v
     assert "virtual_main_data_center" in body_v
     assert "/api/import/virtual/main-data-center" in body_v
+    assert "Challenge attempt counts" in body_v
+    assert "/api/import/virtual/challenge-attempts" in body_v
+    assert "/api/import/virtual/challenge-attempts/preview" in body_v
 
 
 def test_context_processor_injects_defaults(client, overview_stub):

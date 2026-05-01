@@ -243,6 +243,10 @@ def test_virtual_users_filter_threads_challenge_id(
             "advanced_text": {},
             "advanced_raw": {},
             "preserve_items": [("challengeId", "5")],
+            "sort_key": None,
+            "sort_dir": "desc",
+            "sort_hrefs": {},
+            "roster_has_score_column": False,
         }
 
     monkeypatch.setattr(app_mod, "_load_mdc_users_page", fake_load)
@@ -735,6 +739,10 @@ def test_virtual_users_page_shows_submitted_in_challenge_filter(client, no_admin
             "participation_submission_session_options": [],
             "selected_participated_challenge_id": None,
             "selected_submission_session": "",
+            "sort_key": None,
+            "sort_dir": "desc",
+            "sort_hrefs": {},
+            "roster_has_score_column": False,
         }
 
     monkeypatch.setattr(app_mod, "_load_mdc_users_page", fake_load)

@@ -1,0 +1,555 @@
+{% extends "layouts/base_app.html" %}
+{% block title %}{{ title }} — PromptWars{% endblock %}
+{% block content %}
+<div class="flex flex-col gap-sm">
+  <h1 class="font-display text-headline-lg text-slate-900 leading-tight">{{ title }}</h1>
+  <p class="font-body-md text-slate-600 max-w-2xl">{{ description }}</p>
+</div>
+
+<section class="mt-xl" aria-labelledby="pw-sessions-heading">
+  <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
+    <div class="flex flex-wrap items-start justify-between gap-3 mb-md">
+      <div>
+        <h2 id="pw-sessions-heading" class="font-display text-headline-md text-slate-900">PW Sessions</h2>
+        <p class="text-xs text-slate-500 mt-1 max-w-prose">Create a session before importing Action Center or syncing Hawkeye RSVP. City is stored as a lowercase slug; dates must not use the legacy sentinel.</p>
+      </div>
+    </div>
+    <div id="pw-sessions-load-error" class="hidden mb-md rounded-xl border border-rose-200 bg-rose-50/80 text-rose-800 px-4 py-3 text-sm" role="alert"></div>
+    <div id="pw-sessions-feedback" class="hidden mb-md rounded-xl border px-4 py-3 text-sm" role="status"></div>
+    <div class="overflow-x-auto rounded-xl border border-slate-100">
+      <table class="w-full text-left text-sm min-w-[560px]">
+        <thead class="bg-slate-50 text-slate-500">
+          <tr class="border-b border-slate-200">
+            <th class="py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider">City</th>
+            <th class="py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider">Date</th>
+            <th class="py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider">Label</th>
+            <th class="py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="pw-sessions-tbody" class="text-slate-800">
+          <tr><td colspan="4" class="py-8 text-center text-sm text-slate-500">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="mt-lg pt-lg border-t border-slate-200">
+      <h3 class="font-display text-headline-sm text-slate-900 mb-md">Add Session</h3>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-md items-end max-w-4xl">
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">City</span>
+          <select id="pw-session-add-city" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm">
+            <option value="">— Select —</option>
+          </select>
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Date (dd-mm-yyyy)</span>
+          <input id="pw-session-add-date" type="date" required
+                 class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm min-h-[42px] w-full max-w-[220px] focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500" autocomplete="off" />
+          <span class="text-[11px] text-slate-500">Opens your browser’s date picker; the value is sent as YYYY-MM-DD.</span>
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Session label (optional)</span>
+          <input id="pw-session-add-label" type="text" maxlength="64" placeholder="Only if two sessions same city, same day"
+                 class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+          <span class="text-[11px] text-slate-500">Only if two sessions same city, same day.</span>
+        </label>
+        <div>
+          <button type="button" id="pw-session-add-btn" class="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700">Add Session</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="mt-xl" aria-labelledby="hawkeye-integration-heading">
+  <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
+    <div class="flex flex-wrap items-start justify-between gap-3 mb-md">
+      <div>
+        <h2 id="hawkeye-integration-heading" class="font-display text-headline-md text-slate-900">Hawkeye Integration</h2>
+        <p class="text-xs text-slate-500 mt-1 max-w-prose">
+          Each Hawkeye <span class="font-mono">eventTag</span> maps to a <strong>PW session</strong> (city + date + optional label). Use <span class="font-semibold">Save</span> to store the tag, or <span class="font-semibold">Fetch</span> to save and pull RSVP stats from Hawkeye.
+        </p>
+      </div>
+      <button type="button" id="hawkeye-reload-btn" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 shadow-sm hover:bg-slate-50">
+        <span class="material-symbols-outlined text-[18px]">refresh</span>
+        Reload
+      </button>
+    </div>
+
+    <div id="hawkeye-load-error" class="hidden mb-md rounded-xl border border-rose-200 bg-rose-50/80 text-rose-800 px-4 py-3 text-sm" role="alert"></div>
+
+    <div class="overflow-x-auto rounded-xl border border-slate-100">
+      <table class="w-full text-left text-sm min-w-[820px]">
+        <thead class="bg-slate-50 text-slate-500">
+          <tr class="border-b border-slate-200">
+            <th class="py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider">PW session</th>
+            <th class="py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider">Hawkeye event tag</th>
+            <th class="py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider">Status</th>
+            <th class="py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-right">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="hawkeye-events-tbody" class="text-slate-800">
+          <tr><td colspan="4" class="py-8 text-center text-sm text-slate-500">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script id="pw-in-person-settings" type="application/json">{{ {
+  "eventId": in_person_event_id,
+  "sessionsListUrl": url_for("api_in_person_sessions_list", event_id=in_person_event_id),
+  "sessionsCreateUrl": url_for("api_in_person_sessions_create"),
+  "sessionDeleteUrlTpl": url_for("api_in_person_sessions_delete", session_id=987654321, event_id=in_person_event_id),
+  "citiesUrl": url_for("api_in_person_attendance_cities", inPersonEventId=in_person_event_id),
+  "eventsUrl": url_for("api_in_person_hawkeye_events", event_id=in_person_event_id),
+  "fetchUrl": url_for("api_in_person_hawkeye_fetch"),
+  "mappingSaveUrl": url_for("api_in_person_hawkeye_mapping_save"),
+} | tojson }}</script>
+<script>
+(function () {
+  var cfg = {};
+  try {
+    var el = document.getElementById("pw-in-person-settings");
+    cfg = el ? JSON.parse(el.textContent || "{}") : {};
+  } catch (e) {
+    cfg = {};
+  }
+  var eventId = Number(cfg.eventId || 1);
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  function fmtInt(n) {
+    var x = Number(n);
+    if (!isFinite(x)) return "—";
+    return x.toLocaleString();
+  }
+
+  function relTime(iso) {
+    if (!iso) return "—";
+    var t = Date.parse(iso);
+    if (isNaN(t)) return String(iso);
+    var sec = Math.round((Date.now() - t) / 1000);
+    if (sec < 60) return "just now";
+    var m = Math.round(sec / 60);
+    if (m < 60) return m + " min ago";
+    var h = Math.round(m / 60);
+    if (h < 48) return h + " h ago";
+    var d = Math.round(h / 24);
+    return d + " d ago";
+  }
+
+  /* ---------- PW Sessions card ---------- */
+  var sessTbody = document.getElementById("pw-sessions-tbody");
+  var sessErr = document.getElementById("pw-sessions-load-error");
+  var sessFb = document.getElementById("pw-sessions-feedback");
+  var sessCitySel = document.getElementById("pw-session-add-city");
+  var sessDateIn = document.getElementById("pw-session-add-date");
+  var sessLabIn = document.getElementById("pw-session-add-label");
+  var sessAddBtn = document.getElementById("pw-session-add-btn");
+
+  function showSessFeedback(kind, msg) {
+    if (!sessFb) return;
+    sessFb.textContent = msg || "";
+    sessFb.className = "mb-md rounded-xl border px-4 py-3 text-sm " + (
+      kind === "ok" ? "border-emerald-200 bg-emerald-50 text-emerald-900" :
+      kind === "err" ? "border-rose-200 bg-rose-50 text-rose-800" : "border-slate-200 bg-slate-50 text-slate-700"
+    );
+    sessFb.classList.toggle("hidden", !msg);
+  }
+
+  function sessionRowHtml(s) {
+    var sid = Number(s.id);
+    var delBtn =
+      '<button type="button" data-role="sess-del" data-id="' + sid + '"' +
+      ' title="Unlinks registration, Action Center, and Hawkeye rows from this session, then removes the session."' +
+      ' class="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-900 hover:bg-rose-100">' +
+      '<span class="material-symbols-outlined text-[16px]">delete</span>Delete</button>';
+    return (
+      '<tr class="border-b border-slate-100" data-session-id="' + sid + '">' +
+      '<td class="py-2.5 px-3 font-medium">' + escapeHtml(s.city || "") + "</td>" +
+      '<td class="py-2.5 px-3">' + escapeHtml(s.prompt_war_on || "") + "</td>" +
+      '<td class="py-2.5 px-3 text-slate-600">' + escapeHtml(s.session_label || "") + "</td>" +
+      '<td class="py-2.5 px-3 text-right">' + delBtn + "</td>" +
+      "</tr>"
+    );
+  }
+
+  function loadCitiesForSessionForm() {
+    if (!sessCitySel || !cfg.citiesUrl) return;
+    fetch(cfg.citiesUrl, { credentials: "same-origin" })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var cities = (j && j.attendance_cities) ? j.attendance_cities : [];
+        sessCitySel.innerHTML = '<option value="">— Select —</option>' +
+          cities.map(function (c) {
+            return '<option value="' + escapeHtml(c) + '">' + escapeHtml(c) + "</option>";
+          }).join("");
+      })
+      .catch(function () { /* ignore */ });
+  }
+
+  function loadSessionsTable() {
+    if (!sessTbody) return;
+    sessErr.classList.add("hidden");
+    fetch(cfg.sessionsListUrl, { credentials: "same-origin" })
+      .then(function (r) {
+        return r.json().then(function (j) {
+          if (!r.ok) throw new Error((j && j.error) || "sessions");
+          return j;
+        });
+      })
+      .then(function (sj) {
+        var rows = sj.sessions || [];
+        if (!rows.length) {
+          sessTbody.innerHTML = '<tr><td colspan="4" class="py-8 text-center text-sm text-slate-500">No sessions yet — add one below.</td></tr>';
+          return;
+        }
+        sessTbody.innerHTML = rows.map(function (s) {
+          return sessionRowHtml(s);
+        }).join("");
+      })
+      .catch(function (e) {
+        sessErr.textContent = e.message || "Failed to load sessions";
+        sessErr.classList.remove("hidden");
+        sessTbody.innerHTML = '<tr><td colspan="4" class="py-8 text-center text-sm text-rose-600">Could not load sessions.</td></tr>';
+      });
+  }
+
+  if (sessTbody) {
+    loadCitiesForSessionForm();
+    loadSessionsTable();
+  }
+
+  if (sessAddBtn) {
+    sessAddBtn.addEventListener("click", function () {
+      showSessFeedback("", "");
+      var city = (sessCitySel && sessCitySel.value) || "";
+      var iso = (sessDateIn && String(sessDateIn.value || "").trim()) || "";
+      var lab = (sessLabIn && sessLabIn.value) || "";
+      if (!city) {
+        showSessFeedback("err", "Select a city.");
+        return;
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+        showSessFeedback("err", "Choose a date using the calendar.");
+        return;
+      }
+      sessAddBtn.disabled = true;
+      fetch(cfg.sessionsCreateUrl, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          event_id: eventId,
+          city: city,
+          prompt_war_on: iso,
+          session_label: lab,
+        }),
+      })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, st: r.status, j: j }; }); })
+        .then(function (x) {
+          if (x.st === 201 && x.j && x.j.id) {
+            showSessFeedback("ok", "Session created.");
+            if (sessDateIn) sessDateIn.value = "";
+            if (sessLabIn) sessLabIn.value = "";
+            var tr = document.createElement("tr");
+            tr.className = "border-b border-slate-100";
+            tr.setAttribute("data-session-id", String(x.j.id));
+            tr.innerHTML =
+              '<td class="py-2.5 px-3 font-medium">' + escapeHtml(x.j.city) + "</td>" +
+              '<td class="py-2.5 px-3">' + escapeHtml(x.j.prompt_war_on) + "</td>" +
+              '<td class="py-2.5 px-3 text-slate-600">' + escapeHtml(x.j.session_label || "") + "</td>" +
+              '<td class="py-2.5 px-3 text-right">' +
+              '<button type="button" data-role="sess-del" data-id="' + x.j.id + '" class="inline-flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-900 hover:bg-rose-100">' +
+              '<span class="material-symbols-outlined text-[16px]">delete</span>Delete</button></td>';
+            if (sessTbody && sessTbody.querySelector("td[colspan]")) {
+              sessTbody.innerHTML = "";
+            }
+            if (sessTbody && sessTbody.firstChild) {
+              sessTbody.insertBefore(tr, sessTbody.firstChild);
+            } else if (sessTbody) {
+              sessTbody.appendChild(tr);
+            }
+            return;
+          }
+          var msg = (x.j && x.j.error) ? x.j.error : "Could not create session.";
+          showSessFeedback("err", msg);
+        })
+        .catch(function (e) {
+          showSessFeedback("err", e.message || "Network error");
+        })
+        .finally(function () {
+          sessAddBtn.disabled = false;
+        });
+    });
+  }
+
+  if (sessTbody) {
+    sessTbody.addEventListener("click", function (ev) {
+      var btn = ev.target.closest("button[data-role=sess-del]");
+      if (!btn || btn.disabled) return;
+      var sid = btn.getAttribute("data-id");
+      if (!sid) return;
+      if (!window.confirm(
+        "Delete this PW session?\n\n" +
+        "Registration rows, Action Center submissions, and Hawkeye snapshot links that pointed at this session will be unlinked (not deleted). Hawkeye tag mappings stay but lose their PW session link."
+      )) return;
+      btn.disabled = true;
+      var tpl = cfg.sessionDeleteUrlTpl || "";
+      var url = tpl.replace("987654321", String(sid));
+      fetch(url, { method: "DELETE", credentials: "same-origin" })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (x) {
+          if (x.ok && x.j && x.j.ok !== false) {
+            var tr = btn.closest("tr");
+            if (tr) tr.remove();
+            showSessFeedback("ok", "Session deleted.");
+            if (sessTbody && !sessTbody.querySelector("tr")) {
+              sessTbody.innerHTML = '<tr><td colspan="4" class="py-8 text-center text-sm text-slate-500">No sessions yet — add one below.</td></tr>';
+            }
+          } else {
+            var msg = (x.j && x.j.error) || "Delete failed";
+            showSessFeedback("err", msg);
+            btn.disabled = false;
+          }
+        })
+        .catch(function () {
+          showSessFeedback("err", "Network error");
+          btn.disabled = false;
+        });
+    });
+  }
+
+  /* ---------- Hawkeye card ---------- */
+  var tbody = document.getElementById("hawkeye-events-tbody");
+  var loadErr = document.getElementById("hawkeye-load-error");
+  var reloadBtn = document.getElementById("hawkeye-reload-btn");
+
+  function statusCellHtml(row) {
+    if (!row.external_key) {
+      return '<span class="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full border border-slate-200 bg-slate-50 text-slate-600">Not configured</span>';
+    }
+    if (!row.latest) {
+      return '<span class="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full border border-amber-200 bg-amber-50 text-amber-900">Configured · never fetched</span>';
+    }
+    var l = row.latest;
+    var detail =
+      "RSVP sent " + fmtInt(l.rsvp_invite_sent) +
+      " · accepted " + fmtInt(l.rsvp_accepted) +
+      " · attended " + fmtInt(l.checked_in_participants);
+    var when = "Last synced " + escapeHtml(relTime(l.fetched_at));
+    return (
+      '<span class="inline-flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full border border-emerald-300 bg-emerald-50 text-emerald-900">Synced</span>' +
+      '<div class="text-[11px] text-slate-500 mt-1">' + escapeHtml(detail) + '</div>' +
+      '<div class="text-[11px] text-slate-400">' + when + '</div>'
+    );
+  }
+
+  function rowHtml(row) {
+    var name = row.display || ("Session " + (row.scope_key || ""));
+    var pid = row.pw_session_id != null ? Number(row.pw_session_id) : 0;
+    var meta = '<div class="text-[11px] text-slate-400">' + fmtInt(row.team_count || 0) + ' team(s)</div>';
+    var tag = row.external_key || "";
+    var dataPid = pid ? ' data-pw-session-id="' + pid + '"' : "";
+    return (
+      '<tr class="border-b border-slate-100 align-top"' +
+        ' data-event-id="' + row.event_id + '"' +
+        dataPid +
+        ' data-scope-key="' + escapeHtml(row.scope_key || "") + '"' +
+        ' data-city="' + escapeHtml(row.city || "") + '"' +
+        ' data-pw-on="' + escapeHtml(row.prompt_war_on_iso || "") + '"' +
+        ' data-session-label="' + escapeHtml(row.session_label || "") + '">' +
+        '<td class="py-3 px-3"><div class="font-semibold text-slate-900">' + escapeHtml(name) + '</div>' + meta + '</td>' +
+        '<td class="py-3 px-3"><input type="text" data-role="tag" value="' + escapeHtml(tag) + '" placeholder="e.g. test-rsvp-v1" autocomplete="off" class="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-500" /></td>' +
+        '<td class="py-3 px-3" data-role="status">' + statusCellHtml(row) + '</td>' +
+        '<td class="py-3 px-3 text-right space-y-2">' +
+          '<div class="flex flex-wrap justify-end gap-2">' +
+            '<button type="button" data-role="save-tag" class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-800 shadow-sm hover:bg-slate-50">Save</button>' +
+            '<button type="button" data-role="fetch" class="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-900 shadow-sm hover:bg-emerald-100">' +
+            '<span class="material-symbols-outlined text-[18px]">cloud_download</span>Fetch</button>' +
+          '</div>' +
+          '<div data-role="result" class="text-[11px] text-slate-500 hidden"></div>' +
+        '</td>' +
+      '</tr>'
+    );
+  }
+
+  function renderRows(rows) {
+    if (!tbody) return;
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="4" class="py-8 text-center text-sm text-slate-500">No PW sessions yet — add sessions above, then map Hawkeye tags.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(rowHtml).join("");
+  }
+
+  function setRowResult(tr, kind, msg) {
+    var el = tr.querySelector('[data-role="result"]');
+    if (!el) return;
+    el.textContent = msg || "";
+    el.className = "text-[11px] mt-1 " + (
+      kind === "ok"   ? "text-emerald-700" :
+      kind === "warn" ? "text-amber-700" :
+      kind === "err"  ? "text-rose-700"  : "text-slate-500"
+    );
+    el.classList.toggle("hidden", !msg);
+  }
+
+  function refreshOneRow(scopeKey, pwSessionId) {
+    fetch(cfg.eventsUrl, { credentials: "same-origin" })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var rows = j.events || [];
+        var match = rows.filter(function (r) {
+          if (pwSessionId && r.pw_session_id != null) return Number(r.pw_session_id) === Number(pwSessionId);
+          return String(r.scope_key || "") === String(scopeKey || "");
+        })[0];
+        if (!match) return;
+        var sel = pwSessionId
+          ? 'tr[data-pw-session-id="' + String(pwSessionId) + '"]'
+          : 'tr[data-scope-key="' + (scopeKey || "").replace(/"/g, '\\"') + '"]';
+        var tr = tbody.querySelector(sel);
+        if (!tr) return;
+        var statusCell = tr.querySelector('[data-role="status"]');
+        if (statusCell) statusCell.innerHTML = statusCellHtml(match);
+      })
+      .catch(function () { /* ignore */ });
+  }
+
+  function loadHawkeye() {
+    if (!tbody) return;
+    loadErr.classList.add("hidden");
+    fetch(cfg.eventsUrl, { credentials: "same-origin" })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (x) {
+        if (!x.ok) throw new Error((x.j && x.j.error) || "Failed to load events");
+        renderRows(x.j.events || []);
+      })
+      .catch(function (e) {
+        loadErr.textContent = e.message || "Failed to load events";
+        loadErr.classList.remove("hidden");
+        tbody.innerHTML = '<tr><td colspan="4" class="py-8 text-center text-sm text-rose-600">Could not load events.</td></tr>';
+      });
+  }
+
+  if (tbody) {
+    tbody.addEventListener("click", function (ev) {
+      var tr = ev.target.closest("tr[data-event-id]");
+      if (!tr) return;
+      var eid = Number(tr.getAttribute("data-event-id"));
+      var pwSid = tr.getAttribute("data-pw-session-id");
+      var pwSessionId = pwSid ? parseInt(pwSid, 10) : null;
+      var scopeKey = tr.getAttribute("data-scope-key") || "";
+      var input = tr.querySelector('input[data-role="tag"]');
+      var tag = ((input && input.value) || "").trim();
+
+      var saveBtn = ev.target.closest('button[data-role="save-tag"]');
+      if (saveBtn) {
+        if (!tag) {
+          setRowResult(tr, "err", "Enter a Hawkeye event tag first.");
+          if (input) input.focus();
+          return;
+        }
+        saveBtn.disabled = true;
+        fetch(cfg.mappingSaveUrl, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify({
+            event_id: eid,
+            event_tag: tag,
+            pw_session_id: pwSessionId,
+          }),
+        })
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, st: r.status, j: j }; }); })
+          .then(function (x) {
+            if (x.ok && x.j && x.st < 400) {
+              setRowResult(tr, "ok", "Mapping saved.");
+              refreshOneRow(scopeKey, pwSessionId);
+            } else {
+              setRowResult(tr, "err", (x.j && x.j.error) || "Save failed");
+            }
+          })
+          .catch(function (e) {
+            setRowResult(tr, "err", e.message || "network error");
+          })
+          .finally(function () {
+            saveBtn.disabled = false;
+          });
+        return;
+      }
+
+      var btn = ev.target.closest('button[data-role="fetch"]');
+      if (!btn) return;
+      if (!tag) {
+        setRowResult(tr, "err", "Enter a Hawkeye event tag first.");
+        if (input) input.focus();
+        return;
+      }
+      btn.disabled = true;
+      var origHtml = btn.innerHTML;
+      btn.innerHTML = '<span class="material-symbols-outlined text-[18px] animate-spin">progress_activity</span>Fetching…';
+      setRowResult(tr, "info", "Calling Hawkeye…");
+
+      fetch(cfg.fetchUrl, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          event_id: eid,
+          event_tag: tag,
+          pw_session_id: pwSessionId,
+          scope_key: scopeKey,
+          scope: {
+            city: tr.getAttribute("data-city") || "",
+            prompt_war_on: tr.getAttribute("data-pw-on") || "",
+            session_label: tr.getAttribute("data-session-label") || "",
+          },
+        }),
+      })
+        .then(function (r) {
+          return r.json().then(function (j) { return { ok: r.ok, st: r.status, j: j }; });
+        })
+        .then(function (x) {
+          if (x.ok && x.j && x.j.ok !== false) {
+            var name = x.j.hawkeye_event_name || tag;
+            setRowResult(
+              tr,
+              "ok",
+              "Success · " + name +
+                " · sent " + fmtInt(x.j.rsvp_invite_sent) +
+                ", accepted " + fmtInt(x.j.rsvp_accepted) +
+                ", attended " + fmtInt(x.j.checked_in_participants)
+            );
+            refreshOneRow(scopeKey, pwSessionId);
+          } else {
+            var msg = (x.j && x.j.error) || ("Request failed (HTTP " + x.st + ")");
+            if (x.st === 502) msg = "Hawkeye unreachable — " + msg;
+            else if (x.st === 404) msg = "Not configured — " + msg;
+            setRowResult(tr, "err", "Failed · " + msg);
+          }
+        })
+        .catch(function (e) {
+          setRowResult(tr, "err", "Failed · " + (e.message || "network error"));
+        })
+        .finally(function () {
+          btn.disabled = false;
+          btn.innerHTML = origHtml;
+        });
+    });
+  }
+
+  if (reloadBtn) reloadBtn.addEventListener("click", function () {
+    loadHawkeye();
+    loadSessionsTable();
+  });
+  loadHawkeye();
+})();
+</script>
+{% endblock %}

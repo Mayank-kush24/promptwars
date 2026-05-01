@@ -40,7 +40,8 @@ CREATE TABLE import_jobs (
     'in_person',
     'virtual',
     'virtual_challenge_submissions',
-    'in_person_challenge_submissions'
+    'in_person_challenge_submissions',
+    'in_person_rsvp_lists'
   )),
   status TEXT NOT NULL,
   started_at TIMESTAMPTZ,
@@ -257,7 +258,7 @@ BEFORE UPDATE ON challenges
 FOR EACH ROW
 EXECUTE FUNCTION fn_challenges_touch_updated_at();
 
--- Virtual challenge workbook import: one row per team per challenge (distinct from in-person `submissions`).
+-- Virtual challenge workbook import: one row per leader email per challenge (distinct from in-person `submissions`).
 CREATE TABLE virtual_challenge_submission_rows (
   id BIGSERIAL PRIMARY KEY,
   event_id INTEGER NOT NULL REFERENCES events (id) ON DELETE CASCADE,
@@ -272,6 +273,7 @@ CREATE TABLE virtual_challenge_submission_rows (
   leader_email_normalized TEXT GENERATED ALWAYS AS (lower(trim(leader_email))) STORED,
   leader_phone TEXT,
   team_size INTEGER,
+  attempts_completed INTEGER,
   problem_statements TEXT,
   total_score NUMERIC(14, 4),
   deployed_link TEXT,
@@ -290,7 +292,8 @@ CREATE TABLE virtual_challenge_submission_rows (
 CREATE INDEX idx_vcsr_event ON virtual_challenge_submission_rows (event_id);
 CREATE INDEX idx_vcsr_challenge ON virtual_challenge_submission_rows (challenge_id);
 CREATE INDEX idx_vcsr_leader_email ON virtual_challenge_submission_rows (leader_email_normalized);
-CREATE UNIQUE INDEX uq_vcsr_challenge_team ON virtual_challenge_submission_rows (challenge_id, team_name_normalized);
+CREATE INDEX idx_vcsr_event_leader_email ON virtual_challenge_submission_rows (event_id, leader_email_normalized);
+CREATE UNIQUE INDEX uq_vcsr_challenge_leader_email ON virtual_challenge_submission_rows (challenge_id, leader_email_normalized);
 CREATE INDEX idx_vcsr_challenge_score_submitted ON virtual_challenge_submission_rows (
   challenge_id,
   total_score DESC NULLS LAST,
@@ -333,6 +336,7 @@ CREATE TABLE in_person_challenge_submission_rows (
   leader_email_normalized TEXT GENERATED ALWAYS AS (lower(trim(leader_email))) STORED,
   leader_phone TEXT,
   team_size INTEGER,
+  attempts_completed INTEGER,
   problem_statements TEXT,
   total_score NUMERIC(14, 4),
   deployed_link TEXT,
@@ -350,6 +354,12 @@ CREATE TABLE in_person_challenge_submission_rows (
 
 CREATE INDEX idx_ipcsr_event ON in_person_challenge_submission_rows (event_id);
 CREATE INDEX idx_ipcsr_leader_email ON in_person_challenge_submission_rows (leader_email_normalized);
+CREATE INDEX idx_ipcsr_event_leader_email ON in_person_challenge_submission_rows (event_id, leader_email_normalized);
+CREATE INDEX idx_ipcsr_event_city_leader_email ON in_person_challenge_submission_rows (
+  event_id,
+  attendance_city_normalized,
+  leader_email_normalized
+);
 CREATE UNIQUE INDEX uq_ipcsr_event_city_session_kind_team
   ON in_person_challenge_submission_rows (
     event_id,

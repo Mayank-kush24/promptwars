@@ -6,7 +6,9 @@ enumerator (``1.`` / ``2)`` / ``3:``) — digits are never used as identifiers.
 
 Expected tab names (case-insensitive, normalized whitespace):
   - Warm Up Challenge / Warmup Challenge / Warm-up Challenge → ``warmup``
+  - WarmUp Round App Submission (and hyphen/space variants) → ``warmup``
   - Main Challenge Submission / Main Challenge → ``main``
+  - Challenge 1 Submission, Challenge 2 Submission, … (``Challenge <n> Submission``) → ``main``
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ HEADER_MAP: dict[str, str] = {
     "leader email": "leader_email",
     "leader phone": "leader_phone",
     "team size": "team_size",
+    "attempts completed": "attempts_completed",
     "problem statements": "problem_statements",
     "total score (latest attempt)": "total_score",
     "deployed link - (cloud run url)": "deployed_link",
@@ -51,6 +54,24 @@ _TEXT_KEYS = (
 )
 
 _LEADING_ENUM_RE = re.compile(r"^\s*\d+[\.)]\s*")
+_CHALLENGE_N_SUBMISSION_RE = re.compile(r"^challenge \d+ submission$")
+
+_WARMUP_TAB_KEYS = frozenset(
+    {
+        "warm up challenge",
+        "warmup challenge",
+        "warm-up challenge",
+        "warmup round app submission",
+        "warm up round app submission",
+        "warm-up round app submission",
+    }
+)
+_MAIN_TAB_KEYS = frozenset(
+    {
+        "main challenge submission",
+        "main challenge",
+    }
+)
 
 
 def normalize_key(s: str) -> str:
@@ -75,9 +96,11 @@ def sheet_kind_from_tab_name(sheet_name: str) -> str | None:
     """
     rest = strip_leading_sheet_enumerator(sheet_name)
     key = normalize_key(rest)
-    if key in ("warm up challenge", "warmup challenge", "warm-up challenge"):
+    if key in _WARMUP_TAB_KEYS:
         return "warmup"
-    if key in ("main challenge submission", "main challenge"):
+    if key in _MAIN_TAB_KEYS:
+        return "main"
+    if _CHALLENGE_N_SUBMISSION_RE.match(key):
         return "main"
     return None
 
@@ -95,7 +118,8 @@ def map_sheets_to_kinds(sheet_names: list[str]) -> dict[str, str]:
         kind = sheet_kind_from_tab_name(raw)
         if kind is None:
             errors.append(
-                f"{raw!r}: expected tab name like 'Warm Up Challenge' or 'Main Challenge Submission' "
+                f"{raw!r}: expected tab like 'Warm Up Challenge', 'WarmUp Round App Submission', "
+                f"'Main Challenge Submission', or 'Challenge 1 Submission' "
                 "(optional leading '1.' / '2)' is ignored, not used as sheet id)."
             )
             continue
@@ -141,7 +165,7 @@ def _row_to_payload(
         if not key:
             continue
         val = series[col]
-        if key in ("team_size",):
+        if key in ("team_size", "attempts_completed"):
             raw = _blank_to_none(val)
             if raw is None:
                 d[key] = None

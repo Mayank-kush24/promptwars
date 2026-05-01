@@ -27,7 +27,7 @@
 {% block content %}
 <div class="flex flex-col gap-sm">
   <h1 class="font-display text-headline-lg text-slate-900">In-person · Import</h1>
-  <p class="font-body-md text-slate-600 max-w-3xl">Main Data Center CSV / XLSX and Action Center XLSX from Vision.</p>
+  <p class="font-body-md text-slate-600 max-w-3xl">Registration CSV / XLSX and Action Center XLSX from Vision.</p>
 </div>
 
 <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm mt-lg relative overflow-hidden" id="mdc-card">
@@ -40,7 +40,7 @@
   </div>
 
   <div class="flex flex-col gap-sm mb-md">
-    <h2 class="font-display text-headline-md text-slate-900">Main Data Center · CSV or XLSX</h2>
+    <h2 class="font-display text-headline-md text-slate-900">Registrations · CSV or XLSX</h2>
     <p class="text-sm text-slate-600">CSV / XLSX from Vision. <strong>Email</strong> is the primary key (re-import updates).</p>
   </div>
   <form id="mdc-import-form" action="{{ url_for('admin_import_in_person_data_center') }}" method="post" enctype="multipart/form-data" class="grid grid-cols-1 gap-md">
@@ -52,7 +52,7 @@
     <div class="flex justify-end gap-3">
       <a href="{{ url_for('in_person_page') }}" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">Cancel</a>
       <button type="submit" id="mdc-submit" class="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-        Import Main Data Center
+        Import registrations
       </button>
     </div>
   </form>
@@ -67,35 +67,29 @@
     <div class="px-4 pb-3 pt-0">
       <ul class="list-disc pl-5 space-y-1.5 text-slate-600">
         <li><span class="font-medium text-slate-800">Destination:</span> <code class="rounded bg-white/90 px-1.5 py-0.5 text-xs border border-emerald-100">in_person_challenge_submission_rows</code> (warmup + main challenge tabs).</li>
-        <li><span class="font-medium text-slate-800">Prompt War:</span> pick <strong>attendance city</strong> (event <strong>{{ in_person_event_id|default(1) }}</strong>), <strong>date</strong>, optional <strong>session label</strong> if two sessions same day.</li>
-        <li><span class="font-medium text-slate-800">Sheets:</span> <strong>Warm Up Challenge</strong> and <strong>Main Challenge Submission</strong> (optional <code class="rounded bg-white/90 px-1 text-xs">1.</code> / <code class="rounded bg-white/90 px-1 text-xs">2)</code> prefix ignored).</li>
-        <li><span class="font-medium text-slate-800">Gate:</span> each <strong>Leader email</strong> must exist in In-person MDC or <strong>no rows are written</strong>.</li>
+        <li><span class="font-medium text-slate-800">Prompt War:</span> pick a <strong>PW session</strong> (create sessions in <a href="{{ url_for('in_person_settings', inPersonEventId=(in_person_event_id|default(1))) }}" class="text-emerald-800 underline font-medium">Settings</a> if needed).</li>
+        <li><span class="font-medium text-slate-800">Sheets:</span> two tabs — warmup + main. Names recognized include <strong>Warm Up Challenge</strong> / <strong>WarmUp Round App Submission</strong> (warmup) and <strong>Main Challenge Submission</strong> / <strong>Challenge 1 Submission</strong> (main). Optional <code class="rounded bg-white/90 px-1 text-xs">1.</code> / <code class="rounded bg-white/90 px-1 text-xs">2)</code> prefix is ignored.</li>
+        <li><span class="font-medium text-slate-800">Registrations:</span> each <strong>Leader email</strong> should exist in in-person Main Data Center. If some are missing, you can confirm to create stub registration row(s) from the workbook and import submissions in one step.</li>
       </ul>
     </div>
   </details>
   <form id="ip-ac-import-form" class="flex flex-col gap-md max-w-xl">
     <label class="flex flex-col gap-xs">
-      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Prompt War (attendance city)</span>
-      <select name="attendance_city" required class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/50">
-        <option value="" disabled selected>— Select city —</option>
-        {% for c in (action_center_attendance_cities or []) %}
-          <option value="{{ c }}">{{ c }}</option>
-        {% endfor %}
+      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">PW session</span>
+      <select id="ip-ac-pw-session" required class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/50">
+        <option value="" disabled selected>— Loading sessions —</option>
       </select>
+      <input type="hidden" name="attendance_city" id="ip-ac-h-city" value="" />
+      <input type="hidden" name="prompt_war_on" id="ip-ac-h-pwo" value="" />
+      <input type="hidden" name="session_label" id="ip-ac-h-lab" value="" />
+      <input type="hidden" name="pw_session_id" id="ip-ac-h-sid" value="" />
     </label>
-    <label class="flex flex-col gap-xs">
-      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Prompt War date</span>
-      <input name="prompt_war_on" type="date" required
-             class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
-    </label>
-    <label class="flex flex-col gap-xs">
-      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Session label (optional)</span>
-      <input name="session_label" type="text" maxlength="64" placeholder="e.g. morning — only if same city, same day"
-             class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/50" />
-      <span class="text-[11px] text-slate-500">Only if two sessions same city, same day.</span>
-    </label>
+    <p id="ip-ac-no-sessions" class="hidden text-sm text-amber-900 rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2">
+      No sessions yet — add one in
+      <a href="{{ url_for('in_person_settings', inPersonEventId=(in_person_event_id|default(1))) }}" class="font-semibold text-emerald-800 underline">In-person · Settings</a>.
+    </p>
     {% if not (action_center_attendance_cities or []) %}
-      <p class="text-xs text-amber-800">No attendance cities in MDC yet. Import Main Data Center first so cities appear here.</p>
+      <p class="text-xs text-amber-800">No attendance cities from registrations yet. Import registrations first so cities appear for new sessions in Settings.</p>
     {% endif %}
     <label class="flex flex-col gap-xs">
       <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Action Center workbook</span>
@@ -110,6 +104,111 @@
   <div id="ip-ac-import-panel" class="hidden mt-lg rounded-xl border border-slate-200 overflow-hidden shadow-sm" aria-live="polite">
     <div id="ip-ac-import-panel-header" class="px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-600 bg-slate-100 border-b border-slate-200"></div>
     <div id="ip-ac-import-panel-body" class="p-4 text-sm text-slate-700 bg-white"></div>
+  </div>
+</div>
+
+<div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm mt-lg lg:col-span-2">
+  <h2 class="font-display text-headline-md text-slate-900 mb-sm">Challenge attempt counts (CSV / XLSX)</h2>
+  <details class="mb-md rounded-xl border border-emerald-100 bg-emerald-50/60 text-sm text-slate-700">
+    <summary class="cursor-pointer px-4 py-3 font-semibold text-emerald-900">Expected columns</summary>
+    <div class="px-4 pb-3 pt-0 space-y-2">
+      <p class="text-slate-600">One row per team for a <strong>single</strong> PW session and segment (main arena or warm-up). Rows update <code class="rounded bg-white/90 px-1 text-xs border border-emerald-100">attempts_completed</code> on existing <code class="rounded bg-white/90 px-1 text-xs">in_person_challenge_submission_rows</code> where <strong>Leader Email</strong> matches (normalized, same as Main Data Center).</p>
+      <p class="text-xs font-mono text-slate-800 break-all">Team Name, Leader Name, Leader Email, Leader Phone, Team size, Attempts Completed, Created At, …</p>
+      <p class="text-slate-600">Required: <span class="font-semibold">Leader Email</span> and <span class="font-semibold">Attempts Completed</span> (integer ≥ 1). Other columns are ignored. Standard Vision-style headers are auto-detected; use <strong>Preview &amp; map columns</strong> if your file uses different names.</p>
+    </div>
+  </details>
+  <form id="ipcsr-attempts-form" class="flex flex-col gap-md max-w-xl">
+    <input type="hidden" name="inPersonEventId" value="{{ in_person_event_id|default(1) }}" />
+    <label class="flex flex-col gap-xs">
+      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">PW session</span>
+      <select id="ip-attempts-pw-session" name="pw_session_id" required class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/50">
+        <option value="" disabled selected>— Loading sessions —</option>
+      </select>
+    </label>
+    <p id="ip-attempts-no-sessions" class="hidden text-sm text-amber-900 rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2"></p>
+    <label class="flex flex-col gap-xs">
+      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Challenge segment</span>
+      <select name="sheet_kind" required class="rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-800 bg-white">
+        <option value="main">Main challenge (arena)</option>
+        <option value="warmup">Warm-up challenge</option>
+      </select>
+    </label>
+    <label class="flex flex-col gap-xs">
+      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Attempt export (.csv or .xlsx)</span>
+      <input id="ip-attempts-file" name="in_person_challenge_attempts" type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" required
+             class="text-sm file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-emerald-600 file:text-white file:font-semibold file:text-sm" />
+    </label>
+    <div class="flex flex-wrap gap-2">
+      <button type="button" id="ipcsr-attempts-preview" class="px-4 py-2 rounded-lg border border-slate-200 bg-white text-sm font-semibold text-slate-800 hover:bg-slate-50">Preview &amp; map columns</button>
+      <button type="submit" id="ipcsr-attempts-submit" class="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 disabled:pointer-events-none">Apply attempt counts</button>
+      <a href="{{ url_for('in_person_page', inPersonEventId=(in_person_event_id|default(1))) }}" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">Back to In-person</a>
+    </div>
+    <div id="ipcsr-attempts-mapping-wrap" class="hidden rounded-xl border border-slate-200 bg-slate-50/60 p-md">
+      <p class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-sm">Column mapping (optional)</p>
+      <p class="text-xs text-slate-500 mb-md">After preview, pick which file columns hold <strong>email</strong> and <strong>attempts</strong>. Leave mapping unused by skipping preview — then headers are auto-detected.</p>
+      <div class="flex flex-col gap-sm max-w-md">
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500">Email</span>
+          <select id="ipcsr-map-email" class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800"></select>
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500">Attempts</span>
+          <select id="ipcsr-map-attempts" class="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800"></select>
+        </label>
+      </div>
+    </div>
+  </form>
+  <div id="ipcsr-attempts-status" class="mt-md hidden rounded-xl border border-violet-100 bg-violet-50/70 px-4 py-3 text-sm text-slate-700" aria-live="polite"></div>
+</div>
+
+<div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm mt-lg lg:col-span-2">
+  <h2 class="font-display text-headline-md text-slate-900 mb-sm">RSVP lists · CSV / XLSX</h2>
+  <p class="text-sm text-slate-600 mb-md">
+    Per <strong>PW session</strong>, import either <strong>RSVP invite sent</strong> or <strong>RSVP accepted</strong> email lists.
+    Re-importing the same session and list type <strong>replaces</strong> all stored emails for that list.
+    Map your file columns below if headers differ (for example a column named "Registered email").
+  </p>
+  <details class="mb-md rounded-xl border border-slate-200 bg-slate-50/80 text-sm text-slate-700">
+    <summary class="cursor-pointer px-4 py-3 font-semibold text-slate-800">How counts appear</summary>
+    <div class="px-4 pb-3 pt-0 text-slate-600">
+      <p class="mb-2">On the in-person Main Data Center overview, RSVP sent / accepted for each session use <strong>manual import counts</strong> when this module has stored emails for that metric; otherwise <strong>Hawkeye</strong> headline numbers apply (if configured).</p>
+    </div>
+  </details>
+  <div id="ip-rsvp-form-wrap" class="flex flex-col gap-md max-w-2xl">
+    <label class="flex flex-col gap-xs">
+      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">PW session</span>
+      <select id="ip-rsvp-pw-session" required class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-400/50">
+        <option value="" disabled selected>— Loading sessions —</option>
+      </select>
+    </label>
+    <p id="ip-rsvp-no-sessions" class="hidden text-sm text-amber-900 rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2"></p>
+    <fieldset class="flex flex-col gap-xs border-0 p-0 m-0">
+      <legend class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-xs">List type</legend>
+      <div class="flex flex-wrap gap-4 text-sm text-slate-800">
+        <label class="inline-flex items-center gap-2 cursor-pointer">
+          <input type="radio" name="ip_rsvp_list_kind" value="invite_sent" checked class="rounded-full border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+          RSVP invite sent
+        </label>
+        <label class="inline-flex items-center gap-2 cursor-pointer">
+          <input type="radio" name="ip_rsvp_list_kind" value="accepted" class="rounded-full border-slate-300 text-emerald-600 focus:ring-emerald-500" />
+          RSVP accepted
+        </label>
+      </div>
+    </fieldset>
+    <label class="flex flex-col gap-xs">
+      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Spreadsheet (.csv, .xlsx, .xls)</span>
+      <input id="ip-rsvp-file" type="file" accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+             class="text-sm file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-emerald-600 file:text-white file:font-semibold file:text-sm" />
+    </label>
+    <div class="flex flex-wrap gap-2">
+      <button type="button" id="ip-rsvp-preview-btn" class="px-4 py-2 rounded-lg border border-slate-200 bg-white text-sm font-semibold text-slate-800 hover:bg-slate-50">Preview &amp; map columns</button>
+      <button type="button" id="ip-rsvp-import-btn" class="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 disabled:pointer-events-none" disabled>Import with mapping</button>
+    </div>
+    <div id="ip-rsvp-mapping-wrap" class="hidden rounded-xl border border-slate-200 bg-slate-50/60 p-md">
+      <p class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-sm">Column → field</p>
+      <div id="ip-rsvp-mapping-rows" class="flex flex-col gap-sm"></div>
+    </div>
+    <div id="ip-rsvp-status" class="hidden rounded-xl border border-slate-200 px-4 py-3 text-sm" aria-live="polite"></div>
   </div>
 </div>
 
@@ -276,6 +375,88 @@ function pwParseImportApiResponse(r) {
   var submitBtn = document.getElementById("ip-ac-import-submit");
   if (!form || !panel || !head || !body) return;
   var apiUrl = {{ url_for("api_import_in_person_action_center")|tojson }};
+  var sessionsUrl = {{ url_for("api_in_person_sessions_list", event_id=(in_person_event_id|default(1)))|tojson }};
+  var sessSel = document.getElementById("ip-ac-pw-session");
+  var hCity = document.getElementById("ip-ac-h-city");
+  var hPwo = document.getElementById("ip-ac-h-pwo");
+  var hLab = document.getElementById("ip-ac-h-lab");
+  var hSid = document.getElementById("ip-ac-h-sid");
+  var noSess = document.getElementById("ip-ac-no-sessions");
+
+  function fillHiddenFromSession(opt) {
+    if (!opt || !opt.value) {
+      if (hCity) hCity.value = "";
+      if (hPwo) hPwo.value = "";
+      if (hLab) hLab.value = "";
+      if (hSid) hSid.value = "";
+      return;
+    }
+    if (hCity) hCity.value = opt.getAttribute("data-city") || "";
+    if (hPwo) hPwo.value = opt.getAttribute("data-pwo") || "";
+    if (hLab) hLab.value = opt.getAttribute("data-lab") || "";
+    if (hSid) hSid.value = opt.value || "";
+  }
+
+  if (sessSel) {
+    sessSel.addEventListener("change", function () {
+      var opt = sessSel.options[sessSel.selectedIndex];
+      fillHiddenFromSession(opt);
+    });
+    fetch(sessionsUrl, { credentials: "same-origin" })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var rows = (j && j.sessions) ? j.sessions : [];
+        sessSel.innerHTML = "";
+        if (j && j.migration_required) {
+          sessSel.required = false;
+          sessSel.disabled = true;
+          var om = document.createElement("option");
+          om.value = "";
+          om.textContent = "— Run database/migrate_sessions.sql —";
+          sessSel.appendChild(om);
+          if (noSess) {
+            noSess.innerHTML =
+              "The <code class=\"text-xs bg-amber-100/80 rounded px-1\">in_person_pw_sessions</code> table is not in this database yet. " +
+              "Apply <strong class=\"font-mono text-xs\">database/migrate_sessions.sql</strong> using the same connection string as this app (<code class=\"text-xs\">DATABASE_URL</code>), then reload this page.";
+            noSess.classList.remove("hidden");
+          }
+          return;
+        }
+        if (!rows.length) {
+          sessSel.required = false;
+          sessSel.disabled = true;
+          var o0 = document.createElement("option");
+          o0.value = "";
+          o0.textContent = "— No sessions —";
+          sessSel.appendChild(o0);
+          if (noSess) {
+            noSess.innerHTML =
+              'No sessions yet — add one in <a href="{{ url_for("in_person_settings", inPersonEventId=(in_person_event_id|default(1))) }}" class="font-semibold text-emerald-800 underline">In-person · Settings</a>.';
+            noSess.classList.remove("hidden");
+          }
+          return;
+        }
+        if (noSess) noSess.classList.add("hidden");
+        var ph = document.createElement("option");
+        ph.value = "";
+        ph.disabled = true;
+        ph.selected = true;
+        ph.textContent = "— Select PW session —";
+        sessSel.appendChild(ph);
+        rows.forEach(function (s) {
+          var o = document.createElement("option");
+          o.value = String(s.id);
+          o.textContent = s.display_name || (s.city + " · " + s.prompt_war_on);
+          o.setAttribute("data-city", s.city || "");
+          o.setAttribute("data-pwo", s.prompt_war_on || "");
+          o.setAttribute("data-lab", s.session_label || "");
+          sessSel.appendChild(o);
+        });
+      })
+      .catch(function () {
+        sessSel.innerHTML = '<option value="" disabled selected>Could not load sessions</option>';
+      });
+  }
 
   function esc(s) {
     if (s == null) return "";
@@ -320,22 +501,14 @@ function pwParseImportApiResponse(r) {
       "px-4 py-2.5 text-xs font-semibold uppercase tracking-wide border-b " +
       (kind === "ok"
         ? "text-emerald-800 bg-emerald-50 border-emerald-200"
-        : "text-rose-800 bg-rose-50 border-rose-200");
+        : kind === "warn"
+          ? "text-amber-900 bg-amber-50 border-amber-200"
+          : "text-rose-800 bg-rose-50 border-rose-200");
     head.innerHTML = titleHtml;
     body.innerHTML = innerHtml;
   }
 
-  form.addEventListener("submit", function (e) {
-    e.preventDefault();
-    var fd = new FormData(form);
-    if (!fd.get("attendance_city")) {
-      showPanel("err", "Missing city", "<p class=\"text-rose-800\">Select a Prompt War (attendance city).</p>");
-      return;
-    }
-    if (!fd.get("prompt_war_on")) {
-      showPanel("err", "Missing date", "<p class=\"text-rose-800\">Choose the Prompt War date for this workbook.</p>");
-      return;
-    }
+  function runIpAcImport(fd) {
     panel.classList.remove("hidden");
     head.className =
       "px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-600 bg-slate-100 border-b border-slate-200";
@@ -346,6 +519,54 @@ function pwParseImportApiResponse(r) {
       .then(pwParseImportApiResponse)
       .then(function (res) {
         var p = res.body || {};
+        if (res.status === 409 && p.needs_confirmation) {
+          var lis409 = (p.missing_emails || []).map(function (em) {
+            return "<li class=\"font-mono text-xs\">" + esc(em) + "</li>";
+          }).join("");
+          var parts409 = [];
+          parts409.push(
+            "<p class=\"text-slate-800 font-medium\">These leader emails are not in the in-person Main Data Center yet.</p>"
+          );
+          parts409.push(
+            "<p class=\"text-sm text-slate-600 mt-2\">Create registration row(s) from the workbook (name and phone when present), then import all submissions?</p>"
+          );
+          if (lis409) {
+            parts409.push("<ul class=\"list-disc pl-5 max-h-40 overflow-y-auto mt-3\">" + lis409 + "</ul>");
+          }
+          if (p.parse_stats && p.parse_stats.sheets) {
+            parts409.push("<div class=\"mt-4\">" + renderSheetsTable(p.parse_stats.sheets, "Sheets recognized") + "</div>");
+          }
+          if (p.archive_path) {
+            parts409.push(
+              "<p class=\"mt-3 text-xs text-slate-500\">Archived: <code class=\"break-all\">" + esc(p.archive_path) + "</code></p>"
+            );
+          }
+          parts409.push(
+            "<div class=\"mt-4 flex flex-wrap gap-2\">" +
+              "<button type=\"button\" id=\"ip-ac-confirm-mdc\" class=\"px-4 py-2 rounded-lg bg-amber-600 text-white text-sm font-semibold hover:bg-amber-700\">Create registrations and import</button>" +
+              "<button type=\"button\" id=\"ip-ac-cancel-mdc\" class=\"px-4 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50\">Cancel</button>" +
+              "</div>"
+          );
+          showPanel("warn", "Confirm import", parts409.join(""));
+          var cbtn = document.getElementById("ip-ac-confirm-mdc");
+          var xbtn = document.getElementById("ip-ac-cancel-mdc");
+          if (cbtn) {
+            cbtn.addEventListener("click", function () {
+              if (sessSel && !sessSel.disabled) {
+                fillHiddenFromSession(sessSel.options[sessSel.selectedIndex]);
+              }
+              var fd2 = new FormData(form);
+              fd2.append("auto_create_missing_registrations", "1");
+              runIpAcImport(fd2);
+            });
+          }
+          if (xbtn) {
+            xbtn.addEventListener("click", function () {
+              showPanel("err", "Import cancelled", "<p class=\"text-slate-600 text-sm\">No database changes were made.</p>");
+            });
+          }
+          return;
+        }
         if (!res.ok) {
           var err = (p && p.error) ? String(p.error) : "Import failed.";
           var parts = [];
@@ -365,8 +586,7 @@ function pwParseImportApiResponse(r) {
             }).join("");
             parts.push(
               "<div class=\"mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3\">" +
-              "<p class=\"font-semibold text-slate-800 text-sm mb-1\">Leader emails missing from In-person MDC</p>" +
-              "<p class=\"text-xs text-slate-600 mb-2\">Import registrations via <strong>Main Data Center</strong> above, then retry.</p>" +
+              "<p class=\"font-semibold text-slate-800 text-sm mb-1\">Leader emails still unresolved</p>" +
               "<ul class=\"list-disc pl-5 max-h-40 overflow-y-auto\">" + lis + "</ul></div>"
             );
           }
@@ -388,7 +608,7 @@ function pwParseImportApiResponse(r) {
         }
         if (p.parse_stats && p.parse_stats.mismatched_attendance_city) {
           okParts.push(
-            "<p class=\"mt-2 text-xs text-amber-800\">MDC city mismatch for " +
+            "<p class=\"mt-2 text-xs text-amber-800\">Registration city mismatch for " +
             esc(String(p.parse_stats.mismatched_attendance_city)) +
             " leader row(s) (still imported).</p>"
           );
@@ -403,6 +623,515 @@ function pwParseImportApiResponse(r) {
       })
       .catch(function () {
         showPanel("err", "Network error", "<p>Could not reach the server.</p>");
+      })
+      .finally(function () {
+        if (submitBtn) submitBtn.disabled = false;
+      });
+  }
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    if (sessSel && !sessSel.disabled) {
+      fillHiddenFromSession(sessSel.options[sessSel.selectedIndex]);
+    }
+    var fd = new FormData(form);
+    if (sessSel && sessSel.disabled) {
+      showPanel("err", "No PW session", "<p class=\"text-rose-800\">Add a PW session in Settings, then reload this page.</p>");
+      return;
+    }
+    if (!fd.get("attendance_city") || !fd.get("prompt_war_on")) {
+      showPanel("err", "Missing session", "<p class=\"text-rose-800\">Select a PW session.</p>");
+      return;
+    }
+    runIpAcImport(fd);
+  });
+})();
+(function () {
+  var sessionsUrl = {{ url_for("api_in_person_sessions_list", event_id=(in_person_event_id|default(1)))|tojson }};
+  var previewUrl = {{ url_for("api_import_in_person_rsvp_lists_preview")|tojson }};
+  var importUrl = {{ url_for("api_import_in_person_rsvp_lists")|tojson }};
+  var settingsUrl = {{ url_for("in_person_settings", inPersonEventId=(in_person_event_id|default(1)))|tojson }};
+  var sessSel = document.getElementById("ip-rsvp-pw-session");
+  var noSess = document.getElementById("ip-rsvp-no-sessions");
+  var fileIn = document.getElementById("ip-rsvp-file");
+  var previewBtn = document.getElementById("ip-rsvp-preview-btn");
+  var importBtn = document.getElementById("ip-rsvp-import-btn");
+  var mapWrap = document.getElementById("ip-rsvp-mapping-wrap");
+  var mapRows = document.getElementById("ip-rsvp-mapping-rows");
+  var statusEl = document.getElementById("ip-rsvp-status");
+  if (!sessSel || !previewBtn || !importBtn || !fileIn || !mapWrap || !mapRows || !statusEl) return;
+
+  var lastHeaders = [];
+  var lastSuggested = {};
+
+  function esc(s) {
+    if (s == null) return "";
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function showStatus(kind, html) {
+    statusEl.classList.remove("hidden", "border-rose-200", "bg-rose-50", "text-rose-800", "border-emerald-200", "bg-emerald-50", "text-emerald-900", "border-slate-200", "bg-slate-50", "text-slate-700");
+    if (kind === "err") {
+      statusEl.classList.add("border-rose-200", "bg-rose-50", "text-rose-800");
+    } else if (kind === "ok") {
+      statusEl.classList.add("border-emerald-200", "bg-emerald-50", "text-emerald-900");
+    } else {
+      statusEl.classList.add("border-slate-200", "bg-slate-50", "text-slate-700");
+    }
+    statusEl.innerHTML = html;
+    statusEl.classList.remove("hidden");
+  }
+
+  function listKind() {
+    var r = document.querySelector('input[name="ip_rsvp_list_kind"]:checked');
+    return r ? r.value : "invite_sent";
+  }
+
+  function buildMappingUi(headers, suggested, targetFields) {
+    lastHeaders = headers || [];
+    lastSuggested = suggested || {};
+    mapRows.innerHTML = "";
+    var ignoreOpt = '<option value="">— Ignore —</option>';
+    (targetFields || []).forEach(function (tf) {
+      var key = tf.key;
+      var lab = tf.label || key;
+      var req = tf.required ? ' <span class="text-rose-600">*</span>' : "";
+      var selId = "ip-rsvp-map-" + key;
+      var opts = [ignoreOpt];
+      (headers || []).forEach(function (h) {
+        var sel = suggested && suggested[key] === h ? ' selected="selected"' : "";
+        opts.push('<option value="' + esc(h) + '"' + sel + ">" + esc(h) + "</option>");
+      });
+      var row =
+        '<div class="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-4">' +
+        '<label class="text-sm font-medium text-slate-800 sm:w-40 shrink-0" for="' +
+        esc(selId) +
+        '">' +
+        esc(lab) +
+        req +
+        "</label>" +
+        '<select id="' +
+        esc(selId) +
+        '" data-target-key="' +
+        esc(key) +
+        '" class="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900">' +
+        opts.join("") +
+        "</select></div>";
+      mapRows.insertAdjacentHTML("beforeend", row);
+    });
+    mapWrap.classList.remove("hidden");
+    importBtn.disabled = false;
+  }
+
+  function collectMapping() {
+    var mapping = {};
+    var sels = mapRows.querySelectorAll("select[data-target-key]");
+    for (var i = 0; i < sels.length; i++) {
+      var el = sels[i];
+      var k = el.getAttribute("data-target-key");
+      var v = (el.value || "").trim();
+      mapping[k] = v || null;
+    }
+    return mapping;
+  }
+
+  fetch(sessionsUrl, { credentials: "same-origin" })
+    .then(function (r) {
+      return r.json();
+    })
+    .then(function (j) {
+      var rows = (j && j.sessions) ? j.sessions : [];
+      sessSel.innerHTML = "";
+      if (j && j.migration_required) {
+        sessSel.required = false;
+        sessSel.disabled = true;
+        var om = document.createElement("option");
+        om.value = "";
+        om.textContent = "— Run database/migrate_sessions.sql —";
+        sessSel.appendChild(om);
+        if (noSess) {
+          noSess.innerHTML =
+            "Apply <strong class=\"font-mono text-xs\">database/migrate_sessions.sql</strong>, then reload.";
+          noSess.classList.remove("hidden");
+        }
+        return;
+      }
+      if (!rows.length) {
+        sessSel.required = false;
+        sessSel.disabled = true;
+        var o0 = document.createElement("option");
+        o0.value = "";
+        o0.textContent = "— No sessions —";
+        sessSel.appendChild(o0);
+        if (noSess) {
+          noSess.innerHTML =
+            'No sessions yet — add one in <a href="' +
+            esc(settingsUrl) +
+            '" class="font-semibold text-emerald-800 underline">In-person · Settings</a>.';
+          noSess.classList.remove("hidden");
+        }
+        return;
+      }
+      if (noSess) noSess.classList.add("hidden");
+      var ph = document.createElement("option");
+      ph.value = "";
+      ph.disabled = true;
+      ph.selected = true;
+      ph.textContent = "— Select PW session —";
+      sessSel.appendChild(ph);
+      rows.forEach(function (s) {
+        var o = document.createElement("option");
+        o.value = String(s.id);
+        o.textContent = s.display_name || (s.city + " · " + s.prompt_war_on);
+        sessSel.appendChild(o);
+      });
+    })
+    .catch(function () {
+      sessSel.innerHTML = '<option value="" disabled selected>Could not load sessions</option>';
+    });
+
+  previewBtn.addEventListener("click", function () {
+    statusEl.classList.add("hidden");
+    statusEl.innerHTML = "";
+    mapWrap.classList.add("hidden");
+    mapRows.innerHTML = "";
+    importBtn.disabled = true;
+    if (!fileIn.files || !fileIn.files[0]) {
+      showStatus("err", "<p>Select a file first.</p>");
+      return;
+    }
+    if (sessSel.disabled || !sessSel.value) {
+      showStatus("err", "<p>Select a PW session first.</p>");
+      return;
+    }
+    var fd = new FormData();
+    fd.append("rsvp_list_file", fileIn.files[0]);
+    previewBtn.disabled = true;
+    fetch(previewUrl, { method: "POST", body: fd, credentials: "same-origin", headers: { Accept: "application/json" } })
+      .then(pwParseImportApiResponse)
+      .then(function (res) {
+        previewBtn.disabled = false;
+        if (!res.ok || !res.body || res.body.error) {
+          showStatus("err", "<p>" + esc((res.body && res.body.error) || "Preview failed") + "</p>");
+          return;
+        }
+        var b = res.body;
+        buildMappingUi(b.headers, b.suggested_mapping, b.target_fields);
+        showStatus("info", "<p class=\"text-slate-700\">Adjust column mapping if needed, then click <strong>Import with mapping</strong>.</p>");
+      })
+      .catch(function () {
+        previewBtn.disabled = false;
+        showStatus("err", "<p>Network error.</p>");
+      });
+  });
+
+  importBtn.addEventListener("click", function () {
+    statusEl.classList.add("hidden");
+    if (!fileIn.files || !fileIn.files[0]) {
+      showStatus("err", "<p>Select a file first.</p>");
+      return;
+    }
+    if (sessSel.disabled || !sessSel.value) {
+      showStatus("err", "<p>Select a PW session first.</p>");
+      return;
+    }
+    var mapping = collectMapping();
+    if (!mapping.email) {
+      showStatus("err", "<p>Map the <strong>Email</strong> column (required).</p>");
+      return;
+    }
+    var fd = new FormData();
+    fd.append("rsvp_list_file", fileIn.files[0]);
+    fd.append("pw_session_id", sessSel.value);
+    fd.append("list_kind", listKind());
+    fd.append("column_mapping", JSON.stringify(mapping));
+    importBtn.disabled = true;
+    fetch(importUrl, { method: "POST", body: fd, credentials: "same-origin", headers: { Accept: "application/json" } })
+      .then(pwParseImportApiResponse)
+      .then(function (res) {
+        importBtn.disabled = false;
+        if (!res.ok || !res.body || res.body.status !== "success") {
+          var err = (res.body && res.body.error) || "Import failed";
+          showStatus("err", "<p>" + esc(err) + "</p>");
+          return;
+        }
+        var p = res.body;
+        var ps = p.parse_stats || {};
+        showStatus(
+          "ok",
+          "<p><strong>Done.</strong> Stored <strong>" +
+            esc(String(ps.emails_written != null ? ps.emails_written : 0)) +
+            "</strong> email(s) for this session and list type.</p>" +
+            "<ul class=\"mt-2 text-xs list-disc pl-5 text-slate-600\">" +
+            "<li>Rows read: " +
+            esc(String(ps.rows_read || 0)) +
+            "</li>" +
+            "<li>Blank email: " +
+            esc(String(ps.rows_blank_email || 0)) +
+            "</li>" +
+            "<li>Invalid email: " +
+            esc(String(ps.rows_invalid_email || 0)) +
+            "</li>" +
+            "<li>Deduped: " +
+            esc(String(ps.rows_after_dedupe || 0)) +
+            "</li></ul>" +
+            (p.archive_path
+              ? "<p class=\"mt-2 text-xs text-slate-500\">Archived: <code class=\"break-all\">" + esc(p.archive_path) + "</code></p>"
+              : "")
+        );
+      })
+      .catch(function () {
+        importBtn.disabled = false;
+        showStatus("err", "<p>Network error.</p>");
+      });
+  });
+})();
+
+(function () {
+  var form = document.getElementById("ipcsr-attempts-form");
+  var statusEl = document.getElementById("ipcsr-attempts-status");
+  var submitBtn = document.getElementById("ipcsr-attempts-submit");
+  var previewBtn = document.getElementById("ipcsr-attempts-preview");
+  var fileIn = document.getElementById("ip-attempts-file");
+  var mapWrap = document.getElementById("ipcsr-attempts-mapping-wrap");
+  var selEmail = document.getElementById("ipcsr-map-email");
+  var selAttempts = document.getElementById("ipcsr-map-attempts");
+  var sessSel = document.getElementById("ip-attempts-pw-session");
+  var noSess = document.getElementById("ip-attempts-no-sessions");
+  if (!form || !statusEl || !sessSel) return;
+  var apiUrl = {{ url_for("api_import_in_person_challenge_attempts")|tojson }};
+  var previewUrl = {{ url_for("api_import_in_person_challenge_attempts_preview")|tojson }};
+  var sessionsUrl = {{ url_for("api_in_person_sessions_list", event_id=(in_person_event_id|default(1)))|tojson }};
+  var mappingReady = false;
+
+  function esc(s) {
+    if (s == null) return "";
+    return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function resetMappingUi() {
+    mappingReady = false;
+    if (mapWrap) mapWrap.classList.add("hidden");
+    if (selEmail) selEmail.innerHTML = "";
+    if (selAttempts) selAttempts.innerHTML = "";
+  }
+
+  function fillHeaderSelects(headers, suggested) {
+    if (!selEmail || !selAttempts) return;
+    var hdrs = headers || [];
+    function fillSel(sel, selectedVal) {
+      sel.innerHTML = "";
+      var o0 = document.createElement("option");
+      o0.value = "";
+      o0.textContent = "— Select column —";
+      sel.appendChild(o0);
+      hdrs.forEach(function (h) {
+        var o = document.createElement("option");
+        o.value = h;
+        o.textContent = h;
+        if (h === selectedVal) o.selected = true;
+        sel.appendChild(o);
+      });
+    }
+    var em = (suggested && suggested.email) || "";
+    var ac = (suggested && suggested.attempts) || "";
+    if (em && hdrs.indexOf(em) < 0) em = "";
+    if (ac && hdrs.indexOf(ac) < 0) ac = "";
+    fillSel(selEmail, em);
+    fillSel(selAttempts, ac);
+  }
+
+  if (fileIn) {
+    fileIn.addEventListener("change", function () {
+      resetMappingUi();
+    });
+  }
+
+  if (previewBtn) {
+    previewBtn.addEventListener("click", function () {
+      statusEl.classList.add("hidden");
+      statusEl.innerHTML = "";
+      resetMappingUi();
+      if (!fileIn || !fileIn.files || !fileIn.files[0]) {
+        statusEl.classList.remove("hidden");
+        statusEl.innerHTML = "<p class=\"text-amber-800 font-medium\">Choose a file first.</p>";
+        return;
+      }
+      previewBtn.disabled = true;
+      var fd = new FormData();
+      fd.append("in_person_challenge_attempts", fileIn.files[0]);
+      fetch(previewUrl, { method: "POST", body: fd, credentials: "same-origin", headers: { Accept: "application/json" } })
+        .then(function (r) {
+          return r.json().then(function (j) {
+            return { ok: r.ok, body: j };
+          });
+        })
+        .then(function (res) {
+          previewBtn.disabled = false;
+          var b = res.body || {};
+          if (!res.ok || b.error) {
+            statusEl.classList.remove("hidden");
+            statusEl.innerHTML =
+              "<p class=\"text-rose-800 font-medium\">" + esc(b.error || "Preview failed.") + "</p>";
+            return;
+          }
+          fillHeaderSelects(b.headers, b.suggested_mapping);
+          mappingReady = true;
+          if (mapWrap) mapWrap.classList.remove("hidden");
+          statusEl.classList.remove("hidden");
+          statusEl.innerHTML =
+            "<p class=\"text-slate-700 text-sm\">Column list loaded. Adjust <strong>Email</strong> and <strong>Attempts</strong> if needed, then <strong>Apply attempt counts</strong>.</p>";
+        })
+        .catch(function () {
+          previewBtn.disabled = false;
+          statusEl.classList.remove("hidden");
+          statusEl.innerHTML = "<p class=\"text-rose-800 font-medium\">Network error.</p>";
+        });
+    });
+  }
+
+  fetch(sessionsUrl, { credentials: "same-origin" })
+    .then(function (r) {
+      return r.json();
+    })
+    .then(function (j) {
+      sessSel.innerHTML = "";
+      if (j && j.migration_required) {
+        sessSel.required = false;
+        sessSel.disabled = true;
+        var om = document.createElement("option");
+        om.value = "";
+        om.textContent = "— Run database/migrate_sessions.sql —";
+        sessSel.appendChild(om);
+        if (noSess) {
+          noSess.innerHTML =
+            "Apply <strong class=\"font-mono text-xs\">database/migrate_sessions.sql</strong> to enable PW sessions, then reload.";
+          noSess.classList.remove("hidden");
+        }
+        return;
+      }
+      var rows = (j && j.sessions) ? j.sessions : [];
+      if (!rows.length) {
+        sessSel.required = false;
+        sessSel.disabled = true;
+        var o0 = document.createElement("option");
+        o0.value = "";
+        o0.textContent = "— No sessions —";
+        sessSel.appendChild(o0);
+        if (noSess) {
+          noSess.innerHTML =
+            'No sessions yet — add one in <a href="{{ url_for("in_person_settings", inPersonEventId=(in_person_event_id|default(1))) }}" class="font-semibold text-emerald-800 underline">In-person · Settings</a>.';
+          noSess.classList.remove("hidden");
+        }
+        return;
+      }
+      if (noSess) noSess.classList.add("hidden");
+      var ph = document.createElement("option");
+      ph.value = "";
+      ph.disabled = true;
+      ph.selected = true;
+      ph.textContent = "— Select PW session —";
+      sessSel.appendChild(ph);
+      rows.forEach(function (s) {
+        var o = document.createElement("option");
+        o.value = String(s.id);
+        o.textContent = s.display_name || (s.city + " · " + s.prompt_war_on);
+        sessSel.appendChild(o);
+      });
+    })
+    .catch(function () {
+      sessSel.innerHTML = '<option value="" disabled selected>Could not load sessions</option>';
+    });
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var fd = new FormData(form);
+    if (!sessSel.value) {
+      statusEl.classList.remove("hidden");
+      statusEl.innerHTML = "<p class=\"text-amber-800 font-medium\">Select a PW session.</p>";
+      return;
+    }
+    if (mappingReady) {
+      var em = selEmail ? String(selEmail.value || "").trim() : "";
+      var ac = selAttempts ? String(selAttempts.value || "").trim() : "";
+      if (!em || !ac) {
+        statusEl.classList.remove("hidden");
+        statusEl.innerHTML =
+          "<p class=\"text-amber-800 font-medium\">After preview, select both <strong>Email</strong> and <strong>Attempts</strong> columns (or clear mapping by choosing a new file without previewing).</p>";
+        return;
+      }
+      fd.append("column_mapping", JSON.stringify({ email: em, attempts: ac }));
+    }
+    statusEl.classList.remove("hidden");
+    statusEl.innerHTML = "<p class=\"text-slate-600\">Uploading…</p>";
+    if (submitBtn) submitBtn.disabled = true;
+    fetch(apiUrl, { method: "POST", body: fd, credentials: "same-origin" })
+      .then(function (r) {
+        return r.json().then(function (j) {
+          return { ok: r.ok, body: j };
+        });
+      })
+      .then(function (res) {
+        var p = res.body || {};
+        if (!res.ok) {
+          statusEl.innerHTML =
+            "<p class=\"text-rose-800 font-medium\">" + esc((p && p.error) ? p.error : "Import failed.") + "</p>";
+          return;
+        }
+        var rowUn = p.leader_emails_not_matched_count || 0;
+        var uniq =
+          p.leader_emails_not_matched_unique_count != null
+            ? p.leader_emails_not_matched_unique_count
+            : (Array.isArray(p.leader_emails_not_matched) ? p.leader_emails_not_matched.length : 0);
+        var emails = p.leader_emails_not_matched || [];
+        var parts = [];
+        var line =
+          "Updated " +
+          (p.rows_written || 0) +
+          " row(s). Sheet rows: " +
+          (p.rows_in_file || 0) +
+          ". Unmatched sheet rows: " +
+          rowUn;
+        if (uniq !== rowUn) {
+          line += " (" + uniq + " distinct leader emails).";
+        } else {
+          line += ".";
+        }
+        parts.push("<p class=\"font-medium text-slate-800\">" + esc(line) + "</p>");
+        if (rowUn > 0) {
+          if (emails.length) {
+            parts.push(
+              "<p class=\"text-xs text-slate-600 mt-2\">These leader emails did not match any row in " +
+                "<code class=\"rounded bg-white/80 px-1 text-[11px] border border-violet-100\">in_person_challenge_submission_rows</code> " +
+                "for this session and segment (comparison uses normalized email).</p>"
+            );
+            var lis = emails.map(function (em) {
+              return "<li class=\"break-all py-0.5\">" + esc(em) + "</li>";
+            }).join("");
+            parts.push(
+              "<ul class=\"list-disc pl-5 mt-2 max-h-64 overflow-y-auto space-y-0.5 font-mono text-xs text-slate-900\">" +
+                lis +
+                "</ul>"
+            );
+          }
+          if (emails.length >= 500) {
+            parts.push(
+              "<p class=\"text-xs text-amber-900 mt-2 font-medium\">Showing at most 500 distinct addresses in this response.</p>"
+            );
+          }
+        }
+        statusEl.innerHTML = parts.join("");
+      })
+      .catch(function () {
+        statusEl.innerHTML = "<p class=\"text-rose-800 font-medium\">Network error.</p>";
       })
       .finally(function () {
         if (submitBtn) submitBtn.disabled = false;

@@ -17,7 +17,7 @@
     <p class="text-sm text-slate-600 max-w-3xl">Eligible if registered on or before the challenge&rsquo;s <code class="rounded bg-slate-100 px-1">closes_at</code>.</p>
     <details class="mt-2 max-w-3xl text-sm text-slate-600">
       <summary class="cursor-pointer font-medium text-violet-800 hover:underline">Eligibility rules</summary>
-      <p class="mt-2">Uses <code class="rounded bg-slate-100 px-1">form_timestamp</code> from Virtual Main Data Center vs <code class="rounded bg-slate-100 px-1">closes_at</code>. Registering after a challenge ends excludes them.</p>
+      <p class="mt-2">Uses <code class="rounded bg-slate-100 px-1">form_timestamp</code> from virtual registrations vs <code class="rounded bg-slate-100 px-1">closes_at</code>. Registering after a challenge ends excludes them.</p>
     </details>
   </div>
 
@@ -150,7 +150,7 @@
                 </td>
                 <td class="py-3 px-4 text-right align-top">
                   <div class="inline-flex flex-col items-end gap-0.5 tabular-nums">
-                    <span class="font-semibold text-slate-900" title="Distinct teams (imported rows, deduped)">{{ "{:,}".format(ch.submission_distinct_teams or 0) }}</span>
+                    <span class="font-semibold text-slate-900" title="Distinct leaders by email (imported submission rows per challenge)">{{ "{:,}".format(ch.submission_distinct_teams or 0) }}</span>
                     <span class="text-[11px] text-slate-600">
                       <span class="text-emerald-700 font-medium">{{ "{:,}".format(ch.submission_fresh_vs_prior_challenge or 0) }}</span>
                       <span class="text-slate-400"> fresh</span>

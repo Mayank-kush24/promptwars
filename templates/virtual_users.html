@@ -11,6 +11,18 @@
 {{- url_for('virtual_users', page=p) -}}
 {%- if users.preserve_query_str %}&{{ users.preserve_query_str }}{% endif %}
 {%- endmacro %}
+{% set sort_h = users.sort_hrefs if users.sort_hrefs is defined else {} %}
+{% macro sort_th(key, label, extra_class='') %}
+<th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider {{ extra_class }}">
+  <a href="{{ url_for('virtual_users') }}?{{ sort_h.get(key, '') }}"
+     class="inline-flex items-center gap-0.5 text-inherit no-underline hover:text-violet-800 hover:underline">
+    {{ label }}
+    {% if users.sort_key == key %}
+      <span class="tabular-nums text-violet-600 font-bold" aria-hidden="true">{% if users.sort_dir == 'asc' %}↑{% else %}↓{% endif %}</span>
+    {% endif %}
+  </a>
+</th>
+{% endmacro %}
 <div class="flex flex-col gap-md">
   <div class="flex flex-col gap-sm">
     <h1 class="font-display text-headline-lg text-slate-900 leading-tight">{{ title }}</h1>
@@ -23,6 +35,11 @@
   {% endif %}
 
   <form method="get" action="{{ url_for('virtual_users') }}" class="flex flex-col gap-sm">
+    {% for k, v in users.preserve_items %}
+      {% if k in ('virtualEventId', 'arenaChallengeId', 'arenaTeamSegment', 'arenaAttemptsCompleted', 'sort', 'sort_dir') %}
+        <input type="hidden" name="{{ k }}" value="{{ v }}" />
+      {% endif %}
+    {% endfor %}
     <div class="flex flex-col lg:flex-row gap-sm lg:items-end lg:justify-between">
       <div class="flex flex-col sm:flex-row gap-sm flex-1 flex-wrap">
         <label class="flex flex-col gap-xs flex-1 min-w-[200px] max-w-xl">
@@ -47,8 +64,8 @@
       <div class="flex flex-wrap gap-2 items-center">
         <input type="hidden" name="per_page" value="{{ users.per_page }}" />
         <button type="submit" class="px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700">Apply filters</button>
-        {% if users.search or active_challenge_id or users.advanced_active %}
-          <a href="{{ url_for('virtual_users', per_page=users.per_page) }}" class="inline-flex items-center px-4 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">Clear</a>
+        {% if users.search or active_challenge_id or users.advanced_active or users.get('arena_from_charts_active') or users.sort_key %}
+          <a href="{% if active_virtual_event_id is defined and default_virtual_event_id is defined and active_virtual_event_id != default_virtual_event_id %}{{ url_for('virtual_users', per_page=users.per_page, virtualEventId=active_virtual_event_id) }}{% else %}{{ url_for('virtual_users', per_page=users.per_page) }}{% endif %}" class="inline-flex items-center px-4 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">Clear</a>
         {% endif %}
         <a href="{{ url_for('virtual_users_export_csv') }}{% if users.export_query %}?{{ users.export_query }}{% endif %}"
            class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-violet-200 bg-violet-50 text-violet-900 text-sm font-semibold hover:bg-violet-100 no-underline"
@@ -62,6 +79,12 @@
       <div class="inline-flex items-center gap-2 self-start px-3 py-1.5 rounded-full bg-violet-50 text-violet-800 border border-violet-200 text-xs font-semibold">
         <span class="material-symbols-outlined text-[16px]">flag</span>
         Showing only registrants eligible for challenge #{{ active_challenge_id }}
+      </div>
+    {% endif %}
+    {% if users.get('arena_from_charts_active') %}
+      <div class="inline-flex items-center gap-2 self-start px-3 py-1.5 rounded-full bg-indigo-50 text-indigo-900 border border-indigo-200 text-xs font-semibold">
+        <span class="material-symbols-outlined text-[16px]">donut_large</span>
+        Arena chart cohort filter is active (submission rows for the selected challenge and segment).
       </div>
     {% endif %}
     {% set pw_adv_input_focus = 'focus:outline-none focus:ring-2 focus:ring-violet-400/50' %}
@@ -98,16 +121,30 @@
 
   <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
     <div class="overflow-x-auto">
-      <table class="w-full text-left text-sm min-w-[860px]">
+      <table class="w-full text-left text-sm min-w-[940px]">
         <thead>
           <tr class="border-b border-slate-200 bg-slate-50 text-slate-500">
-            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Name</th>
-            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Email</th>
-            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Location</th>
-            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Occupation</th>
-            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Designation</th>
-            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-right tabular-nums">Yrs exp.</th>
-            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Registered at</th>
+            {{ sort_th('name', 'Name') }}
+            {{ sort_th('email', 'Email') }}
+            {{ sort_th('location', 'Location') }}
+            {{ sort_th('occupation', 'Occupation') }}
+            {{ sort_th('designation', 'Designation') }}
+            {{ sort_th('yrs_exp', 'Yrs exp.', 'text-right tabular-nums') }}
+            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-right tabular-nums">
+              {% if users.roster_has_score_column %}
+                <a href="{{ url_for('virtual_users') }}?{{ sort_h.get('score', '') }}"
+                   class="inline-flex items-center gap-0.5 text-inherit no-underline hover:text-violet-800 hover:underline"
+                   title="{% if active_challenge_id %}Imported total_score for the challenge selected under “Eligible for challenge”.{% else %}Highest imported total_score across all arena rounds for this workspace (pick a challenge above to scope the column to one round).{% endif %}">
+                  Imported score
+                  {% if users.sort_key == 'score' %}
+                    <span class="tabular-nums text-violet-600 font-bold" aria-hidden="true">{% if users.sort_dir == 'asc' %}↑{% else %}↓{% endif %}</span>
+                  {% endif %}
+                </a>
+              {% else %}
+                <span>Score</span>
+              {% endif %}
+            </th>
+            {{ sort_th('registered', 'Registered at') }}
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-right w-16">View</th>
           </tr>
         </thead>
@@ -148,6 +185,13 @@
                   —
                 {% endif %}
               </td>
+              <td class="py-3 px-4 text-right tabular-nums text-slate-800">
+                {% if row.mdc_submission_score is not none %}
+                  {{ row.mdc_submission_score }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
               <td class="py-3 px-4 whitespace-nowrap text-slate-600 text-xs">
                 {% if row.form_timestamp %}
                   {{ row.form_timestamp.strftime('%d-%m-%Y %H:%M:%S') }}
@@ -166,7 +210,7 @@
             </tr>
           {% else %}
             <tr>
-              <td colspan="8" class="py-16 text-center text-slate-500">
+              <td colspan="9" class="py-16 text-center text-slate-500">
                 No registrations found. Import a file from
                 <a href="{{ url_for('virtual_import') }}" class="text-violet-600 hover:underline">Virtual · Import</a>.
               </td>
@@ -494,6 +538,39 @@
     );
   }
 
+  function renderArenaParticipationSummary(data) {
+    var err = data.arena_participation_counts_error;
+    if (err) {
+      return (
+        "<section class=\"mb-5 last:mb-0\">" +
+          "<h3 class=\"text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2\">Arena participation</h3>" +
+          "<p class=\"text-xs text-amber-800\">" + esc(String(err)) + "</p>" +
+        "</section>"
+      );
+    }
+    var ip = data.arena_in_person_pw_sessions_count;
+    var v = data.arena_virtual_challenges_count;
+    if (ip == null && v == null) {
+      return "";
+    }
+    var ipN = ip == null ? "—" : String(ip);
+    var vN = v == null ? "—" : String(v);
+    var ipPlural = Number(ip) === 1 ? "" : "s";
+    var vPlural = Number(v) === 1 ? "" : "s";
+    return (
+      "<section class=\"mb-5 last:mb-0\">" +
+        "<h3 class=\"text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2\">Arena participation</h3>" +
+        "<p class=\"text-sm text-slate-700\">" +
+        "<span class=\"font-medium text-slate-900 tabular-nums\">" + esc(ipN) + "</span> distinct in-person PW session" +
+        ipPlural +
+        "<span class=\"text-slate-400 mx-2\">·</span>" +
+        "<span class=\"font-medium text-slate-900 tabular-nums\">" + esc(vN) + "</span> distinct virtual challenge" +
+        vPlural +
+        "</p>" +
+        "</section>"
+    );
+  }
+
   function renderDetail(data) {
     var skip = {
       email_normalized: true,
@@ -501,10 +578,14 @@
       audit_log: true,
       participated_challenges: true,
       participated_challenges_error: true,
+      arena_in_person_pw_sessions_count: true,
+      arena_virtual_challenges_count: true,
+      arena_participation_counts_error: true,
     };
     var used = {};
     var parts = [];
 
+    parts.push(renderArenaParticipationSummary(data));
     parts.push(renderParticipatedChallengesSection(data));
 
     DETAIL_GROUPS.forEach(function (g) {

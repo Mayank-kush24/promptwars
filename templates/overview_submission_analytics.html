@@ -1,0 +1,249 @@
+{% extends "layouts/base_app.html" %}
+{% block title %}PromptWars — {{ title }}{% endblock %}
+{% block content %}
+<div class="flex flex-col gap-md max-w-6xl">
+  <div class="flex flex-col gap-sm">
+    <h1 class="font-display text-headline-lg text-slate-900 leading-tight">{{ title }}</h1>
+    <p class="font-body-md text-slate-600 max-w-3xl">
+      Compare in-person Action Center submissions with virtual arena submissions for the two workspace events below.
+      Matching uses <strong>normalized leader email</strong> across tracks (same person may appear once per city or challenge in raw data).
+    </p>
+  </div>
+
+  <form id="pw-xover-form" class="glass-panel rounded-2xl border border-slate-200/80 p-md flex flex-col gap-md">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-sm">
+      <label class="flex flex-col gap-xs">
+        <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">In-person event id</span>
+        <input name="inPersonEventId" type="number" min="1" value="{{ in_person_event_id }}"
+               class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+      </label>
+      <label class="flex flex-col gap-xs">
+        <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Virtual event id</span>
+        <input name="virtualEventId" type="number" min="1" value="{{ virtual_event_id }}"
+               class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+      </label>
+      <label class="flex flex-col gap-xs">
+        <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">IP sheet kind</span>
+        <select name="ipSheetKind" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm">
+          <option value="">Any</option>
+          <option value="main">main</option>
+          <option value="warmup">warmup</option>
+        </select>
+      </label>
+      <label class="flex flex-col gap-xs">
+        <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">IP attendance city (exact)</span>
+        <input name="ipAttendanceCity" type="text" placeholder="e.g. Pune"
+               class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+      </label>
+    </div>
+    <label class="flex flex-col gap-xs max-w-xl">
+      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Virtual challenges (optional)</span>
+      <select name="virtualChallengeId" multiple size="5"
+              class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm min-h-[120px]">
+        {% for ch in virtual_challenges %}
+          <option value="{{ ch.id }}">{{ ch.id }} — {{ ch.title }} ({{ ch.status }})</option>
+        {% endfor %}
+      </select>
+      <span class="text-xs text-slate-500">Hold Ctrl/Cmd to select multiple; leave empty for all challenges.</span>
+    </label>
+    <details class="rounded-xl border border-slate-100 bg-slate-50/50 px-md py-sm">
+      <summary class="cursor-pointer text-sm font-semibold text-slate-700">More filters (dates, MDC)</summary>
+      <div class="mt-sm grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-sm">
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500">IP prompt war on (YYYY-MM-DD)</span>
+          <input name="ipPromptWarOn" type="date" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500">IP session label contains</span>
+          <input name="ipSessionLabelContains" type="text" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500">Breakdown rows cap</span>
+          <input name="breakdownLimit" type="number" min="1" max="50" value="20"
+                 class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500">IP imported from (ISO)</span>
+          <input name="ipImportedFrom" type="text" placeholder="2025-01-01T00:00:00Z"
+                 class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500">IP imported to (ISO)</span>
+          <input name="ipImportedTo" type="text" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500">V imported from</span>
+          <input name="vImportedFrom" type="text" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500">V imported to</span>
+          <input name="vImportedTo" type="text" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500">IP MDC city</span>
+          <input name="ipMdcCity" type="text" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500">IP MDC state</span>
+          <input name="ipMdcState" type="text" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500">IP MDC attendance city</span>
+          <input name="ipMdcAttendanceCity" type="text" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500">V MDC city</span>
+          <input name="vMdcCity" type="text" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500">V MDC state</span>
+          <input name="vMdcState" type="text" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+      </div>
+    </details>
+    <div class="flex flex-wrap gap-2">
+      <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-violet-600 text-white px-4 py-2.5 text-sm font-semibold hover:bg-violet-700 border-0 cursor-pointer">
+        <span class="material-symbols-outlined text-[20px]" aria-hidden="true">query_stats</span>
+        Run
+      </button>
+      <span id="pw-xover-status" class="text-sm text-slate-500 self-center" aria-live="polite"></span>
+    </div>
+  </form>
+
+  <div id="pw-xover-error" class="hidden rounded-xl border border-rose-200 bg-rose-50 text-rose-900 px-4 py-3 text-sm"></div>
+
+  <div id="pw-xover-kpis" class="hidden grid grid-cols-2 lg:grid-cols-5 gap-md">
+    <div class="rounded-2xl border border-slate-200 bg-white p-md shadow-sm">
+      <p class="text-xs font-semibold text-slate-500 uppercase">IP leaders</p>
+      <p class="text-2xl font-bold tabular-nums text-slate-900" data-k="ip">—</p>
+    </div>
+    <div class="rounded-2xl border border-slate-200 bg-white p-md shadow-sm">
+      <p class="text-xs font-semibold text-slate-500 uppercase">Virtual leaders</p>
+      <p class="text-2xl font-bold tabular-nums text-slate-900" data-k="v">—</p>
+    </div>
+    <div class="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-md shadow-sm">
+      <p class="text-xs font-semibold text-emerald-800 uppercase">Both tracks</p>
+      <p class="text-2xl font-bold tabular-nums text-emerald-900" data-k="both">—</p>
+    </div>
+    <div class="rounded-2xl border border-amber-200 bg-amber-50/50 p-md shadow-sm">
+      <p class="text-xs font-semibold text-amber-900 uppercase">IP only</p>
+      <p class="text-2xl font-bold tabular-nums text-amber-950" data-k="ipo">—</p>
+    </div>
+    <div class="rounded-2xl border border-sky-200 bg-sky-50/50 p-md shadow-sm">
+      <p class="text-xs font-semibold text-sky-900 uppercase">Virtual only</p>
+      <p class="text-2xl font-bold tabular-nums text-sky-950" data-k="vo">—</p>
+    </div>
+  </div>
+
+  <div id="pw-xover-break-wrap" class="hidden flex flex-col gap-sm">
+    <h2 class="font-display text-lg font-bold text-slate-900">Both tracks — by in-person attendance city</h2>
+    <p class="text-sm text-slate-600">One city per leader (lexicographic tie-break) so row totals do not double-count people.</p>
+    <div class="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+      <table class="min-w-full text-sm">
+        <thead class="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-600">
+          <tr>
+            <th class="px-4 py-3">Attendance city</th>
+            <th class="px-4 py-3 tabular-nums">Leaders (both)</th>
+          </tr>
+        </thead>
+        <tbody id="pw-xover-break-body"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  const form = document.getElementById("pw-xover-form");
+  const statusEl = document.getElementById("pw-xover-status");
+  const errBox = document.getElementById("pw-xover-error");
+  const kpiWrap = document.getElementById("pw-xover-kpis");
+  const breakWrap = document.getElementById("pw-xover-break-wrap");
+  const breakBody = document.getElementById("pw-xover-break-body");
+  const apiUrl = {{ url_for("api_overview_submission_crossover") | tojson }};
+
+  function setError(msg) {
+    if (!msg) {
+      errBox.classList.add("hidden");
+      errBox.textContent = "";
+      return;
+    }
+    errBox.textContent = msg;
+    errBox.classList.remove("hidden");
+  }
+
+  function buildQuery() {
+    const fd = new FormData(form);
+    const params = new URLSearchParams();
+    for (const [k, v] of fd.entries()) {
+      if (v === "" || v === null) continue;
+      if (k === "virtualChallengeId") continue;
+      params.append(k, v);
+    }
+    const sel = form.querySelector('select[name="virtualChallengeId"]');
+    if (sel) {
+      for (const opt of sel.selectedOptions) {
+        params.append("virtualChallengeId", opt.value);
+      }
+    }
+    return params.toString();
+  }
+
+  async function run(ev) {
+    if (ev) ev.preventDefault();
+    setError("");
+    statusEl.textContent = "Loading…";
+    kpiWrap.classList.add("hidden");
+    breakWrap.classList.add("hidden");
+    try {
+      const qs = buildQuery();
+      const res = await fetch(apiUrl + (qs ? "?" + qs : ""), { credentials: "same-origin" });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || res.statusText || "Request failed");
+        statusEl.textContent = "";
+        return;
+      }
+      if (data.error) {
+        setError(data.error);
+        statusEl.textContent = "";
+        return;
+      }
+      const c = data.counts || {};
+      kpiWrap.querySelector('[data-k="ip"]').textContent = c.distinct_ip_leaders ?? "—";
+      kpiWrap.querySelector('[data-k="v"]').textContent = c.distinct_v_leaders ?? "—";
+      kpiWrap.querySelector('[data-k="both"]').textContent = c.both_tracks ?? "—";
+      kpiWrap.querySelector('[data-k="ipo"]').textContent = c.ip_only ?? "—";
+      kpiWrap.querySelector('[data-k="vo"]').textContent = c.v_only ?? "—";
+      kpiWrap.classList.remove("hidden");
+      breakBody.innerHTML = "";
+      const rows = data.by_ip_attendance_city || [];
+      if (rows.length) {
+        for (const r of rows) {
+          const tr = document.createElement("tr");
+          tr.className = "border-t border-slate-100";
+          const td1 = document.createElement("td");
+          td1.className = "px-4 py-2 font-medium text-slate-800";
+          td1.textContent = r.attendance_city || "";
+          const td2 = document.createElement("td");
+          td2.className = "px-4 py-2 tabular-nums text-slate-700";
+          td2.textContent = r.n_leaders_both_tracks != null ? String(r.n_leaders_both_tracks) : "";
+          tr.appendChild(td1);
+          tr.appendChild(td2);
+          breakBody.appendChild(tr);
+        }
+        breakWrap.classList.remove("hidden");
+      }
+      statusEl.textContent = "Updated";
+      setTimeout(function () { statusEl.textContent = ""; }, 1500);
+    } catch (e) {
+      setError(String(e));
+      statusEl.textContent = "";
+    }
+  }
+
+  form.addEventListener("submit", run);
+  run();
+})();
+</script>
+{% endblock %}

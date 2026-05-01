@@ -34,7 +34,7 @@
       </span>
     </div>
   </label>
-  {% if lb_reset_href %}
+  {% if lb_reset_href and global_leaderboards_enabled|default(true) %}
   <a href="{{ lb_reset_href }}" class="text-xs font-medium text-slate-600 hover:text-slate-900 no-underline self-start">Reset to global</a>
   {% endif %}
 </form>

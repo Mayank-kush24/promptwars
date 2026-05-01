@@ -11,6 +11,18 @@
 {{- url_for('in_person_users', page=p) -}}
 {%- if users.preserve_query_str %}&{{ users.preserve_query_str }}{% endif %}
 {%- endmacro %}
+{% set sort_h = users.sort_hrefs if users.sort_hrefs is defined else {} %}
+{% macro sort_th_ip(key, label, extra_class='') %}
+<th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider {{ extra_class }}">
+  <a href="{{ url_for('in_person_users') }}?{{ sort_h.get(key, '') }}"
+     class="inline-flex items-center gap-0.5 text-inherit no-underline hover:text-emerald-800 hover:underline">
+    {{ label }}
+    {% if users.sort_key == key %}
+      <span class="tabular-nums text-emerald-600 font-bold" aria-hidden="true">{% if users.sort_dir == 'asc' %}↑{% else %}↓{% endif %}</span>
+    {% endif %}
+  </a>
+</th>
+{% endmacro %}
 <div class="flex flex-col gap-md">
   <div class="flex flex-col gap-sm">
     <h1 class="font-display text-headline-lg text-slate-900 leading-tight">{{ title }}</h1>
@@ -23,6 +35,11 @@
   {% endif %}
 
   <form method="get" action="{{ url_for('in_person_users') }}" class="flex flex-col gap-sm">
+    {% for k, v in users.preserve_items %}
+      {% if k in ('sort', 'sort_dir') %}
+        <input type="hidden" name="{{ k }}" value="{{ v }}" />
+      {% endif %}
+    {% endfor %}
     <div class="flex flex-col lg:flex-row gap-sm lg:items-end lg:justify-between">
       <div class="flex flex-col sm:flex-row gap-sm flex-1 flex-wrap">
         <label class="flex flex-col gap-xs flex-1 min-w-[200px] max-w-xl">
@@ -59,7 +76,7 @@
       <div class="flex flex-wrap gap-2 items-center">
         <input type="hidden" name="per_page" value="{{ users.per_page }}" />
         <button type="submit" class="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700">Apply filters</button>
-        {% if users.search or users.attendance_city or users.mdc_pw_on or users.mdc_session_label or users.advanced_active %}
+        {% if users.search or users.attendance_city or users.mdc_pw_on or users.mdc_session_label or users.advanced_active or users.sort_key %}
           <a href="{{ url_for('in_person_users', per_page=users.per_page) }}" class="inline-flex items-center px-4 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">Clear</a>
         {% endif %}
         <a href="{{ url_for('in_person_users_export_csv') }}{% if users.export_query %}?{{ users.export_query }}{% endif %}"
@@ -107,15 +124,15 @@
       <table class="w-full text-left text-sm min-w-[1020px]">
         <thead>
           <tr class="border-b border-slate-200 bg-slate-50 text-slate-500">
-            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Name</th>
-            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Email</th>
-            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Location</th>
-            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Promptathon city</th>
+            {{ sort_th_ip('name', 'Name') }}
+            {{ sort_th_ip('email', 'Email') }}
+            {{ sort_th_ip('location', 'Location') }}
+            {{ sort_th_ip('attendance_city', 'Promptathon city') }}
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">PW session</th>
-            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Occupation</th>
-            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Designation</th>
-            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-right tabular-nums">Yrs exp.</th>
-            <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider">Registered at</th>
+            {{ sort_th_ip('occupation', 'Occupation') }}
+            {{ sort_th_ip('designation', 'Designation') }}
+            {{ sort_th_ip('yrs_exp', 'Yrs exp.', 'text-right tabular-nums') }}
+            {{ sort_th_ip('registered', 'Registered at') }}
             <th class="py-3 px-4 text-[11px] font-semibold uppercase tracking-wider text-right w-16">View</th>
           </tr>
         </thead>
@@ -236,6 +253,8 @@
   var errEl = document.getElementById("pw-user-modal-error");
   var closeBtn = document.getElementById("pw-user-modal-close");
   if (!overlay || !bodyEl || !loadEl || !errEl || !closeBtn) return;
+
+  var pageMeta = {{ {"settingsHref": url_for("in_person_settings", inPersonEventId=in_person_event_id)} | tojson }};
 
   var detailUrlTmpl = {{ url_for("api_in_person_mdc_registration", reg_id=0) | tojson }};
 
@@ -476,38 +495,167 @@
     errEl.textContent = "";
   }
 
-  function renderParticipatedPwSessionsSection(data) {
-    var items = data.participated_pw_sessions;
-    var err = data.participated_pw_sessions_error;
-    var body = "";
-    if (err) {
-      body = "<p class=\"text-xs text-amber-800\">" + esc(String(err)) + "</p>";
-    } else if (!items || !items.length) {
-      body = "<p class=\"text-sm text-slate-600\">No other sessions found for this email.</p>";
-    } else {
-      body =
-        "<ul class=\"list-none m-0 p-0 space-y-1.5\">" +
-        items
-          .map(function (s) {
-            var cur = s.is_current
-              ? " <span class=\"text-[10px] font-semibold text-emerald-700\">(this row)</span>"
-              : "";
-            return (
-              "<li class=\"text-sm text-slate-800\"><span class=\"font-medium\">" +
-              esc(s.pw_session_display || "—") +
-              "</span>" +
-              cur +
-              "</li>"
-            );
-          })
-          .join("") +
-        "</ul>";
+  function hawkeyeBucketLabel(bucket) {
+    if (bucket === "checked_in") return "Checked in";
+    if (bucket === "accepted_not_attended") return "Accepted · not attended";
+    if (bucket === "pending") return "RSVP pending";
+    if (bucket === "invite_sent") return "Invite sent";
+    return "";
+  }
+
+  function renderHawkeyeRsvpSessionBlock(s) {
+    var lines = [];
+    if (s.pw_session_display) {
+      lines.push(
+        "<p class=\"text-xs text-slate-500 mb-1\">Session <span class=\"font-medium text-slate-700\">" +
+          esc(s.pw_session_display) +
+          "</span></p>"
+      );
+    }
+    if (s.hawkeye_event_name) {
+      lines.push(
+        "<p class=\"text-xs text-slate-500 mb-1\">Hawkeye event <span class=\"font-medium text-slate-700\">" +
+          esc(s.hawkeye_event_name) +
+          "</span></p>"
+      );
+    }
+    if (s.fetched_at) {
+      lines.push("<p class=\"text-[11px] text-slate-400 mb-2\">Snapshot " + esc(s.fetched_at) + "</p>");
+    }
+    if (s.bucket) {
+      var bl = hawkeyeBucketLabel(s.bucket);
+      lines.push(
+        "<p class=\"mb-2\"><span class=\"inline-block text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-slate-100 text-slate-800\">" +
+          esc(bl || s.bucket) +
+          "</span></p>"
+      );
+    }
+    if (s.error) {
+      lines.push("<p class=\"text-xs text-rose-700\">" + esc(s.error) + "</p>");
+    }
+    if (s.summary) {
+      lines.push("<p class=\"text-sm text-slate-800\">" + esc(s.summary) + "</p>");
     }
     return (
-      "<section class=\"mb-5 last:mb-0\">" +
-      "<h3 class=\"text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2\">Prompt War sessions (registrations)</h3>" +
-      body +
+      "<div class=\"mb-3 last:mb-0 rounded-lg border border-slate-100 bg-slate-50/40 p-3\">" +
+      lines.join("") +
+      "</div>"
+    );
+  }
+
+  function renderHawkeyeRsvpSection(data) {
+    var h = data.hawkeye_rsvp;
+    if (!h) return "";
+    var title = "Hawkeye RSVP";
+    var settingsHref = pageMeta && pageMeta.settingsHref ? pageMeta.settingsHref : "";
+    var settingsLine = settingsHref
+      ? ("<p class=\"text-xs text-slate-500 mt-2\"><a href=\"" +
+          escAttr(settingsHref) +
+          "\" class=\"text-emerald-600 hover:underline\">In-person settings</a> — map event tag and fetch Hawkeye stats per session.</p>")
+      : "";
+    var lines = [];
+    var sessions = (h && h.sessions) || [];
+
+    if (h.error) {
+      lines.push("<p class=\"text-xs text-rose-700\">" + esc(h.error) + "</p>");
+    }
+    if (h.applicable === false && !sessions.length) {
+      lines.push("<p class=\"text-sm text-slate-700\">" + esc(h.summary || "") + "</p>");
+      return (
+        "<section class=\"mb-5 border-t border-slate-200 pt-4\">" +
+        "<h3 class=\"text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2\">" +
+        esc(title) +
+        "</h3>" +
+        lines.join("") +
+        settingsLine +
+        "</section>"
+      );
+    }
+
+    if (sessions.length) {
+      if (sessions.length > 1) {
+        lines.push(
+          "<p class=\"text-xs text-slate-500 mb-2\">RSVP across " +
+            String(sessions.length) +
+            " PW session" +
+            (sessions.length === 1 ? "" : "s") +
+            " linked to this email.</p>"
+        );
+      }
+      sessions.forEach(function (s) {
+        lines.push(renderHawkeyeRsvpSessionBlock(s));
+      });
+    } else {
+      if (h.pw_session_display) {
+        lines.push(
+          "<p class=\"text-xs text-slate-500 mb-1\">Session <span class=\"font-medium text-slate-700\">" +
+            esc(h.pw_session_display) +
+            "</span></p>"
+        );
+      }
+      if (h.hawkeye_event_name) {
+        lines.push(
+          "<p class=\"text-xs text-slate-500 mb-1\">Hawkeye event <span class=\"font-medium text-slate-700\">" +
+            esc(h.hawkeye_event_name) +
+            "</span></p>"
+        );
+      }
+      if (h.fetched_at) {
+        lines.push("<p class=\"text-[11px] text-slate-400 mb-2\">Snapshot " + esc(h.fetched_at) + "</p>");
+      }
+      if (h.bucket) {
+        var bl = hawkeyeBucketLabel(h.bucket);
+        lines.push(
+          "<p class=\"mb-2\"><span class=\"inline-block text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-slate-100 text-slate-800\">" +
+            esc(bl || h.bucket) +
+            "</span></p>"
+        );
+      }
+      if (h.summary) {
+        lines.push("<p class=\"text-sm text-slate-800\">" + esc(h.summary) + "</p>");
+      }
+    }
+    lines.push(settingsLine);
+    return (
+      "<section class=\"mb-5 border-t border-slate-200 pt-4\">" +
+      "<h3 class=\"text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2\">" +
+      esc(title) +
+      "</h3>" +
+      lines.join("") +
       "</section>"
+    );
+  }
+
+  function renderArenaParticipationSummary(data) {
+    var err = data.arena_participation_counts_error;
+    if (err) {
+      return (
+        "<section class=\"mb-5 last:mb-0\">" +
+          "<h3 class=\"text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2\">Arena participation</h3>" +
+          "<p class=\"text-xs text-amber-800\">" + esc(String(err)) + "</p>" +
+        "</section>"
+      );
+    }
+    var ip = data.arena_in_person_pw_sessions_count;
+    var v = data.arena_virtual_challenges_count;
+    if (ip == null && v == null) {
+      return "";
+    }
+    var ipN = ip == null ? "—" : String(ip);
+    var vN = v == null ? "—" : String(v);
+    var ipPlural = Number(ip) === 1 ? "" : "s";
+    var vPlural = Number(v) === 1 ? "" : "s";
+    return (
+      "<section class=\"mb-5 last:mb-0\">" +
+        "<h3 class=\"text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2\">Arena participation</h3>" +
+        "<p class=\"text-sm text-slate-700\">" +
+        "<span class=\"font-medium text-slate-900 tabular-nums\">" + esc(ipN) + "</span> distinct in-person PW session" +
+        ipPlural +
+        "<span class=\"text-slate-400 mx-2\">·</span>" +
+        "<span class=\"font-medium text-slate-900 tabular-nums\">" + esc(vN) + "</span> distinct virtual challenge" +
+        vPlural +
+        "</p>" +
+        "</section>"
     );
   }
 
@@ -521,11 +669,16 @@
       prompt_war_on: true,
       participated_pw_sessions: true,
       participated_pw_sessions_error: true,
+      hawkeye_rsvp: true,
+      arena_in_person_pw_sessions_count: true,
+      arena_virtual_challenges_count: true,
+      arena_participation_counts_error: true,
     };
     var used = {};
     var parts = [];
 
-    parts.push(renderParticipatedPwSessionsSection(data));
+    parts.push(renderHawkeyeRsvpSection(data));
+    parts.push(renderArenaParticipationSummary(data));
 
     DETAIL_GROUPS.forEach(function (g) {
       var rows = [];
@@ -559,7 +712,7 @@
         return (
           "<tr class=\"border-b border-slate-100 last:border-b-0\">" +
           "<td class=\"py-2 px-2 text-xs capitalize\">" + esc(s.sheet_kind || "") + "</td>" +
-          "<td class=\"py-2 px-2 text-xs\">" + esc(s.attendance_city || "") + "</td>" +
+          "<td class=\"py-2 px-2 text-xs\">" + esc(s.pw_session_display || s.attendance_city || "") + "</td>" +
           "<td class=\"py-2 px-2 text-sm font-medium\">" + esc(s.team_name || "") + "</td>" +
           "<td class=\"py-2 px-2 tabular-nums text-sm\">" + esc(score) + "</td>" +
           "<td class=\"py-2 px-2\">" + dep + "</td>" +
@@ -575,7 +728,7 @@
           "<div class=\"overflow-x-auto border border-slate-200 rounded-lg\">" +
           "<table class=\"w-full text-left text-sm\">" +
           "<thead><tr class=\"bg-slate-50 text-[11px] font-semibold text-slate-500\">" +
-          "<th class=\"px-2 py-2\">Kind</th><th class=\"px-2 py-2\">PW city</th><th class=\"px-2 py-2\">Team</th>" +
+          "<th class=\"px-2 py-2\">Kind</th><th class=\"px-2 py-2\">PW session</th><th class=\"px-2 py-2\">Team</th>" +
           "<th class=\"px-2 py-2\">Score</th><th class=\"px-2 py-2\">Deployed</th><th class=\"px-2 py-2\">GitHub</th>" +
           "</tr></thead><tbody>" +
           subRows +

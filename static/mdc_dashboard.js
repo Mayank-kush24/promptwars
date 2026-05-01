@@ -118,6 +118,48 @@
     el = document.getElementById("mdcPillLast7");
     if (el) el.textContent = fmtInt(dc.registrations_last_7_days);
 
+    el = document.getElementById("mdcPillCrossover");
+    if (el) {
+      var cx = dc.mdc_crossover_both_tracks;
+      el.textContent = cx != null ? fmtInt(cx) : "—";
+    }
+    el = document.getElementById("mdcPillCrossoverMeta");
+    if (el) {
+      var vOnly = dc.mdc_crossover_virtual_only;
+      var ipOnly = dc.mdc_crossover_in_person_only;
+      var pwMod = (document.body && document.body.getAttribute("data-pw-module")) || "";
+      if (dc.mdc_crossover_both_tracks != null && vOnly != null && ipOnly != null) {
+        if (pwMod === "virtual") {
+          el.textContent =
+            "of " + fmtInt(vOnly) + " virtual · any IP city";
+        } else {
+          el.textContent =
+            "of " + fmtInt(ipOnly) + " distinct in-person emails";
+        }
+        el.classList.remove("hidden");
+      } else {
+        el.textContent = "";
+        el.classList.add("hidden");
+      }
+    }
+
+    el = document.getElementById("mdcPillIpActionCenterOverlap");
+    if (el) {
+      var ipAc = dc.mdc_crossover_virtual_reg_ip_action_center;
+      el.textContent = ipAc != null ? fmtInt(ipAc) : "—";
+    }
+    el = document.getElementById("mdcPillIpActionCenterOverlapMeta");
+    if (el) {
+      var ipAc2 = dc.mdc_crossover_virtual_reg_ip_action_center;
+      if (ipAc2 != null) {
+        el.textContent = "virtual reg · any IP PW";
+        el.classList.remove("hidden");
+      } else {
+        el.textContent = "";
+        el.classList.add("hidden");
+      }
+    }
+
     var tbody = document.getElementById("mdcCityPivotTbody");
     if (tbody) {
       var rows = dc.city_pivot || [];

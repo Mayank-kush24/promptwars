@@ -48,7 +48,7 @@
           </ul>
           {% if stats.parse_stats.mismatched_attendance_city is defined and stats.parse_stats.mismatched_attendance_city %}
             <p class="text-xs text-amber-800 mt-2">
-              Leader MDC attendance city differed from selected PW for {{ stats.parse_stats.mismatched_attendance_city }} row(s) (import still applied).
+              Leader registration attendance city differed from selected PW for {{ stats.parse_stats.mismatched_attendance_city }} row(s) (import still applied).
             </p>
           {% endif %}
         </div>
@@ -89,8 +89,8 @@
     {% endif %}
     {% if error_detail and error_detail.get('missing_emails') %}
       <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
-        <h2 class="font-display text-headline-md text-slate-900 mb-sm">Emails not in In-person Main Data Center</h2>
-        <p class="text-xs text-slate-500 mb-sm">Add these people via <strong>In-person · Import</strong> Main Data Center first (event #{{ error_detail.in_person_event_id or '—' }}), then re-run this import.</p>
+        <h2 class="font-display text-headline-md text-slate-900 mb-sm">Emails not in in-person registrations</h2>
+        <p class="text-xs text-slate-500 mb-sm">Add these people via <strong>In-person · Import</strong> registrations first (event #{{ error_detail.in_person_event_id or '—' }}), then re-run this import.</p>
         <ul class="text-xs font-mono text-slate-700 list-disc pl-5 space-y-0.5 max-h-48 overflow-y-auto">
           {% for em in error_detail.missing_emails %}
             <li>{{ em }}</li>

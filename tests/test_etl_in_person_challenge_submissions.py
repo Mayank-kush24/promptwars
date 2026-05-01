@@ -13,6 +13,7 @@ from scripts import etl_in_person_challenge_submissions as ip
 def test_strip_leading_enumerator():
     assert ip.strip_leading_sheet_enumerator("1.Warm Up Challenge") == "Warm Up Challenge"
     assert ip.strip_leading_sheet_enumerator("2)Main Challenge Submission") == "Main Challenge Submission"
+    assert ip.strip_leading_sheet_enumerator("1.WarmUp Round App Submission") == "WarmUp Round App Submission"
 
 
 def test_sheet_kind_from_tab_name_variants():
@@ -22,6 +23,10 @@ def test_sheet_kind_from_tab_name_variants():
     assert ip.sheet_kind_from_tab_name("Main Challenge Submission") == "main"
     assert ip.sheet_kind_from_tab_name("main challenge") == "main"
     assert ip.sheet_kind_from_tab_name("1.Main Challenge Submission") == "main"
+    assert ip.sheet_kind_from_tab_name("1.WarmUp Round App Submission") == "warmup"
+    assert ip.sheet_kind_from_tab_name("Warm Up Round App Submission") == "warmup"
+    assert ip.sheet_kind_from_tab_name("2.Challenge 1 Submission") == "main"
+    assert ip.sheet_kind_from_tab_name("Challenge 2 Submission") == "main"
     assert ip.sheet_kind_from_tab_name("Summary") is None
 
 
@@ -31,13 +36,26 @@ def test_map_sheets_two_tabs():
     assert plan["2.Main Challenge Submission"] == "main"
 
 
+def test_map_sheets_workbook_style_round_and_challenge():
+    plan = ip.map_sheets_to_kinds(
+        ["1.WarmUp Round App Submission", "2.Challenge 1 Submission"]
+    )
+    assert plan["1.WarmUp Round App Submission"] == "warmup"
+    assert plan["2.Challenge 1 Submission"] == "main"
+
+
 def test_map_sheets_duplicate_main_raises():
     with pytest.raises(ValueError, match="Duplicate"):
         ip.map_sheets_to_kinds(["Main Challenge Submission", "2.Main Challenge"])
 
 
+def test_map_sheets_duplicate_challenge_submission_raises():
+    with pytest.raises(ValueError, match="Duplicate"):
+        ip.map_sheets_to_kinds(["Challenge 1 Submission", "2.Challenge 2 Submission"])
+
+
 def test_map_sheets_unknown_tab_raises():
-    with pytest.raises(ValueError, match="expected tab name"):
+    with pytest.raises(ValueError, match="expected tab like"):
         ip.map_sheets_to_kinds(["Warm Up Challenge", "Extra"])
 
 

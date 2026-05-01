@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS virtual_challenge_submission_rows (
   leader_email_normalized TEXT GENERATED ALWAYS AS (lower(trim(leader_email))) STORED,
   leader_phone TEXT,
   team_size INTEGER,
+  attempts_completed INTEGER,
   problem_statements TEXT,
   total_score NUMERIC(14, 4),
   deployed_link TEXT,

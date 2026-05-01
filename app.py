@@ -26,6 +26,7 @@ from logging.handlers import RotatingFileHandler
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.middleware.proxy_fix import ProxyFix
 from sqlalchemy import bindparam, text
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.pool import QueuePool
 
@@ -41,6 +42,11 @@ from scripts import (  # noqa: E402
     etl_in_person_challenge_submissions,
     etl_virtual_challenge_submissions,
 )
+from services import hawkeye as hawkeye_service  # noqa: E402
+from services import submission_analytics as submission_analytics_svc  # noqa: E402
+from services import in_person_rsvp_list_import as ip_rsvp_list_svc  # noqa: E402
+from services import virtual_challenge_attempts_sheet as vcsr_attempts_sheet_svc  # noqa: E402
+from services.hawkeye import HawkeyeError, HawkeyeNotConfiguredError  # noqa: E402
 from services.upload_archive import archive_upload, mark_archive_status  # noqa: E402
 
 load_dotenv(ROOT / ".env")
@@ -92,10 +98,19 @@ DEFAULT_IN_PERSON_EVENT_ID = int(os.environ.get("DEFAULT_IN_PERSON_EVENT_ID", "1
 DEFAULT_VIRTUAL_EVENT_ID = int(os.environ.get("DEFAULT_VIRTUAL_EVENT_ID", "2"))
 DEFAULT_CHALLENGE_ID = int(os.environ.get("DEFAULT_CHALLENGE_ID", "1"))
 
+# Cross-arena / all-PW global leaderboard UI and routes (set PW_GLOBAL_LEADERBOARDS_ENABLED=1 to show again).
+PW_GLOBAL_LEADERBOARDS_ENABLED = _env_bool("PW_GLOBAL_LEADERBOARDS_ENABLED", False)
+
 # Main Data Center registration exports: separate physical tables per track.
 TABLE_IN_PERSON_MDC = "in_person_main_data_center_registrations"
 TABLE_VIRTUAL_MDC = "virtual_main_data_center_registrations"
 TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS = "in_person_challenge_submission_rows"
+TABLE_IN_PERSON_PW_SESSIONS = "in_person_pw_sessions"
+TABLE_IN_PERSON_RSVP_LIST_EMAILS = "in_person_pw_session_rsvp_list_emails"
+
+# Attendance-city dropdowns (MDC import, PW sessions, Action Center) are built from distinct MDC values;
+# add cities here so they appear before any registration uses them (case-insensitive dedupe vs MDC).
+IN_PERSON_PW_EXTRA_ATTENDANCE_CITIES: tuple[str, ...] = ("Gurugram",)
 
 # Roster advanced filters: `af_<column>` query params (exact match after trim; values from dropdowns).
 # Distinct option lists are capped per column (see ``MDC_USERS_ADVANCED_SELECT_LIMIT``).
@@ -228,6 +243,118 @@ MDC_USERS_ADVANCED_CHIP_LABELS: dict[str, str] = {
     "designation_years_max": "Years exp. (max)",
 }
 
+# Virtual roster: chart-linked filters (must match ``_virtual_arena_challenge_stats`` segment SQL).
+_MDC_ARENA_TEAM_SEGMENTS = frozenset({"student", "professional", "other", "unknown"})
+
+# MDC roster table sorting (query params ``sort`` / ``sort_dir``); values map to fixed SQL only.
+_ROSTER_SORT_KEYS_VIRTUAL = frozenset(
+    {"name", "email", "location", "occupation", "designation", "yrs_exp", "registered", "score"}
+)
+_ROSTER_SORT_KEYS_IN_PERSON = frozenset(
+    {
+        "name",
+        "email",
+        "location",
+        "attendance_city",
+        "occupation",
+        "designation",
+        "yrs_exp",
+        "registered",
+    }
+)
+
+
+def _parse_mdc_users_roster_sort(args, *, mode: str) -> tuple[str | None, str]:
+    raw = (args.get("sort") or "").strip().lower()[:24]
+    dr = (args.get("sort_dir") or "").strip().lower()[:4]
+    dir_ok = "asc" if dr == "asc" else "desc"
+    allowed = _ROSTER_SORT_KEYS_VIRTUAL if mode == "virtual" else _ROSTER_SORT_KEYS_IN_PERSON
+    if raw not in allowed:
+        return None, dir_ok
+    return raw, dir_ok
+
+
+def _mdc_users_roster_order_clause(
+    sort_key: str | None,
+    sort_dir: str,
+    *,
+    mode: str,
+    challenge_id: int | None,
+) -> str:
+    """Default: newest registration first. ``sort_key`` must already be allowlisted."""
+    default = "ORDER BY form_timestamp DESC NULLS LAST, id DESC"
+    if not sort_key:
+        return default
+    if sort_key == "score" and mode != "virtual":
+        return default
+    dir_sql = "ASC" if (sort_dir or "").lower() == "asc" else "DESC"
+    if sort_key == "name":
+        expr = "lower(btrim(COALESCE(full_name, '')))"
+    elif sort_key == "email":
+        expr = "lower(btrim(COALESCE(email, '')))"
+    elif sort_key == "location":
+        expr = "lower(btrim(COALESCE(city, '') || ' ' || COALESCE(state, '')))"
+    elif sort_key == "attendance_city":
+        expr = "lower(btrim(COALESCE(attendance_city, '')))"
+    elif sort_key == "occupation":
+        expr = "lower(btrim(COALESCE(occupation, '')))"
+    elif sort_key == "designation":
+        expr = "lower(btrim(COALESCE(designation, '')))"
+    elif sort_key == "yrs_exp":
+        expr = "designation_years_experience"
+    elif sort_key == "registered":
+        expr = "form_timestamp"
+    elif sort_key == "score":
+        expr = "mdc_submission_score"
+    else:
+        return default
+    return f"ORDER BY {expr} {dir_sql} NULLS LAST, id DESC"
+
+
+def _mdc_users_roster_sort_href_query(
+    preserve: dict[str, str],
+    per_page: int,
+    column: str,
+    current_key: str | None,
+    current_dir: str,
+) -> str:
+    body = dict(preserve)
+    body["per_page"] = str(per_page)
+    next_dir = "desc" if (current_key == column and (current_dir or "").lower() == "asc") else "asc"
+    body["sort"] = column
+    body["sort_dir"] = next_dir
+    return urlencode(body)
+
+
+def _mdc_users_virtual_submission_score_select_sql(table: str, challenge_id: int | None) -> str:
+    """Scalar ``total_score`` from ``virtual_challenge_submission_rows`` for roster rows.
+
+    With ``challenge_id``: that challenge only. Without: best non-null ``total_score`` for the
+    workspace (``event_id``), then newest ``updated_at`` / ``id`` as tie-breakers so scores show
+    even when **Eligible for challenge** is left on “All registrants”.
+    """
+    if challenge_id:
+        return f"""(
+            SELECT s.total_score FROM virtual_challenge_submission_rows s
+            WHERE s.event_id = :eid AND s.challenge_id = :cid
+              AND (
+                s.virtual_mdc_registration_id = {table}.id
+                OR s.leader_email_normalized = {table}.email_normalized
+              )
+            LIMIT 1
+        ) AS mdc_submission_score"""
+    return f"""(
+        SELECT s.total_score FROM virtual_challenge_submission_rows s
+        WHERE s.event_id = :eid
+          AND (
+            s.virtual_mdc_registration_id = {table}.id
+            OR s.leader_email_normalized = {table}.email_normalized
+          )
+        ORDER BY s.total_score DESC NULLS LAST, s.updated_at DESC NULLS LAST, s.id DESC
+        LIMIT 1
+    ) AS mdc_submission_score"""
+
+
 # In-person Action Center: legacy rows (pre–Prompt War session) use this date + empty session_label.
 IPCSR_LEGACY_PROMPT_WAR_DATE = date(1970, 1, 1)
 IPCSR_SESSION_LABEL_MAX_LEN = 64
@@ -247,9 +374,45 @@ def _normalize_ipcsr_session_label(raw: str | None) -> str:
     return (raw or "").strip()[:IPCSR_SESSION_LABEL_MAX_LEN]
 
 
+def _ipcsr_is_legacy_unassigned_pw(
+    prompt_war_on: date | datetime | None, session_label: str | None
+) -> bool:
+    """Sentinel MDC row: 1970-01-01 with no session label (pre–PW session assignment)."""
+    if prompt_war_on is None:
+        return False
+    if isinstance(prompt_war_on, datetime):
+        prompt_war_on = prompt_war_on.date()
+    if prompt_war_on != IPCSR_LEGACY_PROMPT_WAR_DATE:
+        return False
+    return not (session_label or "").strip()
+
+
+def _is_missing_in_person_pw_sessions_table(exc: BaseException) -> bool:
+    """True when PostgreSQL reports ``in_person_pw_sessions`` has not been created yet."""
+    raw = str(getattr(exc, "orig", exc) or exc).lower()
+    return "in_person_pw_sessions" in raw and "does not exist" in raw
+
+
+def _reject_legacy_prompt_war_on_date(
+    prompt_war_on: date | datetime | str | None,
+) -> tuple[Response, int] | None:
+    """Reject sentinel legacy date for any user-supplied Prompt War session date."""
+    if prompt_war_on is None:
+        return None
+    if isinstance(prompt_war_on, datetime):
+        prompt_war_on = prompt_war_on.date()
+    if isinstance(prompt_war_on, date):
+        iso = prompt_war_on.isoformat()[:10]
+    else:
+        iso = str(prompt_war_on).strip()[:10]
+    if iso == "1970-01-01":
+        return jsonify({"error": "1970-01-01 is not a valid session date"}), 400
+    return None
+
+
 def _ipcsr_pw_session_display(*, city: str, prompt_war_on: date, session_label: str) -> str:
-    if prompt_war_on == IPCSR_LEGACY_PROMPT_WAR_DATE and not (session_label or "").strip():
-        return f"{city} · (legacy)"
+    if _ipcsr_is_legacy_unassigned_pw(prompt_war_on, session_label):
+        return f"{city} · no PW session date"
     d = prompt_war_on.strftime("%d %b %Y")
     if (session_label or "").strip():
         return f"{city} · {d} · {session_label.strip()}"
@@ -541,6 +704,11 @@ MODULE_PAGES: list[dict[str, str]] = [
     {"pageId": "overview_dashboard", "label": "Overview · Dashboard", "path": "/"},
     {"pageId": "overview_logs", "label": "Overview · Logs", "path": "/overview/logs"},
     {"pageId": "overview_settings", "label": "Overview · Settings", "path": "/overview/settings"},
+    {
+        "pageId": "overview_submission_analytics",
+        "label": "Overview · Submission crossover",
+        "path": "/overview/submission-analytics",
+    },
     {"pageId": "in_person_dashboard", "label": "In-person · Dashboard", "path": "/in-person"},
     {"pageId": "in_person_leaderboard", "label": "In-person · Leaderboard", "path": "/in-person/leaderboard"},
     {"pageId": "in_person_users", "label": "In-person · Users", "path": "/in-person/users"},
@@ -557,23 +725,38 @@ MODULE_PAGES: list[dict[str, str]] = [
 # Longest-prefix wins inside h2s_cdi_auth; order here is readability only.
 _H2S_PATH_PAGE_RULES: list[tuple[str, str]] = [
     ("/admin/import/virtual/challenge-submissions", "overview_settings"),
+    ("/admin/import/virtual/challenge-attempts", "overview_settings"),
     ("/admin/import/virtual/main-data-center", "overview_settings"),
     ("/admin/import/in-person/main-data-center", "overview_settings"),
     ("/admin/import/in-person/action-center", "overview_settings"),
+    ("/admin/import/in-person/challenge-attempts", "overview_settings"),
     ("/admin/import", "overview_settings"),
     ("/admin", "overview_settings"),
     ("/api/import/latest", "overview_settings"),
     ("/api/credits/grant", "overview_settings"),
     ("/overview/settings", "overview_settings"),
+    ("/overview/submission-analytics", "overview_submission_analytics"),
+    ("/api/overview/submission-crossover", "overview_submission_analytics"),
     ("/overview/logs", "overview_logs"),
     ("/api/import/virtual/challenge-submissions", "virtual_import"),
     ("/api/import/virtual/main-data-center", "virtual_import"),
     ("/virtual/import", "virtual_import"),
     ("/api/import/in-person/main-data-center", "in_person_import"),
     ("/api/import/in-person/action-center", "in_person_import"),
+    ("/api/import/in-person/challenge-attempts/preview", "in_person_import"),
+    ("/api/import/in-person/challenge-attempts", "in_person_import"),
+    ("/api/import/in-person/rsvp-lists/preview", "in_person_import"),
+    ("/api/import/in-person/rsvp-lists", "in_person_import"),
     ("/api/in-person/attendance-cities", "in_person_import"),
+    ("/api/in-person/sessions", "in_person_settings"),
+    ("/api/in-person/hawkeye/mapping", "in_person_settings"),
+    ("/api/in-person/hawkeye/sync", "in_person_settings"),
+    ("/api/in-person/hawkeye/fetch", "in_person_settings"),
+    ("/api/in-person/hawkeye/events", "in_person_dashboard"),
+    ("/api/in-person/hawkeye/stats", "in_person_dashboard"),
     ("/api/in-person/action-center/leaderboard", "in_person_dashboard"),
     ("/api/import/in-person", "in_person_import"),
+    ("/in-person/settings", "in_person_settings"),
     ("/in-person/import", "in_person_import"),
     ("/in-person/leaderboard", "in_person_leaderboard"),
     ("/api/virtual/main-data-center/registrations", "virtual_users"),
@@ -586,6 +769,8 @@ _H2S_PATH_PAGE_RULES: list[tuple[str, str]] = [
     ("/virtual/challenges", "virtual_challenges"),
     ("/api/virtual/submission-leaderboard", "virtual_leaderboard"),
     ("/api/virtual/global-submission-leaderboard", "virtual_leaderboard"),
+    ("/api/import/virtual/challenge-attempts/preview", "virtual_import"),
+    ("/api/import/virtual/challenge-attempts", "virtual_import"),
     ("/api/distribution", "virtual_leaderboard"),
     ("/api/leaderboard", "virtual_leaderboard"),
     ("/virtual/leaderboard", "virtual_leaderboard"),
@@ -710,6 +895,9 @@ def _pw_request_timing_end(response: Response):
         "api_virtual_mdc_stats",
         "api_virtual_submission_leaderboard",
         "api_virtual_global_submission_leaderboard",
+        "api_import_in_person_challenge_attempts",
+        "api_import_virtual_challenge_attempts",
+        "api_overview_submission_crossover",
         "credits_distribution",
         "leaderboard",
     ):
@@ -722,6 +910,8 @@ _PW_ENDPOINT_NAV: dict[str, tuple[str, str]] = {
     "main_dashboard": ("overview", "dashboard"),
     "overview_logs": ("overview", "logs"),
     "overview_settings": ("overview", "settings"),
+    "overview_submission_analytics": ("overview", "submission_analytics"),
+    "api_overview_submission_crossover": ("overview", "submission_analytics"),
     "in_person_page": ("in_person", "dashboard"),
     "in_person_leaderboard": ("in_person", "leaderboard"),
     "in_person_users": ("in_person", "users"),
@@ -734,6 +924,8 @@ _PW_ENDPOINT_NAV: dict[str, tuple[str, str]] = {
     "api_import_virtual_challenge_submissions": ("virtual", "import"),
     "admin_import_virtual_main_data_center": ("overview", "settings"),
     "admin_import_virtual_challenge_submissions": ("overview", "settings"),
+    "admin_import_in_person_challenge_attempts": ("overview", "settings"),
+    "admin_import_virtual_challenge_attempts": ("overview", "settings"),
     "virtual_users_export_csv": ("virtual", "users"),
     "virtual_page": ("virtual", "dashboard"),
     "virtual_submission_leaderboard": ("virtual", "leaderboard"),
@@ -754,10 +946,16 @@ _PW_ENDPOINT_NAV: dict[str, tuple[str, str]] = {
     "admin_import_in_person_data_center": ("overview", "settings"),
     "admin_import_in_person_action_center": ("overview", "settings"),
     "api_import_in_person_action_center": ("in_person", "import"),
+    "api_import_in_person_rsvp_lists_preview": ("in_person", "import"),
+    "api_import_in_person_rsvp_lists": ("in_person", "import"),
     "api_in_person_attendance_cities": ("in_person", "import"),
     "api_in_person_action_center_leaderboard": ("in_person", "dashboard"),
     "api_in_person_mdc_stats": ("in_person", "dashboard"),
     "api_virtual_mdc_stats": ("virtual", "dashboard"),
+    "api_import_in_person_challenge_attempts_preview": ("in_person", "import"),
+    "api_import_in_person_challenge_attempts": ("in_person", "import"),
+    "api_import_virtual_challenge_attempts_preview": ("virtual", "import"),
+    "api_import_virtual_challenge_attempts": ("virtual", "import"),
     "admin_result": ("overview", "settings"),
 }
 
@@ -774,6 +972,7 @@ def _pw_subnav_rows(module: str) -> list[dict[str, str]]:
     if module == "overview":
         spec = (
             ("dashboard", "Dashboard", "main_dashboard", "dashboard"),
+            ("submission_analytics", "Crossover", "overview_submission_analytics", "compare_arrows"),
             ("logs", "Logs", "overview_logs", "receipt_long"),
             ("settings", "Settings", "overview_settings", "settings"),
         )
@@ -888,6 +1087,24 @@ def health():
     except Exception:  # noqa: BLE001
         pass
     return jsonify(out)
+
+
+@app.get("/api/overview/submission-crossover")
+def api_overview_submission_crossover():
+    """Cross-track submission cohort counts (in-person Action Center vs virtual arena), matched by leader email."""
+    p = submission_analytics_svc.parse_submission_crossover_params(
+        request.args,
+        default_ip_event_id=DEFAULT_IN_PERSON_EVENT_ID,
+        default_v_event_id=DEFAULT_VIRTUAL_EVENT_ID,
+    )
+    if p is None:
+        return jsonify({"error": "Invalid or missing event identifiers."}), 400
+    key = submission_analytics_svc.submission_crossover_cache_key(p)
+    data = _PW_CACHE_HOT.get_or_set(
+        key,
+        lambda: submission_analytics_svc.load_submission_crossover_uncached(engine, p),
+    )
+    return jsonify(data)
 
 
 @app.get("/favicon.ico")
@@ -1186,25 +1403,27 @@ _VCSR_UPSERT = text(
     """
     INSERT INTO virtual_challenge_submission_rows (
       event_id, challenge_id, import_job_id, virtual_mdc_registration_id, source_sheet_name,
-      team_name, leader_name, leader_email, leader_phone, team_size, problem_statements,
+      team_name, leader_name, leader_email, leader_phone, team_size, attempts_completed, problem_statements,
       total_score, deployed_link, linkedin_post, github_repository_link,
       export_created_at, export_created_by_name, export_created_by_email,
       export_updated_at, export_updated_by_name, export_updated_by_email
     ) VALUES (
       :event_id, :challenge_id, :import_job_id, :virtual_mdc_registration_id, :source_sheet_name,
-      :team_name, :leader_name, :leader_email, :leader_phone, :team_size, :problem_statements,
+      :team_name, :leader_name, :leader_email, :leader_phone, :team_size, :attempts_completed, :problem_statements,
       :total_score, :deployed_link, :linkedin_post, :github_repository_link,
       :export_created_at, :export_created_by_name, :export_created_by_email,
       :export_updated_at, :export_updated_by_name, :export_updated_by_email
     )
-    ON CONFLICT (challenge_id, team_name_normalized) DO UPDATE SET
+    ON CONFLICT (challenge_id, leader_email_normalized) DO UPDATE SET
       import_job_id = EXCLUDED.import_job_id,
       virtual_mdc_registration_id = EXCLUDED.virtual_mdc_registration_id,
       source_sheet_name = EXCLUDED.source_sheet_name,
+      team_name = EXCLUDED.team_name,
       leader_name = EXCLUDED.leader_name,
       leader_email = EXCLUDED.leader_email,
       leader_phone = EXCLUDED.leader_phone,
       team_size = EXCLUDED.team_size,
+      attempts_completed = COALESCE(EXCLUDED.attempts_completed, virtual_challenge_submission_rows.attempts_completed),
       problem_statements = EXCLUDED.problem_statements,
       total_score = EXCLUDED.total_score,
       deployed_link = EXCLUDED.deployed_link,
@@ -1223,16 +1442,16 @@ _VCSR_UPSERT = text(
 _IPCSR_UPSERT = text(
     """
     INSERT INTO in_person_challenge_submission_rows (
-      event_id, attendance_city, prompt_war_on, session_label, import_job_id, in_person_mdc_registration_id,
+      event_id, attendance_city, prompt_war_on, session_label, pw_session_id, import_job_id, in_person_mdc_registration_id,
       sheet_kind, source_sheet_name,
-      team_name, leader_name, leader_email, leader_phone, team_size, problem_statements,
+      team_name, leader_name, leader_email, leader_phone, team_size, attempts_completed, problem_statements,
       total_score, deployed_link, deployed_changes_notes, github_repository_link,
       export_created_at, export_created_by_name, export_created_by_email,
       export_updated_at, export_updated_by_name, export_updated_by_email
     ) VALUES (
-      :event_id, :attendance_city, :prompt_war_on, :session_label, :import_job_id, :in_person_mdc_registration_id,
+      :event_id, :attendance_city, :prompt_war_on, :session_label, :pw_session_id, :import_job_id, :in_person_mdc_registration_id,
       :sheet_kind, :source_sheet_name,
-      :team_name, :leader_name, :leader_email, :leader_phone, :team_size, :problem_statements,
+      :team_name, :leader_name, :leader_email, :leader_phone, :team_size, :attempts_completed, :problem_statements,
       :total_score, :deployed_link, :deployed_changes_notes, :github_repository_link,
       :export_created_at, :export_created_by_name, :export_created_by_email,
       :export_updated_at, :export_updated_by_name, :export_updated_by_email
@@ -1244,11 +1463,13 @@ _IPCSR_UPSERT = text(
       in_person_mdc_registration_id = EXCLUDED.in_person_mdc_registration_id,
       prompt_war_on = EXCLUDED.prompt_war_on,
       session_label = EXCLUDED.session_label,
+      pw_session_id = EXCLUDED.pw_session_id,
       source_sheet_name = EXCLUDED.source_sheet_name,
       leader_name = EXCLUDED.leader_name,
       leader_email = EXCLUDED.leader_email,
       leader_phone = EXCLUDED.leader_phone,
       team_size = EXCLUDED.team_size,
+      attempts_completed = COALESCE(EXCLUDED.attempts_completed, in_person_challenge_submission_rows.attempts_completed),
       problem_statements = EXCLUDED.problem_statements,
       total_score = EXCLUDED.total_score,
       deployed_link = EXCLUDED.deployed_link,
@@ -1263,6 +1484,120 @@ _IPCSR_UPSERT = text(
       updated_at = now()
     """
 )
+
+# Sparse Main Data Center rows created from Action Center import when leader emails are missing.
+ACTION_CENTER_AUTO_MDC_UTM_CAMPAIGN = "action_center_auto_registration"
+
+
+def _form_truthy_auto_create_missing_registrations() -> bool:
+    v = (request.form.get("auto_create_missing_registrations") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
+def _leader_source_by_normalized_email(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """First occurrence per normalized leader email: casing-preserved email, name, phone."""
+    out: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        raw = (r.get("leader_email") or "").strip()
+        if not raw:
+            continue
+        key = raw.lower()
+        if key not in out:
+            out[key] = {
+                "leader_email": raw,
+                "leader_name": r.get("leader_name"),
+                "leader_phone": r.get("leader_phone"),
+            }
+    return out
+
+
+def _synthetic_mdc_row_virtual(
+    event_id: int, leader_email: str, leader_name: Any, leader_phone: Any
+) -> dict[str, Any]:
+    return {
+        "event_id": event_id,
+        "email": leader_email,
+        "form_timestamp": None,
+        "utm_source": None,
+        "utm_medium": None,
+        "utm_campaign": ACTION_CENTER_AUTO_MDC_UTM_CAMPAIGN,
+        "utm_term": None,
+        "utm_content": None,
+        "org_name": None,
+        "org_state": None,
+        "org_city": None,
+        "class_stream": None,
+        "portfolio": None,
+        "domain": None,
+        "designation": None,
+        "designation_years_experience": None,
+        "founded_info": None,
+        "degree": None,
+        "profile_name": None,
+        "full_name": leader_name,
+        "mobile": leader_phone,
+        "whatsapp": None,
+        "country": None,
+        "state": None,
+        "city": None,
+        "dob": None,
+        "gender": None,
+        "occupation": None,
+        "github_url": None,
+        "linkedin_url": None,
+        "attendance_city": None,
+    }
+
+
+def _synthetic_mdc_row_in_person(
+    event_id: int,
+    leader_email: str,
+    leader_name: Any,
+    leader_phone: Any,
+    attendance_city: str,
+    prompt_war_on: date,
+    session_label: str,
+) -> dict[str, Any]:
+    d = _synthetic_mdc_row_virtual(event_id, leader_email, leader_name, leader_phone)
+    d["attendance_city"] = attendance_city
+    d["prompt_war_on"] = prompt_war_on
+    d["session_label"] = session_label
+    return d
+
+
+def _ipcsr_mdc_maps_from_mrows(
+    mrows: list[Any],
+    pw_on: date,
+    session_label_imp: str,
+) -> tuple[dict[str, int], dict[str, str]]:
+    """Pick best in-person MDC registration id per normalized email (same rules as Action Center import)."""
+    sl_norm = session_label_imp.strip().lower()
+
+    def _match_priority(pw_on_row: date, sln_row: str) -> int:
+        if pw_on_row == pw_on and sln_row == sl_norm:
+            return 0
+        if pw_on_row == IPCSR_LEGACY_PROMPT_WAR_DATE and not sln_row:
+            return 1
+        return 2
+
+    per_email: dict[str, dict[str, Any]] = {}
+    for r in mrows:
+        em = str(r["email_normalized"])
+        pwd_cell = r["prompt_war_on"]
+        if isinstance(pwd_cell, datetime):
+            pwd_cell = pwd_cell.date()
+        sln_cell = str(r["sln"] or "")
+        cand = {
+            "id": int(r["id"]),
+            "ac": str(r["ac"]) or "",
+            "rank": _match_priority(pwd_cell, sln_cell),
+        }
+        cur = per_email.get(em)
+        if cur is None or cand["rank"] < cur["rank"]:
+            per_email[em] = cand
+    mdc_by_email = {em: int(v["id"]) for em, v in per_email.items()}
+    mdc_ac_by_email = {em: str(v["ac"]) for em, v in per_email.items()}
+    return mdc_by_email, mdc_ac_by_email
 
 
 def _import_in_person_main_data_center_core():
@@ -1293,6 +1628,26 @@ def _import_in_person_main_data_center_core():
         return jsonify({"error": str(ve)}), 400
 
     mark_archive_status(archived.id, "parsed", engine=engine)
+
+    for r in rows:
+        pwo = r.get("prompt_war_on")
+        if pwo is None:
+            continue
+        if isinstance(pwo, datetime):
+            pd = pwo.date()
+        elif isinstance(pwo, date):
+            pd = pwo
+        elif isinstance(pwo, str):
+            try:
+                pd = date.fromisoformat(str(pwo)[:10])
+            except ValueError:
+                continue
+        else:
+            continue
+        rej = _reject_legacy_prompt_war_on_date(pd)
+        if rej:
+            mark_archive_status(archived.id, "failed", engine=engine, error="invalid prompt_war_on")
+            return rej
 
     with engine.connect() as conn:
         ev = conn.execute(
@@ -1485,6 +1840,17 @@ def _import_virtual_challenge_submissions_core():
         mark_archive_status(archived.id, "failed", engine=engine, error="No leader emails in parsed rows")
         return jsonify({"error": "No leader emails in parsed rows"}), 400
 
+    auto_create = _form_truthy_auto_create_missing_registrations()
+    leader_src = _leader_source_by_normalized_email(rows)
+
+    m_stmt = text(
+        f"""
+        SELECT id, email_normalized
+        FROM {TABLE_VIRTUAL_MDC}
+        WHERE event_id = :eid AND email_normalized IN :emails
+        """
+    ).bindparams(bindparam("emails", expanding=True))
+
     with engine.connect() as conn:
         ev = conn.execute(
             text("SELECT id, kind FROM events WHERE id = :id"),
@@ -1497,23 +1863,16 @@ def _import_virtual_challenge_submissions_core():
             mark_archive_status(archived.id, "failed", engine=engine, error="event must be virtual kind")
             return jsonify({"error": "event must be virtual kind"}), 400
 
-        m_stmt = text(
-            f"""
-            SELECT id, email_normalized
-            FROM {TABLE_VIRTUAL_MDC}
-            WHERE event_id = :eid AND email_normalized IN :emails
-            """
-        ).bindparams(bindparam("emails", expanding=True))
         mrows = conn.execute(m_stmt, {"eid": event_id, "emails": emails_set}).fetchall()
         mdc_by_email = {str(r[1]): int(r[0]) for r in mrows}
 
     missing = [e for e in emails_set if e not in mdc_by_email]
-    if missing:
+    if missing and not auto_create:
         msg = (
             "Leader email(s) not found in Virtual Main Data Center for this event "
             f"(showing up to 20 of {len(missing)}): {', '.join(missing[:20])}"
         )
-        mark_archive_status(archived.id, "failed", engine=engine, error=msg)
+        mark_archive_status(archived.id, "parsed", engine=engine, error=msg)
         id_to_title = {int(c["id"]): (c.get("title") or "") for c in challenges}
         sheets_disp: dict[str, dict] = {}
         for sn, info in (parse_stats.get("sheets") or {}).items():
@@ -1527,6 +1886,7 @@ def _import_virtual_challenge_submissions_core():
             {
                 "error": msg,
                 "missing_emails": missing,
+                "needs_confirmation": True,
                 "nothing_written": True,
                 "target_table": "virtual_challenge_submission_rows",
                 "virtual_event_id": event_id,
@@ -1534,7 +1894,7 @@ def _import_virtual_challenge_submissions_core():
                 "rows_ready_to_import": len(rows),
                 "archive_path": archived.stored_path,
             }
-        ), 400
+        ), 409
 
     mark_archive_status(archived.id, "parsed", engine=engine)
 
@@ -1553,6 +1913,27 @@ def _import_virtual_challenge_submissions_core():
             job_id = int(res.scalar_one())
             mark_archive_status(archived.id, "parsed", engine=engine, import_job_id=job_id)
 
+            if missing and auto_create:
+                for em in missing:
+                    src = leader_src[em]
+                    conn.execute(
+                        _VIRTUAL_MDC_UPSERT,
+                        _synthetic_mdc_row_virtual(
+                            event_id,
+                            str(src["leader_email"]),
+                            src.get("leader_name"),
+                            src.get("leader_phone"),
+                        ),
+                    )
+                mrows2 = conn.execute(m_stmt, {"eid": event_id, "emails": emails_set}).fetchall()
+                mdc_by_email = {str(r[1]): int(r[0]) for r in mrows2}
+                still_missing = [e for e in emails_set if e not in mdc_by_email]
+                if still_missing:
+                    raise ValueError(
+                        "Could not link leader email(s) to Main Data Center after auto-create: "
+                        + ", ".join(still_missing[:20])
+                    )
+
             for r in rows:
                 email_n = (r.get("leader_email") or "").strip().lower()
                 vid = mdc_by_email[email_n]
@@ -1567,6 +1948,7 @@ def _import_virtual_challenge_submissions_core():
                     "leader_email": (r.get("leader_email") or "").strip(),
                     "leader_phone": r.get("leader_phone"),
                     "team_size": r.get("team_size"),
+                    "attempts_completed": r.get("attempts_completed"),
                     "problem_statements": r.get("problem_statements"),
                     "total_score": r.get("total_score"),
                     "deployed_link": r.get("deployed_link"),
@@ -1614,8 +1996,9 @@ def _import_virtual_challenge_submissions_core():
                 "target_table": "virtual_challenge_submission_rows",
                 "virtual_event_id": event_id,
                 "merge_policy": (
-                    "Upsert: each row is keyed by (challenge_id, team name). "
-                    "Re-importing the same team updates the existing row."
+                    "Each database row is keyed by (challenge_id, leader email). "
+                    "If the workbook has more than one data row for the same leader email on the same challenge, "
+                    "only the last row is kept before upsert. Re-importing updates that row (including team name)."
                 ),
             }
         )
@@ -1636,6 +2019,394 @@ def _import_virtual_challenge_submissions_core():
         return jsonify({"error": str(exc), "parse_stats": parse_stats}), 500
 
 
+def _challenge_attempt_counts_column_mapping_from_form() -> dict[str, str | None] | None:
+    """Parse optional ``column_mapping`` JSON (``email``, ``attempts`` keys). Empty/absent → auto-detect."""
+    raw = (request.form.get("column_mapping") or "").strip()
+    if not raw:
+        return None
+    try:
+        d = json.loads(raw)
+    except json.JSONDecodeError:
+        raise ValueError("column_mapping must be valid JSON") from None
+    if not isinstance(d, dict):
+        raise ValueError("column_mapping must be a JSON object")
+    out = {str(k): (None if v in (None, "") else str(v)) for k, v in d.items()}
+    return out if out else None
+
+
+def _preview_challenge_attempt_counts_core(upload_field: str):
+    upload = request.files.get(upload_field)
+    if not upload or not upload.filename:
+        return jsonify({"error": "A .csv or .xlsx file is required"}), 400
+    fn = (upload.filename or "").lower()
+    if not (fn.endswith(".csv") or fn.endswith(".xlsx")):
+        return jsonify({"error": "File must be .csv or .xlsx"}), 400
+    raw = upload.read()
+    if not raw:
+        return jsonify({"error": "File is empty"}), 400
+    try:
+        payload = vcsr_attempts_sheet_svc.preview_attempts_sheet(raw, upload.filename or "")
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
+    return jsonify(payload)
+
+
+def _import_virtual_challenge_attempts_core():
+    """CSV/XLSX: Leader Email + Attempts Completed; updates ``attempts_completed`` for one challenge."""
+    event_id = request.form.get("virtualEventId", type=int) or request.args.get("virtualEventId", type=int)
+    if event_id is None:
+        event_id = DEFAULT_VIRTUAL_EVENT_ID
+    challenge_id = request.form.get("challenge_id", type=int) or request.args.get("challenge_id", type=int)
+    if challenge_id is None or int(challenge_id) < 1:
+        return jsonify({"error": "challenge_id is required (arena challenge for this sheet)."}), 400
+
+    upload = request.files.get("virtual_challenge_attempts")
+    if not upload or not upload.filename:
+        return jsonify({"error": "A .csv or .xlsx file is required (field virtual_challenge_attempts)."}), 400
+
+    fn = (upload.filename or "").lower()
+    if not (fn.endswith(".csv") or fn.endswith(".xlsx")):
+        return jsonify({"error": "File must be .csv or .xlsx"}), 400
+
+    archived = archive_upload(
+        upload,
+        engine=engine,
+        module="virtual_challenge_attempts",
+        source_route=request.path,
+        event_id=int(event_id),
+    )
+    raw = archived.fresh_stream().read()
+    try:
+        cm = _challenge_attempt_counts_column_mapping_from_form()
+    except ValueError as ve:
+        mark_archive_status(archived.id, "failed", engine=engine, error=str(ve))
+        return jsonify({"error": str(ve), "nothing_written": True, "archive_path": archived.stored_path}), 400
+    rows, parse_err = vcsr_attempts_sheet_svc.parse_challenge_attempts_sheet(raw, upload.filename or "", cm)
+    if parse_err:
+        mark_archive_status(archived.id, "failed", engine=engine, error=parse_err)
+        return jsonify({"error": parse_err, "nothing_written": True, "archive_path": archived.stored_path}), 400
+
+    _UPDATE_ATTEMPTS = text(
+        """
+        UPDATE virtual_challenge_submission_rows
+        SET attempts_completed = :ac, updated_at = now()
+        WHERE event_id = :eid AND challenge_id = :cid
+          AND leader_email_normalized = lower(trim(:em))
+        """
+    )
+
+    job_id: int | None = None
+    try:
+        with engine.begin() as conn:
+            ch = conn.execute(
+                text(
+                    """
+                    SELECT c.id, c.event_id
+                    FROM challenges c
+                    JOIN events e ON e.id = c.event_id AND e.kind = 'virtual'
+                    WHERE c.id = :cid AND c.event_id = :eid
+                    """
+                ),
+                {"cid": int(challenge_id), "eid": int(event_id)},
+            ).mappings().fetchone()
+            if not ch:
+                raise ValueError("Challenge not found for this virtual event.")
+
+            res = conn.execute(
+                text(
+                    """
+                    INSERT INTO import_jobs (module, status, started_at, row_counts)
+                    VALUES ('virtual_challenge_submissions', 'running', now(), '{}'::jsonb)
+                    RETURNING id
+                    """
+                ),
+            )
+            job_id = int(res.scalar_one())
+            mark_archive_status(archived.id, "parsed", engine=engine, import_job_id=job_id)
+
+            updated = 0
+            not_found: list[str] = []
+            for row in rows:
+                em = (row.get("leader_email") or "").strip()
+                ac = int(row["attempts_completed"])
+                r2 = conn.execute(
+                    _UPDATE_ATTEMPTS,
+                    {"ac": ac, "eid": int(event_id), "cid": int(challenge_id), "em": em},
+                )
+                n = int(r2.rowcount or 0)
+                if n:
+                    updated += n
+                else:
+                    not_found.append(em)
+
+            not_found_unique = sorted({e for e in not_found if e})
+            rc = {
+                "kind": "attempts_completed_patch",
+                "rows_in_file": len(rows),
+                "rows_updated": updated,
+                "leader_emails_not_matched_rows": len(not_found),
+                "leader_emails_not_matched_unique": len(not_found_unique),
+                "unmatched_leader_emails_sample": not_found_unique[:80],
+            }
+            conn.execute(
+                text(
+                    """
+                    UPDATE import_jobs
+                    SET status = 'success', finished_at = now(), row_counts = CAST(:rc AS jsonb), error_message = NULL
+                    WHERE id = :jid
+                    """
+                ),
+                {"rc": json.dumps(rc), "jid": job_id},
+            )
+
+        mark_archive_status(archived.id, "success", engine=engine, rows_written=updated)
+        pw_invalidate_read_caches()
+        return jsonify(
+            {
+                "status": "success",
+                "import_job_id": job_id,
+                "rows_written": updated,
+                "rows_in_file": len(rows),
+                "leader_emails_not_matched": not_found_unique[:500],
+                "leader_emails_not_matched_count": len(not_found),
+                "leader_emails_not_matched_unique_count": len(not_found_unique),
+                "archive_path": archived.stored_path,
+                "target_table": "virtual_challenge_submission_rows.attempts_completed",
+                "virtual_event_id": int(event_id),
+                "challenge_id": int(challenge_id),
+                "merge_policy": (
+                    "Each sheet row updates teams where leader email matches (normalized) for the selected challenge. "
+                    "Unmatched sheet rows are counted in leader_emails_not_matched_count; distinct addresses are in "
+                    "leader_emails_not_matched (sorted, capped at 500 for the response)."
+                ),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        mark_archive_status(archived.id, "failed", engine=engine, error=str(exc))
+        if job_id is not None:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE import_jobs
+                        SET status = 'failed', finished_at = now(), error_message = :msg
+                        WHERE id = :jid
+                        """
+                    ),
+                    {"msg": str(exc), "jid": job_id},
+                )
+        return jsonify({"error": str(exc), "nothing_written": True, "archive_path": archived.stored_path}), 500
+
+
+def _import_in_person_challenge_attempts_core():
+    """CSV/XLSX: Leader Email + Attempts Completed; updates ``attempts_completed`` for one PW session + sheet kind."""
+    event_id = request.form.get("inPersonEventId", type=int) or request.args.get("inPersonEventId", type=int)
+    if event_id is None:
+        event_id = DEFAULT_IN_PERSON_EVENT_ID
+
+    raw_sid = (request.form.get("pw_session_id") or "").strip()
+    if not raw_sid:
+        return jsonify({"error": "pw_session_id is required (select a PW session)."}), 400
+    try:
+        pw_sid = int(raw_sid)
+    except ValueError:
+        return jsonify({"error": "pw_session_id must be an integer"}), 400
+
+    sheet_kind = (request.form.get("sheet_kind") or "").strip().lower()
+    if sheet_kind not in ("main", "warmup"):
+        return jsonify({"error": "sheet_kind must be main or warmup."}), 400
+
+    upload = request.files.get("in_person_challenge_attempts")
+    if not upload or not upload.filename:
+        return jsonify({"error": "A .csv or .xlsx file is required (field in_person_challenge_attempts)."}), 400
+
+    fn = (upload.filename or "").lower()
+    if not (fn.endswith(".csv") or fn.endswith(".xlsx")):
+        return jsonify({"error": "File must be .csv or .xlsx"}), 400
+
+    with engine.connect() as conn:
+        ev = conn.execute(
+            text("SELECT id, kind FROM events WHERE id = :id"),
+            {"id": int(event_id)},
+        ).fetchone()
+        if not ev:
+            return jsonify({"error": "event not found"}), 404
+        if str(ev[1]) != "in_person":
+            return jsonify({"error": "event must be in_person kind"}), 400
+        try:
+            srow = conn.execute(
+                text(
+                    f"""
+                    SELECT id, city, prompt_war_on, session_label
+                    FROM {TABLE_IN_PERSON_PW_SESSIONS}
+                    WHERE id = :sid AND event_id = :eid
+                    """
+                ),
+                {"sid": pw_sid, "eid": int(event_id)},
+            ).mappings().first()
+        except Exception as exc:  # noqa: BLE001
+            if _is_missing_in_person_pw_sessions_table(exc):
+                return (
+                    jsonify(
+                        {
+                            "error": (
+                                "in_person_pw_sessions is missing — apply database/migrate_sessions.sql "
+                                "before importing attempt counts."
+                            ),
+                            "nothing_written": True,
+                        }
+                    ),
+                    400,
+                )
+            raise
+        if not srow:
+            return jsonify({"error": "pw_session_id not found for this event"}), 404
+
+    s_pwo = srow["prompt_war_on"]
+    if isinstance(s_pwo, datetime):
+        s_pwo = s_pwo.date()
+    sess_city = str(srow.get("city") or "").strip()
+    sess_lab = str(srow.get("session_label") or "")
+
+    archived = archive_upload(
+        upload,
+        engine=engine,
+        module="in_person_challenge_attempts",
+        source_route=request.path,
+        event_id=int(event_id),
+    )
+    raw = archived.fresh_stream().read()
+    try:
+        cm = _challenge_attempt_counts_column_mapping_from_form()
+    except ValueError as ve:
+        mark_archive_status(archived.id, "failed", engine=engine, error=str(ve))
+        return jsonify({"error": str(ve), "nothing_written": True, "archive_path": archived.stored_path}), 400
+    rows, parse_err = vcsr_attempts_sheet_svc.parse_challenge_attempts_sheet(raw, upload.filename or "", cm)
+    if parse_err:
+        mark_archive_status(archived.id, "failed", engine=engine, error=parse_err)
+        return jsonify({"error": parse_err, "nothing_written": True, "archive_path": archived.stored_path}), 400
+
+    _UPDATE_ATTEMPTS = text(
+        f"""
+        UPDATE {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS}
+        SET attempts_completed = :ac, updated_at = now()
+        WHERE event_id = :eid
+          AND sheet_kind = :sk
+          AND leader_email_normalized = lower(trim(:em))
+          AND (
+            pw_session_id = :sid
+            OR (
+              pw_session_id IS NULL
+              AND attendance_city_normalized = lower(btrim(:city))
+              AND prompt_war_on = :pwo
+              AND session_label_normalized = lower(btrim(:slab))
+            )
+          )
+        """
+    )
+
+    job_id: int | None = None
+    try:
+        with engine.begin() as conn:
+            res = conn.execute(
+                text(
+                    """
+                    INSERT INTO import_jobs (module, status, started_at, row_counts)
+                    VALUES ('in_person_challenge_submissions', 'running', now(), '{}'::jsonb)
+                    RETURNING id
+                    """
+                ),
+            )
+            job_id = int(res.scalar_one())
+            mark_archive_status(archived.id, "parsed", engine=engine, import_job_id=job_id)
+
+            updated = 0
+            not_found: list[str] = []
+            for row in rows:
+                em = (row.get("leader_email") or "").strip()
+                ac = int(row["attempts_completed"])
+                r2 = conn.execute(
+                    _UPDATE_ATTEMPTS,
+                    {
+                        "ac": ac,
+                        "eid": int(event_id),
+                        "sk": sheet_kind,
+                        "em": em,
+                        "sid": pw_sid,
+                        "city": sess_city,
+                        "pwo": s_pwo,
+                        "slab": sess_lab,
+                    },
+                )
+                n = int(r2.rowcount or 0)
+                if n:
+                    updated += n
+                else:
+                    not_found.append(em)
+
+            not_found_unique = sorted({e for e in not_found if e})
+            rc = {
+                "kind": "attempts_completed_patch",
+                "rows_in_file": len(rows),
+                "rows_updated": updated,
+                "leader_emails_not_matched_rows": len(not_found),
+                "leader_emails_not_matched_unique": len(not_found_unique),
+                "unmatched_leader_emails_sample": not_found_unique[:80],
+                "pw_session_id": pw_sid,
+                "sheet_kind": sheet_kind,
+            }
+            conn.execute(
+                text(
+                    """
+                    UPDATE import_jobs
+                    SET status = 'success', finished_at = now(), row_counts = CAST(:rc AS jsonb), error_message = NULL
+                    WHERE id = :jid
+                    """
+                ),
+                {"rc": json.dumps(rc), "jid": job_id},
+            )
+
+        mark_archive_status(archived.id, "success", engine=engine, rows_written=updated)
+        pw_invalidate_read_caches()
+        return jsonify(
+            {
+                "status": "success",
+                "import_job_id": job_id,
+                "rows_written": updated,
+                "rows_in_file": len(rows),
+                "leader_emails_not_matched": not_found_unique[:500],
+                "leader_emails_not_matched_count": len(not_found),
+                "leader_emails_not_matched_unique_count": len(not_found_unique),
+                "archive_path": archived.stored_path,
+                "target_table": "in_person_challenge_submission_rows.attempts_completed",
+                "in_person_event_id": int(event_id),
+                "pw_session_id": pw_sid,
+                "sheet_kind": sheet_kind,
+                "merge_policy": (
+                    "Each sheet row updates submission rows where leader email matches (normalized) for the "
+                    "selected PW session and segment (main vs warm-up). Rows linked by pw_session_id are updated "
+                    "first; legacy rows without pw_session_id must match the same city, Prompt War date, and "
+                    "session label. Unmatched sheet rows are counted in leader_emails_not_matched_count."
+                ),
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        mark_archive_status(archived.id, "failed", engine=engine, error=str(exc))
+        if job_id is not None:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE import_jobs
+                        SET status = 'failed', finished_at = now(), error_message = :msg
+                        WHERE id = :jid
+                        """
+                    ),
+                    {"msg": str(exc), "jid": job_id},
+                )
+        return jsonify({"error": str(exc), "nothing_written": True, "archive_path": archived.stored_path}), 500
+
+
 def _import_in_person_action_center_core():
     """Two-tab .xlsx: Warm Up Challenge + Main Challenge; rows upserted per PW session (city + date + label) + sheet kind + team."""
     event_id = DEFAULT_IN_PERSON_EVENT_ID
@@ -1650,18 +2421,9 @@ def _import_in_person_action_center_core():
     pw_on = _parse_ipcsr_prompt_war_date_from_form(request.form.get("prompt_war_on"))
     if pw_on is None:
         return jsonify({"error": "prompt_war_on is required (Prompt War date, YYYY-MM-DD)"}), 400
-    if pw_on == IPCSR_LEGACY_PROMPT_WAR_DATE:
-        return (
-            jsonify(
-                {
-                    "error": (
-                        "That Prompt War date is reserved for legacy data. "
-                        "Pick the real event date for this import."
-                    )
-                }
-            ),
-            400,
-        )
+    rej_pw = _reject_legacy_prompt_war_on_date(pw_on)
+    if rej_pw:
+        return rej_pw
     if pw_on > date.today() + timedelta(days=730):
         return jsonify({"error": "Prompt War date is too far in the future."}), 400
     session_label_imp = _normalize_ipcsr_session_label(request.form.get("session_label"))
@@ -1681,14 +2443,44 @@ def _import_in_person_action_center_core():
             jsonify(
                 {
                     "error": (
-                        "attendance_city is not in the In-person Main Data Center roster "
-                        "(no registrations with that attendance city). Import MDC first or pick another city."
+                        "attendance_city is not in the in-person registration roster "
+                        "(no registrations with that attendance city). Import registrations first or pick another city."
                     ),
                     "nothing_written": True,
                 }
             ),
             400,
         )
+
+    pw_sid: int | None = None
+    raw_sid = (request.form.get("pw_session_id") or "").strip()
+    if raw_sid:
+        try:
+            pw_sid = int(raw_sid)
+        except ValueError:
+            return jsonify({"error": "pw_session_id must be an integer"}), 400
+        with engine.connect() as conn:
+            srow = conn.execute(
+                text(
+                    f"""
+                    SELECT id, city, prompt_war_on, session_label, event_id
+                    FROM {TABLE_IN_PERSON_PW_SESSIONS}
+                    WHERE id = :sid AND event_id = :eid
+                    """
+                ),
+                {"sid": pw_sid, "eid": event_id},
+            ).mappings().first()
+        if not srow:
+            return jsonify({"error": "pw_session_id not found for this event"}), 404
+        s_pwo = srow["prompt_war_on"]
+        if isinstance(s_pwo, datetime):
+            s_pwo = s_pwo.date()
+        if (
+            str(srow["city"]).strip().lower() != city_canonical.strip().lower()
+            or s_pwo != pw_on
+            or str(srow.get("session_label") or "") != session_label_imp
+        ):
+            return jsonify({"error": "PW session does not match selected city, date, and label"}), 400
 
     archived = archive_upload(
         upload,
@@ -1713,6 +2505,22 @@ def _import_in_person_action_center_core():
         mark_archive_status(archived.id, "failed", engine=engine, error="No leader emails in parsed rows")
         return jsonify({"error": "No leader emails in parsed rows"}), 400
 
+    auto_create = _form_truthy_auto_create_missing_registrations()
+    leader_src = _leader_source_by_normalized_email(rows)
+
+    # MDC link is a participant lookup, not a PW assignment gate. Vision MDC exports do not
+    # carry per-PW dates, so most rows live under the legacy date / empty session label.
+    # Prefer the row tagged for this exact PW; otherwise legacy; otherwise any row for that email.
+    m_stmt = text(
+        f"""
+        SELECT id, email_normalized, btrim(COALESCE(attendance_city, '')) AS ac,
+               prompt_war_on, lower(btrim(COALESCE(session_label, ''))) AS sln
+        FROM {TABLE_IN_PERSON_MDC}
+        WHERE event_id = :eid
+          AND email_normalized IN :emails
+        """
+    ).bindparams(bindparam("emails", expanding=True))
+
     with engine.connect() as conn:
         ev = conn.execute(
             text("SELECT id, kind FROM events WHERE id = :id"),
@@ -1725,58 +2533,20 @@ def _import_in_person_action_center_core():
             mark_archive_status(archived.id, "failed", engine=engine, error="event must be in_person kind")
             return jsonify({"error": "event must be in_person kind"}), 400
 
-        # MDC link is a participant lookup, not a PW assignment gate. Vision MDC exports do not
-        # carry per-PW dates, so most rows live under the legacy date / empty session label.
-        # Prefer the row tagged for this exact PW; otherwise legacy; otherwise any row for that email.
-        sl_norm = session_label_imp.strip().lower()
-        m_stmt = text(
-            f"""
-            SELECT id, email_normalized, btrim(COALESCE(attendance_city, '')) AS ac,
-                   prompt_war_on, lower(btrim(COALESCE(session_label, ''))) AS sln
-            FROM {TABLE_IN_PERSON_MDC}
-            WHERE event_id = :eid
-              AND email_normalized IN :emails
-            """
-        ).bindparams(bindparam("emails", expanding=True))
         mrows = conn.execute(
             m_stmt,
             {"eid": event_id, "emails": emails_set},
         ).mappings().all()
-
-        def _match_priority(pw_on_row, sln_row: str) -> int:
-            """Lower is better: 0 = exact PW match, 1 = legacy fallback, 2 = any other tagged row."""
-            if pw_on_row == pw_on and sln_row == sl_norm:
-                return 0
-            if pw_on_row == IPCSR_LEGACY_PROMPT_WAR_DATE and not sln_row:
-                return 1
-            return 2
-
-        per_email: dict[str, dict] = {}
-        for r in mrows:
-            em = str(r["email_normalized"])
-            pwd_cell = r["prompt_war_on"]
-            if isinstance(pwd_cell, datetime):
-                pwd_cell = pwd_cell.date()
-            sln_cell = str(r["sln"] or "")
-            cand = {
-                "id": int(r["id"]),
-                "ac": str(r["ac"]) or "",
-                "rank": _match_priority(pwd_cell, sln_cell),
-            }
-            cur = per_email.get(em)
-            if cur is None or cand["rank"] < cur["rank"]:
-                per_email[em] = cand
-        mdc_by_email = {em: v["id"] for em, v in per_email.items()}
-        mdc_ac_by_email = {em: v["ac"] for em, v in per_email.items()}
+        mdc_by_email, mdc_ac_by_email = _ipcsr_mdc_maps_from_mrows(list(mrows), pw_on, session_label_imp)
 
     missing = [e for e in emails_set if e not in mdc_by_email]
-    if missing:
+    if missing and not auto_create:
         msg = (
             "Leader email(s) not found in In-person Main Data Center for this event "
             "(any PW assignment) "
             f"(showing up to 20 of {len(missing)}): {', '.join(missing[:20])}"
         )
-        mark_archive_status(archived.id, "failed", engine=engine, error=msg)
+        mark_archive_status(archived.id, "parsed", engine=engine, error=msg)
         sheets_disp: dict[str, dict] = {}
         for sn, info in (parse_stats.get("sheets") or {}).items():
             sk = str(info.get("sheet_kind") or "")
@@ -1789,6 +2559,7 @@ def _import_in_person_action_center_core():
             {
                 "error": msg,
                 "missing_emails": missing,
+                "needs_confirmation": True,
                 "nothing_written": True,
                 "target_table": TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS,
                 "in_person_event_id": event_id,
@@ -1796,17 +2567,8 @@ def _import_in_person_action_center_core():
                 "rows_ready_to_import": len(rows),
                 "archive_path": archived.stored_path,
             }
-        ), 400
+        ), 409
 
-    sel_city_norm = city_canonical.strip().lower()
-    mismatched = 0
-    for r in rows:
-        em = (r.get("leader_email") or "").strip().lower()
-        ac = (mdc_ac_by_email.get(em) or "").strip().lower()
-        if ac and ac != sel_city_norm:
-            mismatched += 1
-
-    parse_stats["mismatched_attendance_city"] = mismatched
     mark_archive_status(archived.id, "parsed", engine=engine)
 
     job_id: int | None = None
@@ -1824,6 +2586,42 @@ def _import_in_person_action_center_core():
             job_id = int(res.scalar_one())
             mark_archive_status(archived.id, "parsed", engine=engine, import_job_id=job_id)
 
+            if missing and auto_create:
+                for em in missing:
+                    src = leader_src[em]
+                    conn.execute(
+                        _IN_PERSON_MDC_UPSERT,
+                        _synthetic_mdc_row_in_person(
+                            event_id,
+                            str(src["leader_email"]),
+                            src.get("leader_name"),
+                            src.get("leader_phone"),
+                            city_canonical,
+                            pw_on,
+                            session_label_imp,
+                        ),
+                    )
+                mrows2 = conn.execute(
+                    m_stmt,
+                    {"eid": event_id, "emails": emails_set},
+                ).mappings().all()
+                mdc_by_email, mdc_ac_by_email = _ipcsr_mdc_maps_from_mrows(list(mrows2), pw_on, session_label_imp)
+                still_missing = [e for e in emails_set if e not in mdc_by_email]
+                if still_missing:
+                    raise ValueError(
+                        "Could not link leader email(s) to Main Data Center after auto-create: "
+                        + ", ".join(still_missing[:20])
+                    )
+
+            sel_city_norm = city_canonical.strip().lower()
+            mismatched = 0
+            for r in rows:
+                em = (r.get("leader_email") or "").strip().lower()
+                ac = (mdc_ac_by_email.get(em) or "").strip().lower()
+                if ac and ac != sel_city_norm:
+                    mismatched += 1
+            parse_stats["mismatched_attendance_city"] = mismatched
+
             for r in rows:
                 email_n = (r.get("leader_email") or "").strip().lower()
                 mid = mdc_by_email[email_n]
@@ -1832,6 +2630,7 @@ def _import_in_person_action_center_core():
                     "attendance_city": city_canonical,
                     "prompt_war_on": pw_on,
                     "session_label": session_label_imp,
+                    "pw_session_id": pw_sid,
                     "import_job_id": job_id,
                     "in_person_mdc_registration_id": mid,
                     "sheet_kind": str(r["sheet_kind"]),
@@ -1841,6 +2640,7 @@ def _import_in_person_action_center_core():
                     "leader_email": (r.get("leader_email") or "").strip(),
                     "leader_phone": r.get("leader_phone"),
                     "team_size": r.get("team_size"),
+                    "attempts_completed": r.get("attempts_completed"),
                     "problem_statements": r.get("problem_statements"),
                     "total_score": r.get("total_score"),
                     "deployed_link": r.get("deployed_link"),
@@ -1970,6 +2770,201 @@ def admin_import_in_person_data_center():
     )
 
 
+def _import_in_person_rsvp_lists_preview_core():
+    upload = request.files.get("rsvp_list_file")
+    if not upload or not upload.filename:
+        return jsonify({"error": "A file is required (field rsvp_list_file)"}), 400
+    fn = (upload.filename or "").lower()
+    if not (fn.endswith(".csv") or fn.endswith(".xlsx") or fn.endswith(".xls")):
+        return jsonify({"error": "File must be .csv, .xlsx, or .xls"}), 400
+    raw = upload.read()
+    if not raw:
+        return jsonify({"error": "File is empty"}), 400
+    try:
+        payload = ip_rsvp_list_svc.preview_file(raw, upload.filename or "")
+    except ValueError as ve:
+        return jsonify({"error": str(ve)}), 400
+    return jsonify(payload)
+
+
+def _import_in_person_rsvp_lists_core():
+    event_id = DEFAULT_IN_PERSON_EVENT_ID
+    upload = request.files.get("rsvp_list_file")
+    if not upload or not upload.filename:
+        return jsonify({"error": "A CSV or XLSX file is required (field rsvp_list_file)"}), 400
+
+    raw_sid = (request.form.get("pw_session_id") or "").strip()
+    if not raw_sid:
+        return jsonify({"error": "pw_session_id is required"}), 400
+    try:
+        pw_sid = int(raw_sid)
+    except ValueError:
+        return jsonify({"error": "pw_session_id must be an integer"}), 400
+
+    list_kind = (request.form.get("list_kind") or "").strip()
+    if list_kind not in ip_rsvp_list_svc.LIST_KINDS:
+        return jsonify({"error": "list_kind must be invite_sent or accepted"}), 400
+
+    mapping_raw = (request.form.get("column_mapping") or "").strip() or "{}"
+    try:
+        column_mapping = json.loads(mapping_raw)
+    except json.JSONDecodeError:
+        return jsonify({"error": "column_mapping must be valid JSON"}), 400
+    if not isinstance(column_mapping, dict):
+        return jsonify({"error": "column_mapping must be a JSON object"}), 400
+    column_mapping = {str(k): (None if v in (None, "") else str(v)) for k, v in column_mapping.items()}
+
+    fn = (upload.filename or "").lower()
+    if not (fn.endswith(".csv") or fn.endswith(".xlsx") or fn.endswith(".xls")):
+        return jsonify({"error": "File must be .csv, .xlsx, or .xls"}), 400
+
+    with engine.connect() as conn:
+        srow = conn.execute(
+            text(
+                f"""
+                SELECT id, event_id FROM {TABLE_IN_PERSON_PW_SESSIONS}
+                WHERE id = :sid AND event_id = :eid
+                """
+            ),
+            {"sid": pw_sid, "eid": event_id},
+        ).mappings().first()
+    if not srow:
+        return jsonify({"error": "pw_session_id not found for this event"}), 404
+
+    archived = archive_upload(
+        upload,
+        engine=engine,
+        module="in_person_rsvp_lists",
+        source_route=request.path,
+        event_id=event_id,
+    )
+
+    try:
+        raw_bytes = archived.fresh_stream().read()
+        emails, stats = ip_rsvp_list_svc.parse_emails_with_mapping(
+            raw_bytes, upload.filename or "", column_mapping
+        )
+    except ValueError as ve:
+        mark_archive_status(archived.id, "failed", engine=engine, error=str(ve))
+        return jsonify({"error": str(ve)}), 400
+
+    if not emails:
+        mark_archive_status(archived.id, "failed", engine=engine, error="No valid emails after parsing")
+        return jsonify({"error": "No valid emails after parsing", "parse_stats": stats}), 400
+
+    mark_archive_status(archived.id, "parsed", engine=engine)
+
+    job_id: int | None = None
+    try:
+        with engine.begin() as conn:
+            res = conn.execute(
+                text(
+                    """
+                    INSERT INTO import_jobs (module, status, started_at, row_counts)
+                    VALUES ('in_person_rsvp_lists', 'running', now(), '{}'::jsonb)
+                    RETURNING id
+                    """
+                ),
+            )
+            job_id = int(res.scalar_one())
+            mark_archive_status(archived.id, "parsed", engine=engine, import_job_id=job_id)
+
+            ev = conn.execute(
+                text("SELECT id, kind FROM events WHERE id = :id"),
+                {"id": event_id},
+            ).fetchone()
+            if not ev:
+                raise ValueError("event not found")
+            if str(ev[1]) != "in_person":
+                raise ValueError("event must be in_person kind")
+
+            conn.execute(
+                text(
+                    f"""
+                    DELETE FROM {TABLE_IN_PERSON_RSVP_LIST_EMAILS}
+                    WHERE pw_session_id = :sid AND list_kind = :kind
+                    """
+                ),
+                {"sid": pw_sid, "kind": list_kind},
+            )
+
+            ins = text(
+                f"""
+                INSERT INTO {TABLE_IN_PERSON_RSVP_LIST_EMAILS}
+                  (event_id, pw_session_id, list_kind, email_normalized, import_job_id)
+                VALUES (:eid, :sid, :kind, :em, :jid)
+                """
+            )
+            for em in emails:
+                conn.execute(
+                    ins,
+                    {"eid": event_id, "sid": pw_sid, "kind": list_kind, "em": em, "jid": job_id},
+                )
+
+            counts = {**stats, "emails_written": len(emails)}
+            conn.execute(
+                text(
+                    """
+                    UPDATE import_jobs
+                    SET status = 'success', finished_at = now(), row_counts = CAST(:rc AS jsonb), error_message = NULL
+                    WHERE id = :jid
+                    """
+                ),
+                {"rc": json.dumps(counts), "jid": job_id},
+            )
+
+        mark_archive_status(archived.id, "success", engine=engine, rows_written=len(emails))
+        pw_invalidate_read_caches()
+        return jsonify(
+            {
+                "status": "success",
+                "import_job_id": job_id,
+                "parse_stats": {**stats, "emails_written": len(emails)},
+                "archive_path": archived.stored_path,
+                "in_person_event_id": event_id,
+                "pw_session_id": pw_sid,
+                "list_kind": list_kind,
+            }
+        )
+    except ProgrammingError as pe:
+        mark_archive_status(archived.id, "failed", engine=engine, error=str(pe))
+        if job_id is not None:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE import_jobs
+                        SET status = 'failed', finished_at = now(), error_message = :msg
+                        WHERE id = :jid
+                        """
+                    ),
+                    {"msg": str(pe), "jid": job_id},
+                )
+        return jsonify(
+            {
+                "error": (
+                    f"{pe} Apply database/migrate_in_person_rsvp_list_imports.sql if the RSVP list table is missing."
+                ),
+                "nothing_written": True,
+            }
+        ), 500
+    except Exception as exc:  # noqa: BLE001
+        mark_archive_status(archived.id, "failed", engine=engine, error=str(exc))
+        if job_id is not None:
+            with engine.begin() as conn:
+                conn.execute(
+                    text(
+                        """
+                        UPDATE import_jobs
+                        SET status = 'failed', finished_at = now(), error_message = :msg
+                        WHERE id = :jid
+                        """
+                    ),
+                    {"msg": str(exc), "jid": job_id},
+                )
+        return jsonify({"error": str(exc), "parse_stats": stats}), 500
+
+
 @app.post("/api/import/in-person/main-data-center")
 def api_import_in_person_main_data_center():
     return _import_in_person_main_data_center_core()
@@ -1978,6 +2973,16 @@ def api_import_in_person_main_data_center():
 @app.post("/api/import/in-person/action-center")
 def api_import_in_person_action_center():
     return _import_in_person_action_center_core()
+
+
+@app.post("/api/import/in-person/rsvp-lists/preview")
+def api_import_in_person_rsvp_lists_preview():
+    return _import_in_person_rsvp_lists_preview_core()
+
+
+@app.post("/api/import/in-person/rsvp-lists")
+def api_import_in_person_rsvp_lists():
+    return _import_in_person_rsvp_lists_core()
 
 
 @app.post("/admin/import/in-person/action-center")
@@ -2033,6 +3038,10 @@ def api_in_person_action_center_leaderboard():
     lim = request.args.get("limit", default=10, type=int) or 10
     pw_arg = request.args.get("prompt_war_on")
     pw_d = _parse_ipcsr_prompt_war_date_from_form(pw_arg) if (pw_arg or "").strip() else None
+    if pw_d is not None:
+        rej_lb = _reject_legacy_prompt_war_on_date(pw_d)
+        if rej_lb:
+            return rej_lb
     lab = _normalize_ipcsr_session_label(request.args.get("session_label"))
     if city_raw and pw_d is None:
         pw_d = IPCSR_LEGACY_PROMPT_WAR_DATE
@@ -2113,6 +3122,66 @@ def admin_import_virtual_challenge_submissions():
     )
 
 
+def _arena_participation_counts_for_email_normalized(
+    conn,
+    *,
+    in_person_event_id: int,
+    virtual_event_id: int,
+    email_normalized: str | None,
+) -> dict[str, int]:
+    """Distinct Prompt War sessions (in-person) and arena challenges (virtual) for one email."""
+    en = (str(email_normalized).strip() if email_normalized else "") or ""
+    if not en:
+        return {
+            "arena_in_person_pw_sessions_count": 0,
+            "arena_virtual_challenges_count": 0,
+        }
+    ip_n = conn.execute(
+        text(
+            f"""
+            SELECT COUNT(*)::int FROM (
+              SELECT DISTINCT m.pw_session_id AS sid
+              FROM {TABLE_IN_PERSON_MDC} m
+              WHERE m.event_id = :ipeid
+                AND m.email_normalized = :en
+                AND m.pw_session_id IS NOT NULL
+              UNION
+              SELECT DISTINCT c.pw_session_id
+              FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} c
+              INNER JOIN {TABLE_IN_PERSON_MDC} m
+                ON m.id = c.in_person_mdc_registration_id AND m.event_id = c.event_id
+              WHERE c.event_id = :ipeid
+                AND m.email_normalized = :en
+                AND c.pw_session_id IS NOT NULL
+            ) t
+            """
+        ),
+        {"ipeid": in_person_event_id, "en": en},
+    ).scalar_one()
+    v_n = conn.execute(
+        text(
+            f"""
+            SELECT COUNT(DISTINCT s.challenge_id)::int
+            FROM virtual_challenge_submission_rows s
+            WHERE s.event_id = :veid
+              AND s.challenge_id IS NOT NULL
+              AND (
+                s.leader_email_normalized = :en
+                OR s.virtual_mdc_registration_id IN (
+                  SELECT id FROM {TABLE_VIRTUAL_MDC}
+                  WHERE event_id = :veid AND email_normalized = :en
+                )
+              )
+            """
+        ),
+        {"veid": virtual_event_id, "en": en},
+    ).scalar_one()
+    return {
+        "arena_in_person_pw_sessions_count": int(ip_n or 0),
+        "arena_virtual_challenges_count": int(v_n or 0),
+    }
+
+
 @app.get("/api/in-person/main-data-center/registrations/<int:reg_id>")
 @audit_view(
     entity="in_person_main_data_center_registrations",
@@ -2126,11 +3195,12 @@ def api_in_person_mdc_registration(reg_id: int):
             row = conn.execute(
                 text(
                     f"""
-                    SELECT id, event_id, email, form_timestamp, utm_source, utm_medium, utm_campaign,
+                    SELECT id, event_id, email, email_normalized, form_timestamp, utm_source, utm_medium, utm_campaign,
                            utm_term, utm_content, org_name, org_state, org_city, class_stream, portfolio,
                            domain, designation, designation_years_experience, founded_info, degree, profile_name, full_name, mobile,
                            whatsapp, country, state, city, dob, gender, occupation, github_url,
-                           linkedin_url, attendance_city, prompt_war_on, session_label, created_at, updated_at
+                           linkedin_url, attendance_city, prompt_war_on, session_label, pw_session_id,
+                           created_at, updated_at
                     FROM {TABLE_IN_PERSON_MDC}
                     WHERE id = :id AND event_id = :eid
                     """
@@ -2141,18 +3211,42 @@ def api_in_person_mdc_registration(reg_id: int):
         return jsonify({"error": str(exc)}), 500
     if not row:
         return jsonify({"error": "not found"}), 404
-    base = _serialize_mdc_row_json(dict(row))
+    row_d = dict(row)
+    base = _serialize_mdc_row_json(row_d)
+    psid = row_d.get("pw_session_id")
+    if psid is not None:
+        try:
+            with engine.connect() as conn:
+                dn = conn.execute(
+                    text(
+                        f"""
+                        SELECT display_name
+                        FROM {TABLE_IN_PERSON_PW_SESSIONS}
+                        WHERE id = :sid AND event_id = :eid
+                        """
+                    ),
+                    {"sid": int(psid), "eid": eid},
+                ).scalar_one_or_none()
+            if dn:
+                base["pw_session_display"] = str(dn)
+        except Exception:  # noqa: BLE001
+            pass
     try:
         with engine.connect() as conn:
             subs = conn.execute(
                 text(
                     f"""
-                    SELECT sheet_kind, attendance_city, team_name, total_score, deployed_link,
-                           github_repository_link, source_sheet_name, export_created_at
-                    FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS}
-                    WHERE event_id = :eid
-                      AND in_person_mdc_registration_id = :rid
-                    ORDER BY sheet_kind ASC, team_name ASC
+                    SELECT c.id, c.sheet_kind, c.attendance_city, c.prompt_war_on, c.session_label,
+                           c.team_name, c.total_score, c.deployed_link,
+                           c.github_repository_link, c.source_sheet_name, c.export_created_at,
+                           s.display_name AS pw_session_display_name
+                    FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} c
+                    INNER JOIN {TABLE_IN_PERSON_PW_SESSIONS} s
+                      ON s.id = c.pw_session_id
+                     AND s.event_id = c.event_id
+                    WHERE c.event_id = :eid
+                      AND c.in_person_mdc_registration_id = :rid
+                    ORDER BY c.sheet_kind ASC, c.team_name ASC, c.prompt_war_on ASC, c.id ASC
                     """
                 ),
                 {"eid": eid, "rid": reg_id},
@@ -2167,11 +3261,30 @@ def api_in_person_mdc_registration(reg_id: int):
                 d["export_created_at"] = str(ts)
             if d.get("total_score") is not None:
                 d["total_score"] = float(d["total_score"])
+            dn = (d.pop("pw_session_display_name", None) or "").strip()
+            pwo = d.get("prompt_war_on")
+            if isinstance(pwo, datetime):
+                pwo = pwo.date()
+            city = d.get("attendance_city") or ""
+            sl = d.get("session_label") or ""
+            if isinstance(pwo, date):
+                d["prompt_war_on_iso"] = pwo.isoformat()
+                d["pw_session_display"] = dn or _ipcsr_pw_session_display(
+                    city=city, prompt_war_on=pwo, session_label=sl
+                )
+            else:
+                d["prompt_war_on_iso"] = None
+                d["pw_session_display"] = dn or (city or "—")
+            d.pop("prompt_war_on", None)
             team_submissions.append(d)
         base["team_submissions"] = team_submissions
     except Exception as exc:  # noqa: BLE001
         base["team_submissions"] = []
-        base["team_submissions_error"] = str(exc)
+        raw = str(getattr(exc, "orig", exc) or exc).lower()
+        if _is_missing_in_person_pw_sessions_table(exc) or "pw_session_id" in raw:
+            pass
+        else:
+            base["team_submissions_error"] = str(exc)
     try:
         with engine.connect() as conn:
             sess_rows = conn.execute(
@@ -2189,17 +3302,33 @@ def api_in_person_mdc_registration(reg_id: int):
                 ),
                 {"eid": eid, "rid": reg_id},
             ).mappings().all()
-        participated_pw: list[dict] = []
+        parsed_rows: list[tuple[dict, date | None]] = []
         for sr in sess_rows:
             rd = dict(sr)
-            rid = int(rd["registration_id"])
             pwo = rd.get("prompt_war_on")
             if isinstance(pwo, datetime):
                 pwo = pwo.date()
+            elif not isinstance(pwo, date):
+                pwo = None
+            parsed_rows.append((rd, pwo))
+        has_non_legacy = any(
+            p is not None and not _ipcsr_is_legacy_unassigned_pw(p, rd.get("session_label"))
+            for rd, p in parsed_rows
+        )
+        participated_pw: list[dict] = []
+        for rd, pwo in parsed_rows:
+            rid = int(rd["registration_id"])
             city = str(rd.get("attendance_city") or "").strip()
             sl = str(rd.get("session_label") or "")
             fts = rd.get("form_timestamp")
             fts_out = _format_dt_display(fts) if fts is not None else None
+            if (
+                has_non_legacy
+                and pwo is not None
+                and _ipcsr_is_legacy_unassigned_pw(pwo, sl)
+                and rid != int(reg_id)
+            ):
+                continue
             if isinstance(pwo, date):
                 city_disp = city or "(Unknown)"
                 participated_pw.append(
@@ -2246,7 +3375,182 @@ def api_in_person_mdc_registration(reg_id: int):
             "rows": [],
             "message": f"Could not load audit history: {exc}",
         }
+    base["hawkeye_rsvp"] = _build_hawkeye_rsvp_for_registration(
+        engine, eid, reg_id=int(reg_id), row_d=row_d, base=base
+    )
+    try:
+        with engine.connect() as conn:
+            base.update(
+                _arena_participation_counts_for_email_normalized(
+                    conn,
+                    in_person_event_id=eid,
+                    virtual_event_id=DEFAULT_VIRTUAL_EVENT_ID,
+                    email_normalized=row_d.get("email_normalized"),
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        base["arena_participation_counts_error"] = str(exc)
+        base["arena_in_person_pw_sessions_count"] = None
+        base["arena_virtual_challenges_count"] = None
     return jsonify(base)
+
+
+def _build_hawkeye_rsvp_for_registration(
+    eng: Engine, eid: int, *, reg_id: int, row_d: dict, base: dict
+) -> dict:
+    """Hawkeye RSVP block for the user-detail view; resolves all PW sessions linked to this email."""
+    email = row_d.get("email")
+    candidates: list[dict] = []
+    seen_psids: set[int] = set()
+    try:
+        with eng.connect() as conn:
+            rows = conn.execute(
+                text(
+                    f"""
+                    SELECT DISTINCT m.pw_session_id, s.display_name, s.city, s.prompt_war_on, s.session_label
+                    FROM {TABLE_IN_PERSON_MDC} m
+                    JOIN {TABLE_IN_PERSON_PW_SESSIONS} s
+                      ON s.id = m.pw_session_id AND s.event_id = m.event_id
+                    WHERE m.event_id = :eid
+                      AND m.email_normalized = (
+                        SELECT email_normalized FROM {TABLE_IN_PERSON_MDC}
+                        WHERE id = :rid AND event_id = :eid
+                      )
+                      AND m.pw_session_id IS NOT NULL
+                    UNION
+                    SELECT DISTINCT c.pw_session_id, s.display_name, s.city, s.prompt_war_on, s.session_label
+                    FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} c
+                    JOIN {TABLE_IN_PERSON_PW_SESSIONS} s
+                      ON s.id = c.pw_session_id AND s.event_id = c.event_id
+                    WHERE c.event_id = :eid
+                      AND c.in_person_mdc_registration_id = :rid
+                      AND c.pw_session_id IS NOT NULL
+                    """
+                ),
+                {"eid": eid, "rid": reg_id},
+            ).mappings().all()
+        for r in rows:
+            psid = r.get("pw_session_id")
+            if psid is None or int(psid) in seen_psids:
+                continue
+            seen_psids.add(int(psid))
+            pwo = r.get("prompt_war_on")
+            if isinstance(pwo, datetime):
+                pwo = pwo.date()
+            disp = (r.get("display_name") or "").strip()
+            if not disp and isinstance(pwo, date):
+                disp = _ipcsr_pw_session_display(
+                    city=str(r.get("city") or ""),
+                    prompt_war_on=pwo,
+                    session_label=str(r.get("session_label") or ""),
+                )
+            candidates.append(
+                {
+                    "pw_session_id": int(psid),
+                    "pw_session_display": disp or "—",
+                    "city": str(r.get("city") or ""),
+                    "prompt_war_on_iso": pwo.isoformat() if isinstance(pwo, date) else None,
+                    "session_label": str(r.get("session_label") or ""),
+                }
+            )
+    except Exception as exc:  # noqa: BLE001
+        raw = str(getattr(exc, "orig", exc) or exc).lower()
+        if not (_is_missing_in_person_pw_sessions_table(exc) or "pw_session_id" in raw):
+            return {
+                "applicable": False,
+                "error": str(exc),
+                "summary": f"Hawkeye RSVP lookup failed: {exc}",
+                "sessions": [],
+            }
+
+    if not candidates:
+        pwo_raw = row_d.get("prompt_war_on")
+        pwo_curr: date | None = None
+        if isinstance(pwo_raw, datetime):
+            pwo_curr = pwo_raw.date()
+        elif isinstance(pwo_raw, date):
+            pwo_curr = pwo_raw
+        if pwo_raw is None:
+            return {
+                "applicable": False,
+                "summary": "No Prompt War date on this row; Hawkeye RSVP is shown per PW session.",
+                "sessions": [],
+            }
+        if pwo_curr is not None and _ipcsr_is_legacy_unassigned_pw(pwo_curr, row_d.get("session_label")):
+            return {
+                "applicable": False,
+                "pw_session_display": base.get("pw_session_display"),
+                "summary": (
+                    "This row has no Prompt War session date yet, and no other registration / submission "
+                    "for this email is linked to a PW session. Link a PW session in In-person settings to use "
+                    "Hawkeye RSVP."
+                ),
+                "sessions": [],
+            }
+        scope_key = hawkeye_service.make_pw_session_scope_key(
+            str(row_d.get("attendance_city") or ""), pwo_raw, row_d.get("session_label")
+        )
+        sess = _build_hawkeye_session_block(
+            eng,
+            eid,
+            scope_key=scope_key,
+            email=email,
+            pw_session_display=base.get("pw_session_display") or "",
+            pw_session_id=None,
+        )
+        return {"applicable": True, "registration_email": email, "sessions": [sess]}
+
+    sessions_out: list[dict] = []
+    for c in candidates:
+        scope_key = hawkeye_service.make_pw_session_scope_key(
+            c.get("city") or "",
+            c.get("prompt_war_on_iso") or "",
+            c.get("session_label") or "",
+        )
+        sess = _build_hawkeye_session_block(
+            eng,
+            eid,
+            scope_key=scope_key,
+            email=email,
+            pw_session_display=c.get("pw_session_display") or "",
+            pw_session_id=c.get("pw_session_id"),
+        )
+        sessions_out.append(sess)
+    return {"applicable": True, "registration_email": email, "sessions": sessions_out}
+
+
+def _build_hawkeye_session_block(
+    eng: Engine, eid: int, *, scope_key: str, email: Any, pw_session_display: str,
+    pw_session_id: int | None,
+) -> dict:
+    sess: dict = {
+        "scope_key": scope_key,
+        "pw_session_display": pw_session_display,
+        "pw_session_id": pw_session_id,
+    }
+    try:
+        snap = hawkeye_service.get_latest_snapshot_stats_emails(
+            eng, eid, scope_key, pw_session_id=pw_session_id
+        )
+    except Exception as exc:  # noqa: BLE001
+        sess["error"] = str(exc)
+        sess["summary"] = f"Hawkeye RSVP lookup failed: {exc}"
+        return sess
+    if snap is None:
+        sess["summary"] = (
+            "No Hawkeye snapshot for this PW session yet. Map the Hawkeye event tag "
+            "and fetch stats in In-person settings."
+        )
+        sess["snapshot_has_emails"] = False
+        sess["email_matched"] = False
+        sess["bucket"] = None
+        return sess
+    sess["hawkeye_event_name"] = snap.get("hawkeye_event_name")
+    sess["fetched_at"] = snap.get("fetched_at")
+    sess.update(
+        hawkeye_service.summarize_hawkeye_rsvp_for_email(snap.get("stats_emails"), email)
+    )
+    return sess
 
 
 @app.get("/api/virtual/main-data-center/registrations/<int:reg_id>")
@@ -2262,7 +3566,7 @@ def api_virtual_mdc_registration(reg_id: int):
             row = conn.execute(
                 text(
                     f"""
-                    SELECT id, event_id, email, form_timestamp, utm_source, utm_medium, utm_campaign,
+                    SELECT id, event_id, email, email_normalized, form_timestamp, utm_source, utm_medium, utm_campaign,
                            utm_term, utm_content, org_name, org_state, org_city, class_stream, portfolio,
                            domain, designation, designation_years_experience, founded_info, degree, profile_name, full_name, mobile,
                            whatsapp, country, state, city, dob, gender, occupation, github_url,
@@ -2277,7 +3581,8 @@ def api_virtual_mdc_registration(reg_id: int):
         return jsonify({"error": str(exc)}), 500
     if not row:
         return jsonify({"error": "not found"}), 404
-    base = _serialize_mdc_row_json(dict(row))
+    row_d = dict(row)
+    base = _serialize_mdc_row_json(row_d)
     try:
         with engine.connect() as conn:
             ch_rows = conn.execute(
@@ -2314,6 +3619,20 @@ def api_virtual_mdc_registration(reg_id: int):
     except Exception as exc:  # noqa: BLE001
         base["participated_challenges"] = []
         base["participated_challenges_error"] = str(exc)
+    try:
+        with engine.connect() as conn:
+            base.update(
+                _arena_participation_counts_for_email_normalized(
+                    conn,
+                    in_person_event_id=DEFAULT_IN_PERSON_EVENT_ID,
+                    virtual_event_id=eid,
+                    email_normalized=row_d.get("email_normalized"),
+                )
+            )
+    except Exception as exc:  # noqa: BLE001
+        base["arena_participation_counts_error"] = str(exc)
+        base["arena_in_person_pw_sessions_count"] = None
+        base["arena_virtual_challenges_count"] = None
     try:
         with engine.connect() as conn:
             base["audit_log"] = _load_mdc_registration_audit_timeline(
@@ -3676,12 +4995,159 @@ def _normalize_mdc_stats_date_range(
     return d0, d1
 
 
+def _manual_rsvp_list_counts_by_session(conn: Connection, event_id: int) -> tuple[dict[int, int], dict[int, int]]:
+    """Counts from ``in_person_pw_session_rsvp_list_emails`` keyed by ``pw_session_id``."""
+    manual_sent: dict[int, int] = {}
+    manual_acc: dict[int, int] = {}
+    mrows = ()
+    try:
+        mrows = conn.execute(
+            text(
+                f"""
+                SELECT pw_session_id, list_kind, COUNT(*)::BIGINT AS c
+                FROM {TABLE_IN_PERSON_RSVP_LIST_EMAILS}
+                WHERE event_id = :eid
+                GROUP BY pw_session_id, list_kind
+                """
+            ),
+            {"eid": event_id},
+        ).mappings().all()
+    except ProgrammingError:
+        mrows = ()
+    except Exception:  # noqa: BLE001
+        mrows = ()
+    for mr in mrows:
+        sid = int(mr["pw_session_id"])
+        kind = str(mr["list_kind"])
+        c = int(mr["c"] or 0)
+        if kind == ip_rsvp_list_svc.LIST_KIND_INVITE_SENT:
+            manual_sent[sid] = c
+        elif kind == ip_rsvp_list_svc.LIST_KIND_ACCEPTED:
+            manual_acc[sid] = c
+    return manual_sent, manual_acc
+
+
+def _overlay_manual_rsvp_on_hawkeye_event_rows(
+    conn: Connection,
+    event_id: int,
+    rows: list[dict],
+) -> list[dict]:
+    """
+    Hawkeye API rows for the in-person dashboard: same manual-first rule as MDC ``pw_session_rsvp``
+    for ``rsvp_invite_sent`` / ``rsvp_accepted`` (``latest`` payload keys).
+    """
+    manual_sent, manual_acc = _manual_rsvp_list_counts_by_session(conn, event_id)
+    out: list[dict] = []
+    for row in rows:
+        r = dict(row)
+        pw_id = r.get("pw_session_id")
+        if pw_id is None:
+            out.append(r)
+            continue
+        sid = int(pw_id)
+        ms = manual_sent.get(sid, 0)
+        ma = manual_acc.get(sid, 0)
+        if ms <= 0 and ma <= 0:
+            out.append(r)
+            continue
+        latest_raw = r.get("latest")
+        latest: dict
+        if isinstance(latest_raw, dict):
+            latest = dict(latest_raw)
+        elif latest_raw is None:
+            latest = {}
+        else:
+            latest = dict(latest_raw)
+        h_sent = int(latest.get("rsvp_invite_sent") or 0)
+        h_acc = int(latest.get("rsvp_accepted") or 0)
+        latest["rsvp_invite_sent"] = ms if ms > 0 else h_sent
+        latest["rsvp_accepted"] = ma if ma > 0 else h_acc
+        r["latest"] = latest
+        out.append(r)
+    return out
+
+
+def _enrich_pw_session_rsvp_rows(
+    engine: Engine,
+    conn: Connection,
+    event_id: int,
+    rows: list[dict],
+) -> list[dict]:
+    """Set ``rsvp_sent`` / ``rsvp_accepted``: manual import counts if any rows exist, else Hawkeye."""
+    if not rows:
+        return rows
+    try:
+        srows = conn.execute(
+            text(
+                f"""
+                SELECT id, city, prompt_war_on, session_label
+                FROM {TABLE_IN_PERSON_PW_SESSIONS}
+                WHERE event_id = :eid
+                """
+            ),
+            {"eid": event_id},
+        ).mappings().all()
+    except Exception:  # noqa: BLE001
+        srows = ()
+
+    sid_map: dict[tuple[str, str, str], int] = {}
+    for sr in srows:
+        pwo = sr["prompt_war_on"]
+        if isinstance(pwo, datetime):
+            pwo = pwo.date()
+        elif not isinstance(pwo, date):
+            continue
+        k = _pw_session_rsvp_row_key(str(sr["city"]), pwo, str(sr.get("session_label") or ""))
+        sid_map[k] = int(sr["id"])
+
+    manual_sent, manual_acc = _manual_rsvp_list_counts_by_session(conn, event_id)
+
+    hawk_sess: list[dict] = []
+    for row in rows:
+        hawk_sess.append(
+            {
+                "pw_session_id": sid_map.get(
+                    _pw_session_rsvp_row_key(row["city"], row["prompt_war_on"], row["session_label"])
+                ),
+                "city": row["city"],
+                "prompt_war_on_iso": row["prompt_war_on"],
+                "session_label": row["session_label"],
+                "display": row["session_display"],
+                "team_count": 0,
+            }
+        )
+    try:
+        hawk_rows = hawkeye_service.list_pw_session_rows(engine, event_id, hawk_sess)
+    except Exception:  # noqa: BLE001
+        hawk_rows = [{} for _ in rows]
+
+    out: list[dict] = []
+    for row, hr in zip(rows, hawk_rows):
+        k = _pw_session_rsvp_row_key(row["city"], row["prompt_war_on"], row["session_label"])
+        sid = sid_map.get(k)
+        ms = manual_sent.get(sid, 0) if sid else 0
+        ma = manual_acc.get(sid, 0) if sid else 0
+        latest = ((hr or {}).get("latest")) or {}
+        h_sent = int(latest.get("rsvp_invite_sent") or 0)
+        h_acc = int(latest.get("rsvp_accepted") or 0)
+        out.append(
+            {
+                **row,
+                "rsvp_sent": ms if ms > 0 else h_sent,
+                "rsvp_accepted": ma if ma > 0 else h_acc,
+            }
+        )
+    return out
+
+
 def _load_mdc_stats_uncached(
     event_id: int,
     *,
     mode: str = "in_person",
     date_from: date | None = None,
     date_to: date | None = None,
+    mdc_crossover_in_person_event_id: int | None = None,
+    mdc_crossover_virtual_event_id: int | None = None,
 ) -> dict:
     """Aggregates for Main Data Center registrations (in-person or virtual physical table).
 
@@ -3721,6 +5187,14 @@ def _load_mdc_stats_uncached(
         "pw_session_rsvp": [],
         "gender_breakdown": [],
         "top_occupations": [],
+        # In-person ↔ virtual MDC overlap (distinct normalized emails); see end of try block.
+        "mdc_crossover_both_tracks": None,
+        "mdc_crossover_virtual_distinct": None,
+        "mdc_crossover_in_person_distinct": None,
+        "mdc_crossover_in_person_only": None,
+        "mdc_crossover_virtual_only": None,
+        # Virtual MDC emails (this event) that also appear as leaders in any in-person Action Center import.
+        "mdc_crossover_virtual_reg_ip_action_center": None,
     }
     try:
         with engine.connect() as conn:
@@ -4159,7 +5633,8 @@ def _load_mdc_stats_uncached(
                         row["session_label"],
                     ),
                 )
-                out["pw_session_rsvp"] = merged_rsvp[:80]
+                merged_trim = merged_rsvp[:80]
+                out["pw_session_rsvp"] = _enrich_pw_session_rsvp_rows(engine, conn, event_id, merged_trim)
             else:
                 out["pw_session_rsvp"] = []
 
@@ -4192,6 +5667,74 @@ def _load_mdc_stats_uncached(
                 qp,
             ).mappings().all()
             out["top_occupations"] = [{"occupation": str(r["occ"]), "count": int(r["cnt"])} for r in ocrows]
+
+            c_ip = mdc_crossover_in_person_event_id
+            c_v = mdc_crossover_virtual_event_id
+            if (
+                c_ip is not None
+                and c_v is not None
+                and int(c_ip) > 0
+                and int(c_v) > 0
+            ):
+                cx = conn.execute(
+                    text(
+                        f"""
+                        WITH ve AS (
+                            SELECT email_normalized
+                            FROM {TABLE_VIRTUAL_MDC}
+                            WHERE event_id = :v_eid
+                              AND email_normalized IS NOT NULL
+                              AND btrim(email_normalized::text) <> ''
+                        ),
+                        ipe AS (
+                            SELECT email_normalized
+                            FROM {TABLE_IN_PERSON_MDC}
+                            WHERE event_id = :ip_eid
+                              AND email_normalized IS NOT NULL
+                              AND btrim(email_normalized::text) <> ''
+                        )
+                        SELECT
+                          (SELECT COUNT(DISTINCT email_normalized)::bigint FROM ve) AS v_n,
+                          (SELECT COUNT(DISTINCT email_normalized)::bigint FROM ipe) AS ip_n,
+                          (SELECT COUNT(DISTINCT ve.email_normalized)::bigint
+                           FROM ve INNER JOIN ipe ON ipe.email_normalized = ve.email_normalized) AS both_n
+                        """
+                    ),
+                    {"v_eid": int(c_v), "ip_eid": int(c_ip)},
+                ).mappings().fetchone()
+                if cx:
+                    v_n = int(cx.get("v_n") or 0)
+                    ip_n = int(cx.get("ip_n") or 0)
+                    both_n = int(cx.get("both_n") or 0)
+                    out["mdc_crossover_virtual_distinct"] = v_n
+                    out["mdc_crossover_in_person_distinct"] = ip_n
+                    out["mdc_crossover_both_tracks"] = both_n
+                    out["mdc_crossover_in_person_only"] = max(0, ip_n - both_n)
+                    out["mdc_crossover_virtual_only"] = max(0, v_n - both_n)
+
+            if is_virtual:
+                ac_n = conn.execute(
+                    text(
+                        f"""
+                        SELECT COUNT(DISTINCT v.email_normalized)::bigint AS n
+                        FROM {TABLE_VIRTUAL_MDC} v
+                        JOIN events e_v ON e_v.id = v.event_id AND e_v.kind = 'virtual'
+                        WHERE v.event_id = :eid
+                          AND v.email_normalized IS NOT NULL
+                          AND btrim(v.email_normalized::text) <> ''
+                          AND EXISTS (
+                            SELECT 1
+                            FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} ip
+                            JOIN events e_ip ON e_ip.id = ip.event_id AND e_ip.kind = 'in_person'
+                            WHERE ip.leader_email_normalized = v.email_normalized
+                              AND ip.leader_email_normalized IS NOT NULL
+                              AND btrim(ip.leader_email_normalized::text) <> ''
+                          )
+                        """
+                    ),
+                    {"eid": event_id},
+                ).scalar()
+                out["mdc_crossover_virtual_reg_ip_action_center"] = int(ac_n or 0)
     except Exception as exc:  # noqa: BLE001
         out["error"] = str(exc)
     return out
@@ -4203,6 +5746,8 @@ def _load_mdc_stats(
     mode: str = "in_person",
     date_from: date | None = None,
     date_to: date | None = None,
+    mdc_crossover_in_person_event_id: int | None = None,
+    mdc_crossover_virtual_event_id: int | None = None,
 ) -> dict:
     key = (
         "mdc_stats",
@@ -4210,11 +5755,22 @@ def _load_mdc_stats(
         int(event_id),
         date_from.isoformat() if date_from else None,
         date_to.isoformat() if date_to else None,
+        int(mdc_crossover_in_person_event_id)
+        if mdc_crossover_in_person_event_id is not None
+        else None,
+        int(mdc_crossover_virtual_event_id)
+        if mdc_crossover_virtual_event_id is not None
+        else None,
     )
     return _PW_CACHE_HOT.get_or_set(
         key,
         lambda: _load_mdc_stats_uncached(
-            event_id, mode=mode, date_from=date_from, date_to=date_to
+            event_id,
+            mode=mode,
+            date_from=date_from,
+            date_to=date_to,
+            mdc_crossover_in_person_event_id=mdc_crossover_in_person_event_id,
+            mdc_crossover_virtual_event_id=mdc_crossover_virtual_event_id,
         ),
     )
 
@@ -4461,6 +6017,28 @@ def _parse_mdc_users_advanced_from_request(args) -> dict[str, object] | None:
         and designation_years_min > designation_years_max
     ):
         designation_years_min, designation_years_max = designation_years_max, designation_years_min
+
+    arena_raw_ch = (args.get("arenaChallengeId") or "").strip()[:12]
+    arena_challenge_id: int | None = int(arena_raw_ch) if arena_raw_ch.isdigit() else None
+    arena_seg_raw = (args.get("arenaTeamSegment") or "").strip().lower()[:24]
+    arena_team_segment: str | None = arena_seg_raw if arena_seg_raw in _MDC_ARENA_TEAM_SEGMENTS else None
+    arena_ac_raw = (args.get("arenaAttemptsCompleted") or "").strip()[:8]
+    arena_attempts_completed: int | None = None
+    if arena_ac_raw.isdigit():
+        _ac = int(arena_ac_raw)
+        if _ac == 0:
+            arena_attempts_completed = 0
+        elif 1 <= _ac <= 99:
+            arena_attempts_completed = _ac
+    if arena_team_segment not in ("student", "professional"):
+        arena_attempts_completed = None
+    has_virtual_arena = arena_challenge_id is not None and arena_team_segment is not None
+    has_ip_arena = (
+        ip_submission_session is not None
+        and arena_team_segment is not None
+        and arena_challenge_id is None
+    )
+
     if (
         not text
         and form_ts_from is None
@@ -4471,6 +6049,8 @@ def _parse_mdc_users_advanced_from_request(args) -> dict[str, object] | None:
         and designation_years_max is None
         and participated_challenge_id is None
         and ip_submission_session is None
+        and not has_virtual_arena
+        and not has_ip_arena
     ):
         return None
     return {
@@ -4485,6 +6065,11 @@ def _parse_mdc_users_advanced_from_request(args) -> dict[str, object] | None:
         "participated_challenge_id": participated_challenge_id,
         "submission_session_token": submission_session_token,
         "ip_submission_session": ip_submission_session,
+        "arena_challenge_id": arena_challenge_id if has_virtual_arena else None,
+        "arena_team_segment": arena_team_segment if (has_virtual_arena or has_ip_arena) else None,
+        "arena_attempts_completed": arena_attempts_completed
+        if (has_virtual_arena or has_ip_arena)
+        else None,
     }
 
 
@@ -4537,9 +6122,14 @@ def _mdc_users_preserve_query_dict(
     *,
     mdc_pw_on_iso: str = "",
     mdc_session_label: str = "",
+    virtual_event_id: int | None = None,
+    roster_sort_key: str | None = None,
+    roster_sort_dir: str | None = None,
 ) -> dict[str, str]:
     """Flat query-string parts (no page) for pagination, export, and per-page form."""
     out: dict[str, str] = {}
+    if virtual_event_id is not None and int(virtual_event_id) != int(DEFAULT_VIRTUAL_EVENT_ID):
+        out["virtualEventId"] = str(int(virtual_event_id))
     if search_s:
         out["q"] = search_s
     if attendance_city:
@@ -4551,6 +6141,10 @@ def _mdc_users_preserve_query_dict(
     if (mdc_session_label or "").strip():
         out["mdc_session_label"] = mdc_session_label.strip()[:200]
     if not advanced:
+        if roster_sort_key:
+            out["sort"] = roster_sort_key
+            d = (roster_sort_dir or "desc").lower()[:4]
+            out["sort_dir"] = "asc" if d == "asc" else "desc"
         return out
     for col, val in (advanced.get("text") or {}).items():
         out[f"af_{col}"] = val
@@ -4576,7 +6170,263 @@ def _mdc_users_preserve_query_dict(
     sst = (advanced.get("submission_session_token") or "").strip()
     if sst:
         out["submission_session"] = sst[:_IP_SUBMISSION_SESSION_TOKEN_MAX]
+    ach = advanced.get("arena_challenge_id")
+    aseg = advanced.get("arena_team_segment")
+    seg_low = (str(aseg).strip().lower() if aseg is not None else "")
+    if ach is not None and aseg:
+        try:
+            out["arenaChallengeId"] = str(int(ach))
+        except (TypeError, ValueError):
+            pass
+        else:
+            out["arenaTeamSegment"] = str(aseg)
+            aac = advanced.get("arena_attempts_completed")
+            if aac is not None:
+                try:
+                    out["arenaAttemptsCompleted"] = str(int(aac))
+                except (TypeError, ValueError):
+                    pass
+    elif sst and aseg and seg_low in _MDC_ARENA_TEAM_SEGMENTS:
+        out["arenaTeamSegment"] = str(aseg)
+        aac = advanced.get("arena_attempts_completed")
+        if aac is not None and seg_low in ("student", "professional"):
+            try:
+                out["arenaAttemptsCompleted"] = str(int(aac))
+            except (TypeError, ValueError):
+                pass
+    if roster_sort_key:
+        out["sort"] = roster_sort_key
+        d = (roster_sort_dir or "desc").lower()[:4]
+        out["sort_dir"] = "asc" if d == "asc" else "desc"
     return out
+
+
+def _arena_roster_filter_applicable(
+    advanced: dict[str, object] | None,
+    *,
+    event_id: int,
+    mode: str,
+) -> bool:
+    if mode != "virtual" or not advanced:
+        return False
+    ach = advanced.get("arena_challenge_id")
+    seg = (advanced.get("arena_team_segment") or "").strip().lower()
+    if ach is None or not seg or seg not in _MDC_ARENA_TEAM_SEGMENTS:
+        return False
+    try:
+        cid = int(ach)
+    except (TypeError, ValueError):
+        return False
+    ch = _get_virtual_challenge(cid)
+    return bool(ch and int(ch.get("event_id") or 0) == int(event_id))
+
+
+def _append_virtual_arena_roster_filter_sql(
+    advanced: dict[str, object] | None,
+    *,
+    event_id: int,
+    table: str,
+    conditions: list[str],
+    params: dict,
+) -> None:
+    if not _arena_roster_filter_applicable(advanced, event_id=event_id, mode="virtual"):
+        return
+    assert advanced is not None
+    arena_cid = int(advanced["arena_challenge_id"])
+    seg = str(advanced.get("arena_team_segment") or "").strip().lower()
+    params["arena_ch_id"] = arena_cid
+    ac_extra = ""
+    acn = advanced.get("arena_attempts_completed")
+    if seg in ("student", "professional") and acn is not None:
+        try:
+            ac_int = int(acn)
+        except (TypeError, ValueError):
+            pass
+        else:
+            if ac_int == 0:
+                ac_extra = " AND (s.attempts_completed IS NULL OR s.attempts_completed < 1)"
+            elif 1 <= ac_int <= 99:
+                ac_extra = (
+                    " AND s.attempts_completed IS NOT NULL AND s.attempts_completed = :arena_ac_eq"
+                )
+                params["arena_ac_eq"] = ac_int
+    if seg == "student":
+        conditions.append(
+            f"""
+            EXISTS (
+              SELECT 1 FROM virtual_challenge_submission_rows s
+              INNER JOIN {table} m ON m.id = s.virtual_mdc_registration_id
+              WHERE s.event_id = :eid AND s.challenge_id = :arena_ch_id
+                AND m.id = {table}.id
+                AND lower(btrim(m.occupation)) IN ('college_student', 'student')
+                {ac_extra}
+            )
+            """.strip()
+        )
+    elif seg == "professional":
+        conditions.append(
+            f"""
+            EXISTS (
+              SELECT 1 FROM virtual_challenge_submission_rows s
+              INNER JOIN {table} m ON m.id = s.virtual_mdc_registration_id
+              WHERE s.event_id = :eid AND s.challenge_id = :arena_ch_id
+                AND m.id = {table}.id
+                AND lower(btrim(m.occupation)) IN (
+                  'professional', 'startup', 'freelance', 'freelancer'
+                )
+                {ac_extra}
+            )
+            """.strip()
+        )
+    elif seg == "other":
+        conditions.append(
+            f"""
+            EXISTS (
+              SELECT 1 FROM virtual_challenge_submission_rows s
+              INNER JOIN {table} m ON m.id = s.virtual_mdc_registration_id
+              WHERE s.event_id = :eid AND s.challenge_id = :arena_ch_id
+                AND m.id = {table}.id
+                AND (
+                  m.occupation IS NULL
+                  OR btrim(m.occupation) = ''
+                  OR lower(btrim(m.occupation)) NOT IN (
+                    'college_student', 'student',
+                    'professional', 'startup', 'freelance', 'freelancer'
+                  )
+                )
+            )
+            """.strip()
+        )
+    elif seg == "unknown":
+        conditions.append(
+            f"""
+            EXISTS (
+              SELECT 1 FROM virtual_challenge_submission_rows s
+              WHERE s.event_id = :eid AND s.challenge_id = :arena_ch_id
+                AND s.virtual_mdc_registration_id IS NULL
+                AND s.leader_email_normalized = {table}.email_normalized
+            )
+            """.strip()
+        )
+
+
+def _ip_ac_arena_roster_filter_applicable(
+    advanced: dict[str, object] | None,
+    *,
+    mode: str,
+) -> bool:
+    """In-person Action Center analytics → Users: ``submission_session`` + ``arenaTeamSegment`` (no challenge id)."""
+    if mode != "in_person" or not advanced:
+        return False
+    if advanced.get("arena_challenge_id") is not None:
+        return False
+    if advanced.get("ip_submission_session") is None:
+        return False
+    seg = (advanced.get("arena_team_segment") or "").strip().lower()
+    return seg in _MDC_ARENA_TEAM_SEGMENTS
+
+
+def _append_in_person_arena_roster_filter_sql(
+    advanced: dict[str, object] | None,
+    *,
+    table: str,
+    conditions: list[str],
+    params: dict,
+) -> None:
+    if not _ip_ac_arena_roster_filter_applicable(advanced, mode="in_person"):
+        return
+    assert advanced is not None
+    sess = advanced["ip_submission_session"]
+    city, pwo, slab = sess[0], sess[1], sess[2]
+    params["ip_ac_city"] = (city or "").strip()[:500]
+    params["ip_ac_pwo"] = pwo
+    params["ip_ac_slab"] = (slab or "").strip()[:IPCSR_SESSION_LABEL_MAX_LEN]
+    seg = str(advanced.get("arena_team_segment") or "").strip().lower()
+    ac_extra = ""
+    acn = advanced.get("arena_attempts_completed")
+    if seg in ("student", "professional") and acn is not None:
+        try:
+            ac_int = int(acn)
+        except (TypeError, ValueError):
+            pass
+        else:
+            if ac_int == 0:
+                ac_extra = " AND (s.attempts_completed IS NULL OR s.attempts_completed < 1)"
+            elif 1 <= ac_int <= 99:
+                ac_extra = (
+                    " AND s.attempts_completed IS NOT NULL AND s.attempts_completed = :ip_ac_eq"
+                )
+                params["ip_ac_eq"] = ac_int
+    if seg == "student":
+        conditions.append(
+            f"""
+            EXISTS (
+              SELECT 1 FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} s
+              INNER JOIN {TABLE_IN_PERSON_MDC} m ON m.id = s.in_person_mdc_registration_id
+              WHERE s.event_id = :eid AND s.sheet_kind = 'main'
+                AND s.attendance_city_normalized = lower(btrim(:ip_ac_city))
+                AND s.prompt_war_on = :ip_ac_pwo
+                AND s.session_label_normalized = lower(btrim(:ip_ac_slab))
+                AND m.id = {table}.id
+                AND lower(btrim(m.occupation)) IN ('college_student', 'student')
+                {ac_extra}
+            )
+            """.strip()
+        )
+    elif seg == "professional":
+        conditions.append(
+            f"""
+            EXISTS (
+              SELECT 1 FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} s
+              INNER JOIN {TABLE_IN_PERSON_MDC} m ON m.id = s.in_person_mdc_registration_id
+              WHERE s.event_id = :eid AND s.sheet_kind = 'main'
+                AND s.attendance_city_normalized = lower(btrim(:ip_ac_city))
+                AND s.prompt_war_on = :ip_ac_pwo
+                AND s.session_label_normalized = lower(btrim(:ip_ac_slab))
+                AND m.id = {table}.id
+                AND lower(btrim(m.occupation)) IN (
+                  'professional', 'startup', 'freelance', 'freelancer'
+                )
+                {ac_extra}
+            )
+            """.strip()
+        )
+    elif seg == "other":
+        conditions.append(
+            f"""
+            EXISTS (
+              SELECT 1 FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} s
+              INNER JOIN {TABLE_IN_PERSON_MDC} m ON m.id = s.in_person_mdc_registration_id
+              WHERE s.event_id = :eid AND s.sheet_kind = 'main'
+                AND s.attendance_city_normalized = lower(btrim(:ip_ac_city))
+                AND s.prompt_war_on = :ip_ac_pwo
+                AND s.session_label_normalized = lower(btrim(:ip_ac_slab))
+                AND m.id = {table}.id
+                AND (
+                  m.occupation IS NULL
+                  OR btrim(m.occupation) = ''
+                  OR lower(btrim(m.occupation)) NOT IN (
+                    'college_student', 'student',
+                    'professional', 'startup', 'freelance', 'freelancer'
+                  )
+                )
+            )
+            """.strip()
+        )
+    elif seg == "unknown":
+        conditions.append(
+            f"""
+            EXISTS (
+              SELECT 1 FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} s
+              WHERE s.event_id = :eid AND s.sheet_kind = 'main'
+                AND s.attendance_city_normalized = lower(btrim(:ip_ac_city))
+                AND s.prompt_war_on = :ip_ac_pwo
+                AND s.session_label_normalized = lower(btrim(:ip_ac_slab))
+                AND s.in_person_mdc_registration_id IS NULL
+                AND s.leader_email_normalized = {table}.email_normalized
+            )
+            """.strip()
+        )
 
 
 def _mdc_users_build_filter(
@@ -4643,6 +6493,21 @@ def _mdc_users_build_filter(
             params["ss_city"] = (city or "").strip()[:500]
             params["ss_pwo"] = pwo
             params["ss_sl"] = (sl or "").strip()[:IPCSR_SESSION_LABEL_MAX_LEN]
+        if mode == "virtual":
+            _append_virtual_arena_roster_filter_sql(
+                advanced,
+                event_id=event_id,
+                table=table,
+                conditions=conditions,
+                params=params,
+            )
+        elif mode == "in_person":
+            _append_in_person_arena_roster_filter_sql(
+                advanced,
+                table=table,
+                conditions=conditions,
+                params=params,
+            )
     extra_where, extra_params = _virtual_challenge_filter_sql(challenge_id, mode=mode)
     if extra_where:
         conditions.append(extra_where.lstrip().removeprefix("AND ").strip())
@@ -4773,7 +6638,7 @@ def _load_virtual_challenges_brief(event_id: int) -> list[dict]:
 
 
 def _virtual_challenge_submission_cohort_stats(event_id: int) -> dict[int, dict]:
-    """Per challenge: distinct teams (normalized name + email) and split vs the **chronologically prior** arena round.
+    """Per challenge: distinct leaders (normalized email) and split vs the **chronologically prior** arena round.
 
     Prior round = previous row when challenges are ordered by ``closes_at``, ``opens_at``, ``id``
     (earlier real-world round first). This is independent of admin UI ordering (e.g. live tab first).
@@ -4801,11 +6666,10 @@ def _virtual_challenge_submission_cohort_stats(event_id: int) -> dict[int, dict]
                     ),
                     distinct_submitters AS (
                       SELECT r.challenge_id,
-                             r.team_name_normalized,
                              r.leader_email_normalized
                       FROM virtual_challenge_submission_rows r
                       WHERE r.event_id = :eid
-                      GROUP BY r.challenge_id, r.team_name_normalized, r.leader_email_normalized
+                      GROUP BY r.challenge_id, r.leader_email_normalized
                     ),
                     labeled AS (
                       SELECT ds.challenge_id,
@@ -4816,7 +6680,6 @@ def _virtual_challenge_submission_cohort_stats(event_id: int) -> dict[int, dict]
                                FROM virtual_challenge_submission_rows p
                                WHERE p.event_id = :eid
                                  AND p.challenge_id = oc.prev_challenge_id
-                                 AND p.team_name_normalized = ds.team_name_normalized
                                  AND p.leader_email_normalized = ds.leader_email_normalized
                              ) AS in_prev
                       FROM distinct_submitters ds
@@ -5032,7 +6895,20 @@ def _load_mdc_attendance_city_options(conn, event_id: int, *, mode: str = "in_pe
         ),
         {"eid": event_id},
     ).scalars().all()
-    return [str(x) for x in rows if x]
+    db_cities = [str(x) for x in rows if x]
+    seen = {c.strip().lower() for c in db_cities}
+    merged = list(db_cities)
+    for extra in IN_PERSON_PW_EXTRA_ATTENDANCE_CITIES:
+        label = extra.strip()
+        if not label:
+            continue
+        key = label.lower()
+        if key in seen:
+            continue
+        merged.append(label)
+        seen.add(key)
+    merged.sort(key=str.casefold)
+    return merged
 
 
 def _load_mdc_advanced_select_options(
@@ -5129,9 +7005,18 @@ def _mdc_users_reset_advanced_qs(
     per_page: int,
     mdc_pw_on_iso: str = "",
     mdc_session_label: str = "",
+    virtual_event_id: int | None = None,
+    roster_sort_key: str | None = None,
+    roster_sort_dir: str | None = None,
 ) -> str:
     """Querystring that drops every advanced-filter param while keeping search, dropdowns, per-page."""
     params: dict[str, str] = {"per_page": str(per_page)}
+    if virtual_event_id is not None and int(virtual_event_id) != int(DEFAULT_VIRTUAL_EVENT_ID):
+        params["virtualEventId"] = str(int(virtual_event_id))
+    if roster_sort_key:
+        params["sort"] = roster_sort_key
+        d = (roster_sort_dir or "desc").lower()[:4]
+        params["sort_dir"] = "asc" if d == "asc" else "desc"
     if search_s:
         params["q"] = search_s
     if attendance_city:
@@ -5157,6 +7042,8 @@ def _load_mdc_users_page(
     advanced: dict[str, object] | None = None,
     mdc_pw_on: date | None = None,
     mdc_session_label: str | None = None,
+    roster_sort_key: str | None = None,
+    roster_sort_dir: str | None = None,
 ) -> dict:
     """Paginated Main Data Center registrations for the Vision roster table."""
     table = _mdc_table_for_mode(mode)
@@ -5166,6 +7053,11 @@ def _load_mdc_users_page(
     search_s = (search or "").strip()[:200]
     ac = None if mode == "virtual" else ((attendance_city or "").strip()[:200] or None)
     cid = int(challenge_id) if (mode == "virtual" and challenge_id) else None
+    sk = roster_sort_key
+    sd = (roster_sort_dir or "desc").lower()[:4]
+    sd = "asc" if sd == "asc" else "desc"
+    if sk == "score" and mode != "virtual":
+        sk = None
     adv_active = bool(advanced)
     pw_iso = mdc_pw_on.isoformat() if mdc_pw_on is not None else ""
     sl_f = (mdc_session_label or "").strip()
@@ -5176,6 +7068,9 @@ def _load_mdc_users_page(
         advanced,
         mdc_pw_on_iso=pw_iso,
         mdc_session_label=sl_f,
+        virtual_event_id=event_id if mode == "virtual" else None,
+        roster_sort_key=sk,
+        roster_sort_dir=sd if sk else None,
     )
     export_query = urlencode(preserve)
     pagination_body = {"per_page": str(per_page), **preserve}
@@ -5188,6 +7083,22 @@ def _load_mdc_users_page(
             adv_part += 1
         if (advanced.get("submission_session_token") or "").strip():
             adv_part += 1
+        if _arena_roster_filter_applicable(advanced, event_id=event_id, mode=mode):
+            adv_part += 1
+            _seg_a = (advanced.get("arena_team_segment") or "").strip().lower()
+            if (
+                _seg_a in ("student", "professional")
+                and advanced.get("arena_attempts_completed") is not None
+            ):
+                adv_part += 1
+        if _ip_ac_arena_roster_filter_applicable(advanced, mode=mode):
+            adv_part += 1
+            _seg_ip = (advanced.get("arena_team_segment") or "").strip().lower()
+            if (
+                _seg_ip in ("student", "professional")
+                and advanced.get("arena_attempts_completed") is not None
+            ):
+                adv_part += 1
     advanced_count = len(advanced_text) + sum(1 for v in advanced_raw.values() if v) + adv_part
     participation_challenge_options: list[dict] = []
     participation_submission_session_options: list[dict] = []
@@ -5256,8 +7167,97 @@ def _load_mdc_users_page(
                         "remove_qs": urlencode(rm),
                     }
                 )
+        if _arena_roster_filter_applicable(advanced, event_id=event_id, mode=mode):
+            try:
+                arena_cid = int(advanced["arena_challenge_id"])
+            except (TypeError, ValueError, KeyError):
+                arena_cid = 0
+            seg_low = (advanced.get("arena_team_segment") or "").strip().lower()
+            seg_label = {
+                "student": "Student",
+                "professional": "Professional",
+                "other": "Other",
+                "unknown": "Unknown",
+            }.get(seg_low, seg_low)
+            arena_ch_title = next(
+                (
+                    str(c.get("title") or "")
+                    for c in participation_challenge_options
+                    if int(c["id"]) == arena_cid
+                ),
+                f"#{arena_cid}",
+            )
+            aac = advanced.get("arena_attempts_completed")
+            if (
+                aac is not None
+                and seg_low in ("student", "professional")
+                and str(aac).strip().isdigit()
+            ):
+                rm_ac = dict(base_chip)
+                rm_ac.pop("arenaAttemptsCompleted", None)
+                advanced_chips.append(
+                    {
+                        "key": "arenaAttemptsCompleted",
+                        "label": "Arena attempts completed",
+                        "value": str(int(aac)),
+                        "remove_qs": urlencode(rm_ac),
+                    }
+                )
+            rm_arena = dict(base_chip)
+            rm_arena.pop("arenaChallengeId", None)
+            rm_arena.pop("arenaTeamSegment", None)
+            rm_arena.pop("arenaAttemptsCompleted", None)
+            advanced_chips.append(
+                {
+                    "key": "arenaTeamSegment",
+                    "label": "Arena cohort",
+                    "value": f"{arena_ch_title} · {seg_label}",
+                    "remove_qs": urlencode(rm_arena),
+                }
+            )
+        if _ip_ac_arena_roster_filter_applicable(advanced, mode=mode):
+            seg_low = (advanced.get("arena_team_segment") or "").strip().lower()
+            seg_label = {
+                "student": "Student",
+                "professional": "Professional",
+                "other": "Other",
+                "unknown": "Unknown",
+            }.get(seg_low, seg_low)
+            aac = advanced.get("arena_attempts_completed")
+            if (
+                aac is not None
+                and seg_low in ("student", "professional")
+                and str(aac).strip().isdigit()
+            ):
+                rm_ac = dict(base_chip)
+                rm_ac.pop("arenaAttemptsCompleted", None)
+                advanced_chips.append(
+                    {
+                        "key": "arenaAttemptsCompleted",
+                        "label": "Action Center attempts completed",
+                        "value": str(int(aac)),
+                        "remove_qs": urlencode(rm_ac),
+                    }
+                )
+            rm_ip = dict(base_chip)
+            rm_ip.pop("submission_session", None)
+            rm_ip.pop("arenaTeamSegment", None)
+            rm_ip.pop("arenaAttemptsCompleted", None)
+            sst_ip = (advanced.get("submission_session_token") or "").strip()
+            sess_lab_ip = next(
+                (o["label"] for o in participation_submission_session_options if o["token"] == sst_ip),
+                sst_ip[:48] + ("…" if len(sst_ip) > 48 else ""),
+            )
+            advanced_chips.append(
+                {
+                    "key": "ip_ac_arena",
+                    "label": "Action Center cohort",
+                    "value": f"{sess_lab_ip} · {seg_label}",
+                    "remove_qs": urlencode(rm_ip),
+                }
+            )
         sst = (advanced.get("submission_session_token") or "").strip()
-        if sst and mode == "in_person":
+        if sst and mode == "in_person" and not _ip_ac_arena_roster_filter_applicable(advanced, mode=mode):
             sess_lab = next(
                 (o["label"] for o in participation_submission_session_options if o["token"] == sst),
                 sst[:48] + ("…" if len(sst) > 48 else ""),
@@ -5279,7 +7279,27 @@ def _load_mdc_users_page(
         per_page=per_page,
         mdc_pw_on_iso=pw_iso,
         mdc_session_label=sl_f,
+        virtual_event_id=event_id if mode == "virtual" else None,
+        roster_sort_key=sk,
+        roster_sort_dir=sd if sk else None,
     )
+    sort_cols = (
+        ["name", "email", "location", "occupation", "designation", "yrs_exp", "registered", "score"]
+        if mode == "virtual"
+        else [
+            "name",
+            "email",
+            "location",
+            "attendance_city",
+            "occupation",
+            "designation",
+            "yrs_exp",
+            "registered",
+        ]
+    )
+    sort_hrefs = {
+        c: _mdc_users_roster_sort_href_query(dict(preserve), per_page, c, sk, sd) for c in sort_cols
+    }
     out: dict = {
         "error": None,
         "rows": [],
@@ -5317,6 +7337,14 @@ def _load_mdc_users_page(
         "selected_submission_session": (advanced.get("submission_session_token") or "").strip()
         if advanced
         else "",
+        "arena_from_charts_active": (
+            _arena_roster_filter_applicable(advanced, event_id=event_id, mode=mode)
+            or _ip_ac_arena_roster_filter_applicable(advanced, mode=mode)
+        ),
+        "sort_key": sk,
+        "sort_dir": sd,
+        "sort_hrefs": sort_hrefs,
+        "roster_has_score_column": bool(mode == "virtual"),
     }
     try:
         with engine.connect() as conn:
@@ -5345,15 +7373,20 @@ def _load_mdc_users_page(
             params_page["lim"] = per_page
             params_page["off"] = offset
             extra_cols = ", prompt_war_on, session_label" if mode == "in_person" else ""
+            score_sel = "NULL::numeric AS mdc_submission_score"
+            if mode == "virtual":
+                score_sel = _mdc_users_virtual_submission_score_select_sql(table, cid)
+            order_sql = _mdc_users_roster_order_clause(sk, sd, mode=mode, challenge_id=cid)
             rows = conn.execute(
                 text(
                     f"""
                     SELECT id, full_name, email, city, state, country, attendance_city, occupation,
-                           mobile, profile_name, form_timestamp, designation, designation_years_experience
+                           mobile, profile_name, form_timestamp, designation, designation_years_experience,
+                           {score_sel}
                            {extra_cols}
                     FROM {table}
                     WHERE {where_sql}
-                    ORDER BY form_timestamp DESC NULLS LAST, id DESC
+                    {order_sql}
                     LIMIT :lim OFFSET :off
                     """
                 ),
@@ -5391,11 +7424,18 @@ def _fetch_mdc_users_export_rows(
     advanced: dict[str, object] | None = None,
     mdc_pw_on: date | None = None,
     mdc_session_label: str | None = None,
+    roster_sort_key: str | None = None,
+    roster_sort_dir: str | None = None,
 ) -> tuple[list[dict], str | None]:
     table = _mdc_table_for_mode(mode)
     search_s = (search or "").strip()[:200]
     ac = None if mode == "virtual" else ((attendance_city or "").strip()[:200] or None)
     cid = int(challenge_id) if (mode == "virtual" and challenge_id) else None
+    sk = roster_sort_key
+    sd = (roster_sort_dir or "desc").lower()[:4]
+    sd = "asc" if sd == "asc" else "desc"
+    if sk == "score" and mode != "virtual":
+        sk = None
     where_sql, params = _mdc_users_build_filter(
         event_id,
         search_s,
@@ -5407,17 +7447,22 @@ def _fetch_mdc_users_export_rows(
         mdc_session_label=mdc_session_label,
     )
     extra_cols = ", prompt_war_on, session_label" if mode == "in_person" else ""
+    score_sel = "NULL::numeric AS mdc_submission_score"
+    if mode == "virtual":
+        score_sel = _mdc_users_virtual_submission_score_select_sql(table, cid)
+    order_sql = _mdc_users_roster_order_clause(sk, sd, mode=mode, challenge_id=cid)
     try:
         with engine.connect() as conn:
             rows = conn.execute(
                 text(
                     f"""
                     SELECT id, full_name, email, city, state, country, attendance_city, occupation,
-                           mobile, profile_name, form_timestamp, designation, designation_years_experience
+                           mobile, profile_name, form_timestamp, designation, designation_years_experience,
+                           {score_sel}
                            {extra_cols}
                     FROM {table}
                     WHERE {where_sql}
-                    ORDER BY form_timestamp DESC NULLS LAST, id DESC
+                    {order_sql}
                     """
                 ),
                 params,
@@ -5443,6 +7488,7 @@ def _fetch_mdc_users_export_rows(
 
 def _mdc_users_rows_to_csv(rows: list[dict], *, mode: str = "in_person") -> bytes:
     include_attendance = mode != "virtual"
+    include_virt_score = mode == "virtual"
     headers = [
         "id",
         "full_name",
@@ -5458,6 +7504,7 @@ def _mdc_users_rows_to_csv(rows: list[dict], *, mode: str = "in_person") -> byte
         "occupation",
         "mobile",
         "profile_name",
+        *([] if not include_virt_score else ["imported_total_score"]),
         "form_timestamp",
     ]
     buf = StringIO()
@@ -5484,9 +7531,12 @@ def _mdc_users_rows_to_csv(rows: list[dict], *, mode: str = "in_person") -> byte
                 r.get("occupation") or "",
                 r.get("mobile") or "",
                 r.get("profile_name") or "",
-                fts_s,
             ]
         )
+        if include_virt_score:
+            sc = r.get("mdc_submission_score")
+            row_vals.append("" if sc is None else str(sc))
+        row_vals.append(fts_s)
         writer.writerow(row_vals)
     return ("\ufeff" + buf.getvalue()).encode("utf-8")
 
@@ -5699,11 +7749,11 @@ def _virtual_global_submission_leaderboard(
 ) -> dict:
     """
     Aggregate ``virtual_challenge_submission_rows`` across all virtual arena challenges
-    for one event. One row per (team_name_normalized, leader_email_normalized): each row's
-    ``average_score`` is the mean of that team's per-arena scores (missing scores count as
+    for one event. One row per ``leader_email_normalized``: each row's
+    ``average_score`` is the mean of that leader's per-arena scores (missing scores count as
     zero; denominator is the number of arenas they have a submission row in).
-    ``submitted_at`` is the earliest export timestamp across that team's rows; display
-    name/email come from the row with the highest single-arena score (then earliest
+    ``submitted_at`` is the earliest export timestamp across their rows; display
+    team/name/email come from the row with the highest single-arena score (then earliest
     submission, then id).
     """
     paginate = page is not None and per_page is not None
@@ -5725,7 +7775,6 @@ def _virtual_global_submission_leaderboard(
     _vcsr_global_base = """
                     WITH base AS (
                         SELECT r.id,
-                               r.team_name_normalized,
                                r.leader_email_normalized,
                                r.team_name,
                                r.leader_name,
@@ -5740,8 +7789,7 @@ def _virtual_global_submission_leaderboard(
                         WHERE r.event_id = :eid
                     ),
                     agg AS (
-                        SELECT team_name_normalized,
-                               leader_email_normalized,
+                        SELECT leader_email_normalized,
                                (SUM(COALESCE(total_score, 0))::numeric
                                 / NULLIF(COUNT(*)::numeric, 0)) AS average_score,
                                MIN(export_created_at) AS submitted_at,
@@ -5762,7 +7810,7 @@ def _virtual_global_submission_leaderboard(
                                                           id ASC
                                ))[1] AS leader_email
                         FROM base
-                        GROUP BY team_name_normalized, leader_email_normalized
+                        GROUP BY leader_email_normalized
                     )
     """
 
@@ -5780,8 +7828,7 @@ def _virtual_global_submission_leaderboard(
                 _vcsr_global_base
                 + """
                 , ranked AS (
-                    SELECT team_name_normalized,
-                           leader_email_normalized,
+                    SELECT leader_email_normalized,
                            team_name,
                            leader_name,
                            leader_email,
@@ -5791,7 +7838,6 @@ def _virtual_global_submission_leaderboard(
                            ROW_NUMBER() OVER (
                                ORDER BY average_score DESC NULLS LAST,
                                         submitted_at ASC NULLS LAST,
-                                        team_name_normalized ASC,
                                         leader_email_normalized ASC
                            )::BIGINT AS rank
                     FROM agg
@@ -5972,20 +8018,39 @@ def _in_person_submission_leaderboard(
 
 
 def _in_person_pw_options(event_id: int, conn: Connection | None = None) -> list[dict]:
-    """Distinct Prompt War sessions (city + date + label) with main-challenge team counts."""
+    """PW sessions from ``in_person_pw_sessions`` with main-challenge team counts per session."""
 
     def _query(c: Connection):
         return c.execute(
             text(
                 f"""
-                SELECT attendance_city AS city,
-                       prompt_war_on,
-                       session_label,
-                       COUNT(*)::BIGINT AS team_count
-                FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS}
-                WHERE event_id = :eid AND sheet_kind = 'main'
-                GROUP BY attendance_city, prompt_war_on, session_label
-                ORDER BY attendance_city ASC, prompt_war_on DESC, session_label ASC
+                SELECT
+                  s.id AS pw_session_id,
+                  s.city,
+                  s.prompt_war_on,
+                  s.session_label,
+                  s.scope_key,
+                  s.display_name,
+                  s.created_at AS session_created_at,
+                  COALESCE(t.cnt, 0)::BIGINT AS team_count
+                FROM {TABLE_IN_PERSON_PW_SESSIONS} s
+                LEFT JOIN (
+                  SELECT
+                    event_id,
+                    lower(trim(both FROM attendance_city)) AS city_n,
+                    prompt_war_on,
+                    COALESCE(session_label, '') AS sl,
+                    COUNT(*)::BIGINT AS cnt
+                  FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS}
+                  WHERE sheet_kind = 'main'
+                  GROUP BY event_id, lower(trim(both FROM attendance_city)), prompt_war_on, COALESCE(session_label, '')
+                ) t
+                  ON t.event_id = s.event_id
+                 AND t.city_n = s.city
+                 AND t.prompt_war_on = s.prompt_war_on
+                 AND t.sl = s.session_label
+                WHERE s.event_id = :eid
+                ORDER BY s.prompt_war_on DESC, s.city, s.session_label
                 """
             ),
             {"eid": int(event_id)},
@@ -5999,8 +8064,8 @@ def _in_person_pw_options(event_id: int, conn: Connection | None = None) -> list
                 rows = _query(c)
         out: list[dict] = []
         for r in rows:
-            c = r.get("city")
-            if not c:
+            cty = str(r.get("city") or "").strip()
+            if not cty:
                 continue
             pwo = r["prompt_war_on"]
             if isinstance(pwo, datetime):
@@ -6013,13 +8078,19 @@ def _in_person_pw_options(event_id: int, conn: Connection | None = None) -> list
                 iso = str(pwo)[:10]
                 pwd = date.fromisoformat(iso[:10])
             sl = str(r.get("session_label") or "")
+            disp = str(r.get("display_name") or "").strip() or _ipcsr_pw_session_display(
+                city=cty, prompt_war_on=pwd, session_label=sl
+            )
+            ca = r.get("session_created_at")
             out.append(
                 {
-                    "city": str(c),
+                    "pw_session_id": int(r["pw_session_id"]),
+                    "city": cty,
                     "prompt_war_on_iso": iso,
                     "session_label": sl,
-                    "display": _ipcsr_pw_session_display(city=str(c), prompt_war_on=pwd, session_label=sl),
+                    "display": disp,
                     "team_count": int(r["team_count"] or 0),
+                    "session_created_at": ca,
                 }
             )
         return out
@@ -6027,11 +8098,81 @@ def _in_person_pw_options(event_id: int, conn: Connection | None = None) -> list
         return []
 
 
+def _in_person_pw_default_reference_date() -> date:
+    """IST calendar date used to compare ``prompt_war_on`` when picking a default session."""
+    return datetime.now(ZoneInfo("Asia/Kolkata")).date()
+
+
+def _in_person_pw_option_prompt_war_date(d: dict) -> date:
+    iso = str(d.get("prompt_war_on_iso") or "")[:10]
+    try:
+        return date.fromisoformat(iso)
+    except ValueError:
+        return date.min
+
+
+def _default_in_person_pw_session_for_redirect(pws: list[dict]) -> dict | None:
+    """Pick the PW session when redirecting without ``ipActionCenterCity``.
+
+    Uses each row's ``prompt_war_on`` (``prompt_war_on_iso``): prefer the **latest
+    initiative that has already occurred** — the greatest date on or before today
+    (Asia/Kolkata). Among ties on the same date, prefer higher ``team_count`` then
+    ``pw_session_id``.
+
+    If every session is still in the future relative to today, use the **earliest
+    upcoming** ``prompt_war_on`` (same tiebreakers via inverted sort for ``min``).
+    """
+    if not pws:
+        return None
+    ref = _in_person_pw_default_reference_date()
+    past_or_today = [d for d in pws if _in_person_pw_option_prompt_war_date(d) <= ref]
+
+    def _key_latest_past(d: dict) -> tuple[date, int, int]:
+        return (
+            _in_person_pw_option_prompt_war_date(d),
+            int(d.get("team_count") or 0),
+            int(d.get("pw_session_id") or 0),
+        )
+
+    if past_or_today:
+        return max(past_or_today, key=_key_latest_past)
+
+    future_only = [d for d in pws if _in_person_pw_option_prompt_war_date(d) > ref]
+    if not future_only:
+        return max(pws, key=_key_latest_past)
+
+    def _key_earliest_future(d: dict) -> tuple[date, int, int]:
+        dd = _in_person_pw_option_prompt_war_date(d)
+        tc = int(d.get("team_count") or 0)
+        sid = int(d.get("pw_session_id") or 0)
+        return (dd, -tc, -sid)
+
+    return min(future_only, key=_key_earliest_future)
+
+
+def _arena_submission_crossover_summary(sc: dict) -> dict:
+    """Compact leader counts for arena Submission Analytics (in-person + virtual pages)."""
+    if sc.get("error"):
+        return {"error": str(sc["error"])}
+    c = sc.get("counts") or {}
+    return {
+        "error": None,
+        "distinct_ip_leaders": int(c.get("distinct_ip_leaders") or 0),
+        "distinct_v_leaders": int(c.get("distinct_v_leaders") or 0),
+        "both_tracks": int(c.get("both_tracks") or 0),
+        "ip_only": int(c.get("ip_only") or 0),
+        "v_only": int(c.get("v_only") or 0),
+    }
+
+
 def _virtual_arena_challenge_stats(*, event_id: int, challenge_id: int) -> dict:
     """
     Per-arena-challenge: registration counts at opens_at / closes_at (MDC),
-    submission totals, distinct MDC-linked rows, and fresh vs returning submitter
-    counts vs the chronologically prior challenge (``closes_at``, ``opens_at``, ``id``).
+    submission totals, distinct MDC-linked rows, fresh vs returning submitter
+    counts vs the chronologically prior challenge (``closes_at``, ``opens_at``, ``id``),
+    aggregate ``total_score`` stats on imported submission rows (all teams), plus
+    the same five score summaries (min / max / avg / median / std dev) per student
+    vs professional registration segment (same MDC occupation filters as the attempt charts).
     """
     out: dict = {
         "error": None,
@@ -6050,6 +8191,34 @@ def _virtual_arena_challenge_stats(*, event_id: int, challenge_id: int) -> dict:
         "submission_returning_from_prior_challenge": 0,
         "submission_prior_challenge_id": None,
         "submission_prior_challenge_title": None,
+        "team_segment_student": 0,
+        "team_segment_professional": 0,
+        "team_segment_other": 0,
+        "team_segment_unknown": 0,
+        "attempt_buckets_student": [],
+        "attempt_buckets_professional": [],
+        "submission_score_student_n": 0,
+        "submission_score_student_min": None,
+        "submission_score_student_max": None,
+        "submission_score_student_avg": None,
+        "submission_score_student_median": None,
+        "submission_score_student_stddev": None,
+        "submission_score_professional_n": 0,
+        "submission_score_professional_min": None,
+        "submission_score_professional_max": None,
+        "submission_score_professional_avg": None,
+        "submission_score_professional_median": None,
+        "submission_score_professional_stddev": None,
+        "submission_score_agg_n": 0,
+        "submission_score_min": None,
+        "submission_score_max": None,
+        "submission_score_avg": None,
+        "submission_score_median": None,
+        "submission_score_p25": None,
+        "submission_score_p75": None,
+        "submission_score_stddev": None,
+        "submission_score_range": None,
+        "submission_crossover": None,
     }
     try:
         with engine.connect() as conn:
@@ -6117,6 +8286,211 @@ def _virtual_arena_challenge_stats(*, event_id: int, challenge_id: int) -> dict:
             if sub_row:
                 out["total_submissions"] = int(sub_row["total"] or 0)
                 out["unique_mdc_submissions"] = int(sub_row["uniq_mdc"] or 0)
+
+            score_agg = conn.execute(
+                text(
+                    """
+                    SELECT
+                      COUNT(*) FILTER (WHERE total_score IS NOT NULL)::BIGINT AS n_scored,
+                      MAX(total_score) AS sc_max,
+                      MIN(total_score) AS sc_min,
+                      AVG(total_score) AS sc_avg,
+                      STDDEV_SAMP(total_score) AS sc_stddev_samp,
+                      (
+                        SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY s2.total_score)::double precision
+                        FROM virtual_challenge_submission_rows s2
+                        WHERE s2.event_id = :eid AND s2.challenge_id = :cid
+                          AND s2.total_score IS NOT NULL
+                      ) AS sc_p25,
+                      (
+                        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY s3.total_score)::double precision
+                        FROM virtual_challenge_submission_rows s3
+                        WHERE s3.event_id = :eid AND s3.challenge_id = :cid
+                          AND s3.total_score IS NOT NULL
+                      ) AS sc_median,
+                      (
+                        SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY s4.total_score)::double precision
+                        FROM virtual_challenge_submission_rows s4
+                        WHERE s4.event_id = :eid AND s4.challenge_id = :cid
+                          AND s4.total_score IS NOT NULL
+                      ) AS sc_p75
+                    FROM virtual_challenge_submission_rows s
+                    WHERE s.event_id = :eid AND s.challenge_id = :cid
+                    """
+                ),
+                {"eid": int(event_id), "cid": int(challenge_id)},
+            ).mappings().fetchone()
+            if score_agg:
+                n_scored = int(score_agg["n_scored"] or 0)
+                out["submission_score_agg_n"] = n_scored
+
+                def _score_float(v):
+                    if v is None:
+                        return None
+                    return float(v)
+
+                if n_scored > 0:
+                    sc_max = _score_float(score_agg["sc_max"])
+                    sc_min = _score_float(score_agg["sc_min"])
+                    out["submission_score_max"] = sc_max
+                    out["submission_score_min"] = sc_min
+                    out["submission_score_avg"] = _score_float(score_agg["sc_avg"])
+                    out["submission_score_median"] = _score_float(score_agg["sc_median"])
+                    out["submission_score_p25"] = _score_float(score_agg["sc_p25"])
+                    out["submission_score_p75"] = _score_float(score_agg["sc_p75"])
+                    out["submission_score_stddev"] = _score_float(score_agg["sc_stddev_samp"])
+                    if sc_max is not None and sc_min is not None:
+                        out["submission_score_range"] = sc_max - sc_min
+
+            seg_row = conn.execute(
+                text(
+                    f"""
+                    SELECT
+                      COUNT(*) FILTER (WHERE s.virtual_mdc_registration_id IS NULL)::BIGINT
+                        AS seg_unknown,
+                      COUNT(*) FILTER (
+                        WHERE s.virtual_mdc_registration_id IS NOT NULL
+                          AND lower(btrim(m.occupation)) IN (
+                            'college_student', 'student'
+                          )
+                      )::BIGINT AS seg_student,
+                      COUNT(*) FILTER (
+                        WHERE s.virtual_mdc_registration_id IS NOT NULL
+                          AND lower(btrim(m.occupation)) IN (
+                            'professional', 'startup', 'freelance', 'freelancer'
+                          )
+                      )::BIGINT AS seg_professional,
+                      COUNT(*) FILTER (
+                        WHERE s.virtual_mdc_registration_id IS NOT NULL
+                          AND (
+                            m.occupation IS NULL
+                            OR btrim(m.occupation) = ''
+                            OR lower(btrim(m.occupation)) NOT IN (
+                              'college_student', 'student',
+                              'professional', 'startup', 'freelance', 'freelancer'
+                            )
+                          )
+                      )::BIGINT AS seg_other
+                    FROM virtual_challenge_submission_rows s
+                    LEFT JOIN {TABLE_VIRTUAL_MDC} m ON m.id = s.virtual_mdc_registration_id
+                    WHERE s.event_id = :eid AND s.challenge_id = :cid
+                    """
+                ),
+                {"eid": int(event_id), "cid": int(challenge_id)},
+            ).mappings().fetchone()
+            if seg_row:
+                out["team_segment_unknown"] = int(seg_row["seg_unknown"] or 0)
+                out["team_segment_student"] = int(seg_row["seg_student"] or 0)
+                out["team_segment_professional"] = int(seg_row["seg_professional"] or 0)
+                out["team_segment_other"] = int(seg_row["seg_other"] or 0)
+
+            _ab_sql_student = f"""
+                SELECT t.ac_bucket AS ac, COUNT(*)::BIGINT AS cnt
+                FROM (
+                  SELECT CASE
+                    WHEN s.attempts_completed IS NULL OR s.attempts_completed < 1 THEN 0
+                    ELSE s.attempts_completed::INTEGER
+                  END AS ac_bucket
+                  FROM virtual_challenge_submission_rows s
+                  INNER JOIN {TABLE_VIRTUAL_MDC} m ON m.id = s.virtual_mdc_registration_id
+                  WHERE s.event_id = :eid AND s.challenge_id = :cid
+                    AND lower(btrim(m.occupation)) IN ('college_student', 'student')
+                ) t
+                GROUP BY t.ac_bucket
+                ORDER BY t.ac_bucket
+                """
+            _ab_sql_professional = f"""
+                SELECT t.ac_bucket AS ac, COUNT(*)::BIGINT AS cnt
+                FROM (
+                  SELECT CASE
+                    WHEN s.attempts_completed IS NULL OR s.attempts_completed < 1 THEN 0
+                    ELSE s.attempts_completed::INTEGER
+                  END AS ac_bucket
+                  FROM virtual_challenge_submission_rows s
+                  INNER JOIN {TABLE_VIRTUAL_MDC} m ON m.id = s.virtual_mdc_registration_id
+                  WHERE s.event_id = :eid AND s.challenge_id = :cid
+                    AND lower(btrim(m.occupation)) IN (
+                      'professional', 'startup', 'freelance', 'freelancer'
+                    )
+                ) t
+                GROUP BY t.ac_bucket
+                ORDER BY t.ac_bucket
+                """
+            st_ab = conn.execute(text(_ab_sql_student), {"eid": int(event_id), "cid": int(challenge_id)}).mappings().all()
+            out["attempt_buckets_student"] = [
+                {"label": str(int(r["ac"])), "count": int(r["cnt"] or 0)} for r in st_ab
+            ]
+            pr_ab = conn.execute(text(_ab_sql_professional), {"eid": int(event_id), "cid": int(challenge_id)}).mappings().all()
+            out["attempt_buckets_professional"] = [
+                {"label": str(int(r["ac"])), "count": int(r["cnt"] or 0)} for r in pr_ab
+            ]
+
+            _score_seg_agg_base = f"""
+                SELECT
+                  COUNT(*)::BIGINT AS n,
+                  MIN(s.total_score) AS sc_min,
+                  MAX(s.total_score) AS sc_max,
+                  AVG(s.total_score::double precision) AS sc_avg,
+                  STDDEV_SAMP(s.total_score::double precision) AS sc_stddev,
+                  percentile_cont(0.5) WITHIN GROUP (ORDER BY s.total_score::double precision) AS sc_median
+                FROM virtual_challenge_submission_rows s
+                INNER JOIN {TABLE_VIRTUAL_MDC} m ON m.id = s.virtual_mdc_registration_id
+                WHERE s.event_id = :eid AND s.challenge_id = :cid
+                  AND {{occ_filter}}
+                  AND s.total_score IS NOT NULL
+                """
+
+            def _apply_score_seg(row, prefix: str) -> None:
+                if not row or int(row.get("n") or 0) < 1:
+                    return
+                out[f"{prefix}_n"] = int(row["n"] or 0)
+
+                def _sf(v):
+                    if v is None:
+                        return None
+                    return float(v)
+
+                out[f"{prefix}_min"] = _sf(row.get("sc_min"))
+                out[f"{prefix}_max"] = _sf(row.get("sc_max"))
+                out[f"{prefix}_avg"] = _sf(row.get("sc_avg"))
+                out[f"{prefix}_median"] = _sf(row.get("sc_median"))
+                out[f"{prefix}_stddev"] = _sf(row.get("sc_stddev"))
+
+            st_sc = conn.execute(
+                text(
+                    _score_seg_agg_base.format(
+                        occ_filter="lower(btrim(m.occupation)) IN ('college_student', 'student')"
+                    )
+                ),
+                {"eid": int(event_id), "cid": int(challenge_id)},
+            ).mappings().fetchone()
+            _apply_score_seg(st_sc, "submission_score_student")
+
+            pr_sc = conn.execute(
+                text(
+                    _score_seg_agg_base.format(
+                        occ_filter=(
+                            "lower(btrim(m.occupation)) IN ("
+                            "'professional', 'startup', 'freelance', 'freelancer')"
+                        )
+                    )
+                ),
+                {"eid": int(event_id), "cid": int(challenge_id)},
+            ).mappings().fetchone()
+            _apply_score_seg(pr_sc, "submission_score_professional")
+
+            try:
+                xp = submission_analytics_svc.SubmissionCrossoverParams(
+                    in_person_event_id=DEFAULT_IN_PERSON_EVENT_ID,
+                    virtual_event_id=int(event_id),
+                    virtual_challenge_ids=(int(challenge_id),),
+                )
+                out["submission_crossover"] = _arena_submission_crossover_summary(
+                    submission_analytics_svc.load_submission_crossover(conn, xp)
+                )
+            except Exception as exc:  # noqa: BLE001
+                out["submission_crossover"] = {"error": str(exc)}
+
         cohort = _virtual_challenge_submission_cohort_stats(int(event_id))
         cc = cohort.get(int(challenge_id)) or {}
         out["submission_distinct_teams"] = int(cc.get("submission_distinct_teams") or 0)
@@ -6131,6 +8505,432 @@ def _virtual_arena_challenge_stats(*, event_id: int, challenge_id: int) -> dict:
     return out
 
 
+def _in_person_action_center_stats(
+    *,
+    event_id: int,
+    attendance_city: str,
+    prompt_war_on: date,
+    session_label: str,
+) -> dict:
+    """
+    Session-scoped Action Center submission metrics (same response keys as
+    ``_virtual_arena_challenge_stats`` for template reuse). KPIs that used
+    challenge ``opens_at`` / ``closes_at`` on virtual are replaced with
+    MDC session registration counts and submission rows linked to MDC.
+    """
+    out: dict = {
+        "error": None,
+        "challenge_id": None,
+        "kpi_profile": "in_person_session",
+        "opens_at": None,
+        "closes_at": None,
+        "opens_at_display": None,
+        "closes_at_display": None,
+        "opens_at_set": True,
+        "registrations_at_open": None,
+        "registrations_at_close": None,
+        "total_submissions": 0,
+        "unique_mdc_submissions": 0,
+        "submission_distinct_teams": 0,
+        "submission_fresh_vs_prior_challenge": 0,
+        "submission_returning_from_prior_challenge": 0,
+        "submission_prior_challenge_id": None,
+        "submission_prior_challenge_title": None,
+        "team_segment_student": 0,
+        "team_segment_professional": 0,
+        "team_segment_other": 0,
+        "team_segment_unknown": 0,
+        "attempt_buckets_student": [],
+        "attempt_buckets_professional": [],
+        "submission_score_student_n": 0,
+        "submission_score_student_min": None,
+        "submission_score_student_max": None,
+        "submission_score_student_avg": None,
+        "submission_score_student_median": None,
+        "submission_score_student_stddev": None,
+        "submission_score_professional_n": 0,
+        "submission_score_professional_min": None,
+        "submission_score_professional_max": None,
+        "submission_score_professional_avg": None,
+        "submission_score_professional_median": None,
+        "submission_score_professional_stddev": None,
+        "submission_score_agg_n": 0,
+        "submission_score_min": None,
+        "submission_score_max": None,
+        "submission_score_avg": None,
+        "submission_score_median": None,
+        "submission_score_p25": None,
+        "submission_score_p75": None,
+        "submission_score_stddev": None,
+        "submission_score_range": None,
+        "submission_crossover": None,
+    }
+    city = (attendance_city or "").strip()
+    if not city:
+        out["error"] = "no attendance city"
+        return out
+    slab = (session_label or "").strip()[:IPCSR_SESSION_LABEL_MAX_LEN]
+    base_params = {
+        "eid": int(event_id),
+        "acity": city[:500],
+        "pwon": prompt_war_on,
+        "slab": slab,
+    }
+
+    def _ipcsr_sess_sql(alias: str) -> str:
+        """Session scope on submission rows; qualify columns for JOINs to MDC (both have ``event_id``)."""
+        return (
+            f"{alias}.event_id = :eid AND {alias}.sheet_kind = 'main' "
+            f"AND lower(btrim({alias}.attendance_city)) = lower(btrim(:acity)) "
+            f"AND {alias}.prompt_war_on = :pwon "
+            f"AND {alias}.session_label_normalized = lower(btrim(:slab))"
+        )
+
+    def _score_float(v):
+        if v is None:
+            return None
+        return float(v)
+
+    try:
+        with engine.connect() as conn:
+            mdc_row = conn.execute(
+                text(
+                    f"""
+                    SELECT COUNT(*)::BIGINT AS n
+                    FROM {TABLE_IN_PERSON_MDC} m
+                    WHERE m.event_id = :eid
+                      AND lower(btrim(COALESCE(m.attendance_city, ''))) = lower(btrim(:acity))
+                      AND m.prompt_war_on = :pwon
+                      AND m.session_label_normalized = lower(btrim(:slab))
+                    """
+                ),
+                base_params,
+            ).mappings().fetchone()
+            if mdc_row:
+                out["registrations_at_open"] = int(mdc_row["n"] or 0)
+
+            linked_row = conn.execute(
+                text(
+                    f"""
+                    SELECT COUNT(*)::BIGINT AS n
+                    FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} s
+                    WHERE {_ipcsr_sess_sql("s")}
+                      AND s.in_person_mdc_registration_id IS NOT NULL
+                    """
+                ),
+                base_params,
+            ).mappings().fetchone()
+            if linked_row:
+                out["registrations_at_close"] = int(linked_row["n"] or 0)
+
+            sub_row = conn.execute(
+                text(
+                    f"""
+                    SELECT COUNT(*)::BIGINT AS total,
+                           COUNT(DISTINCT s.in_person_mdc_registration_id)
+                             FILTER (WHERE s.in_person_mdc_registration_id IS NOT NULL)::BIGINT AS uniq_mdc
+                    FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} s
+                    WHERE {_ipcsr_sess_sql("s")}
+                    """
+                ),
+                base_params,
+            ).mappings().fetchone()
+            if sub_row:
+                out["total_submissions"] = int(sub_row["total"] or 0)
+                out["unique_mdc_submissions"] = int(sub_row["uniq_mdc"] or 0)
+
+            score_agg = conn.execute(
+                text(
+                    f"""
+                    SELECT
+                      COUNT(*) FILTER (WHERE s.total_score IS NOT NULL)::BIGINT AS n_scored,
+                      MAX(s.total_score) AS sc_max,
+                      MIN(s.total_score) AS sc_min,
+                      AVG(s.total_score) AS sc_avg,
+                      STDDEV_SAMP(s.total_score) AS sc_stddev_samp,
+                      (
+                        SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY s2.total_score)::double precision
+                        FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} s2
+                        WHERE {_ipcsr_sess_sql("s2")}
+                          AND s2.total_score IS NOT NULL
+                      ) AS sc_p25,
+                      (
+                        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY s3.total_score)::double precision
+                        FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} s3
+                        WHERE {_ipcsr_sess_sql("s3")}
+                          AND s3.total_score IS NOT NULL
+                      ) AS sc_median,
+                      (
+                        SELECT percentile_cont(0.75) WITHIN GROUP (ORDER BY s4.total_score)::double precision
+                        FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} s4
+                        WHERE {_ipcsr_sess_sql("s4")}
+                          AND s4.total_score IS NOT NULL
+                      ) AS sc_p75
+                    FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} s
+                    WHERE {_ipcsr_sess_sql("s")}
+                    """
+                ),
+                base_params,
+            ).mappings().fetchone()
+            if score_agg:
+                n_scored = int(score_agg["n_scored"] or 0)
+                out["submission_score_agg_n"] = n_scored
+                if n_scored > 0:
+                    sc_max = _score_float(score_agg["sc_max"])
+                    sc_min = _score_float(score_agg["sc_min"])
+                    out["submission_score_max"] = sc_max
+                    out["submission_score_min"] = sc_min
+                    out["submission_score_avg"] = _score_float(score_agg["sc_avg"])
+                    out["submission_score_median"] = _score_float(score_agg["sc_median"])
+                    out["submission_score_p25"] = _score_float(score_agg["sc_p25"])
+                    out["submission_score_p75"] = _score_float(score_agg["sc_p75"])
+                    out["submission_score_stddev"] = _score_float(score_agg["sc_stddev_samp"])
+                    if sc_max is not None and sc_min is not None:
+                        out["submission_score_range"] = sc_max - sc_min
+
+            seg_row = conn.execute(
+                text(
+                    f"""
+                    SELECT
+                      COUNT(*) FILTER (WHERE s.in_person_mdc_registration_id IS NULL)::BIGINT
+                        AS seg_unknown,
+                      COUNT(*) FILTER (
+                        WHERE s.in_person_mdc_registration_id IS NOT NULL
+                          AND lower(btrim(m.occupation)) IN ('college_student', 'student')
+                      )::BIGINT AS seg_student,
+                      COUNT(*) FILTER (
+                        WHERE s.in_person_mdc_registration_id IS NOT NULL
+                          AND lower(btrim(m.occupation)) IN (
+                            'professional', 'startup', 'freelance', 'freelancer'
+                          )
+                      )::BIGINT AS seg_professional,
+                      COUNT(*) FILTER (
+                        WHERE s.in_person_mdc_registration_id IS NOT NULL
+                          AND (
+                            m.occupation IS NULL
+                            OR btrim(m.occupation) = ''
+                            OR lower(btrim(m.occupation)) NOT IN (
+                              'college_student', 'student',
+                              'professional', 'startup', 'freelance', 'freelancer'
+                            )
+                          )
+                      )::BIGINT AS seg_other
+                    FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} s
+                    LEFT JOIN {TABLE_IN_PERSON_MDC} m ON m.id = s.in_person_mdc_registration_id
+                    WHERE {_ipcsr_sess_sql("s")}
+                    """
+                ),
+                base_params,
+            ).mappings().fetchone()
+            if seg_row:
+                out["team_segment_unknown"] = int(seg_row["seg_unknown"] or 0)
+                out["team_segment_student"] = int(seg_row["seg_student"] or 0)
+                out["team_segment_professional"] = int(seg_row["seg_professional"] or 0)
+                out["team_segment_other"] = int(seg_row["seg_other"] or 0)
+
+            _ab_sql_student = f"""
+                SELECT t.ac_bucket AS ac, COUNT(*)::BIGINT AS cnt
+                FROM (
+                  SELECT CASE
+                    WHEN s.attempts_completed IS NULL OR s.attempts_completed < 1 THEN 0
+                    ELSE s.attempts_completed::INTEGER
+                  END AS ac_bucket
+                  FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} s
+                  INNER JOIN {TABLE_IN_PERSON_MDC} m ON m.id = s.in_person_mdc_registration_id
+                  WHERE {_ipcsr_sess_sql("s")}
+                    AND lower(btrim(m.occupation)) IN ('college_student', 'student')
+                ) t
+                GROUP BY t.ac_bucket
+                ORDER BY t.ac_bucket
+                """
+            _ab_sql_professional = f"""
+                SELECT t.ac_bucket AS ac, COUNT(*)::BIGINT AS cnt
+                FROM (
+                  SELECT CASE
+                    WHEN s.attempts_completed IS NULL OR s.attempts_completed < 1 THEN 0
+                    ELSE s.attempts_completed::INTEGER
+                  END AS ac_bucket
+                  FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} s
+                  INNER JOIN {TABLE_IN_PERSON_MDC} m ON m.id = s.in_person_mdc_registration_id
+                  WHERE {_ipcsr_sess_sql("s")}
+                    AND lower(btrim(m.occupation)) IN (
+                      'professional', 'startup', 'freelance', 'freelancer'
+                    )
+                ) t
+                GROUP BY t.ac_bucket
+                ORDER BY t.ac_bucket
+                """
+            st_ab = conn.execute(text(_ab_sql_student), base_params).mappings().all()
+            out["attempt_buckets_student"] = [
+                {"label": str(int(r["ac"])), "count": int(r["cnt"] or 0)} for r in st_ab
+            ]
+            pr_ab = conn.execute(text(_ab_sql_professional), base_params).mappings().all()
+            out["attempt_buckets_professional"] = [
+                {"label": str(int(r["ac"])), "count": int(r["cnt"] or 0)} for r in pr_ab
+            ]
+
+            _score_seg_agg_base = f"""
+                SELECT
+                  COUNT(*)::BIGINT AS n,
+                  MIN(s.total_score) AS sc_min,
+                  MAX(s.total_score) AS sc_max,
+                  AVG(s.total_score::double precision) AS sc_avg,
+                  STDDEV_SAMP(s.total_score::double precision) AS sc_stddev,
+                  percentile_cont(0.5) WITHIN GROUP (ORDER BY s.total_score::double precision) AS sc_median
+                FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} s
+                INNER JOIN {TABLE_IN_PERSON_MDC} m ON m.id = s.in_person_mdc_registration_id
+                WHERE {_ipcsr_sess_sql("s")}
+                  AND {{occ_filter}}
+                  AND s.total_score IS NOT NULL
+                """
+
+            def _apply_score_seg(row, prefix: str) -> None:
+                if not row or int(row.get("n") or 0) < 1:
+                    return
+                out[f"{prefix}_n"] = int(row["n"] or 0)
+
+                def _sf(v):
+                    if v is None:
+                        return None
+                    return float(v)
+
+                out[f"{prefix}_min"] = _sf(row.get("sc_min"))
+                out[f"{prefix}_max"] = _sf(row.get("sc_max"))
+                out[f"{prefix}_avg"] = _sf(row.get("sc_avg"))
+                out[f"{prefix}_median"] = _sf(row.get("sc_median"))
+                out[f"{prefix}_stddev"] = _sf(row.get("sc_stddev"))
+
+            st_sc = conn.execute(
+                text(
+                    _score_seg_agg_base.format(
+                        occ_filter="lower(btrim(m.occupation)) IN ('college_student', 'student')"
+                    )
+                ),
+                base_params,
+            ).mappings().fetchone()
+            _apply_score_seg(st_sc, "submission_score_student")
+
+            pr_sc = conn.execute(
+                text(
+                    _score_seg_agg_base.format(
+                        occ_filter=(
+                            "lower(btrim(m.occupation)) IN ("
+                            "'professional', 'startup', 'freelance', 'freelancer')"
+                        )
+                    )
+                ),
+                base_params,
+            ).mappings().fetchone()
+            _apply_score_seg(pr_sc, "submission_score_professional")
+
+            pick = conn.execute(
+                text(
+                    f"""
+                    SELECT o.prev_id, o.prev_title
+                    FROM (
+                      SELECT id,
+                             LAG(id) OVER (
+                               PARTITION BY event_id
+                               ORDER BY prompt_war_on ASC NULLS FIRST,
+                                        lower(trim(COALESCE(session_label, ''))) ASC,
+                                        id ASC
+                             ) AS prev_id,
+                             LAG(display_name) OVER (
+                               PARTITION BY event_id
+                               ORDER BY prompt_war_on ASC NULLS FIRST,
+                                        lower(trim(COALESCE(session_label, ''))) ASC,
+                               id ASC
+                             ) AS prev_title,
+                             city,
+                             prompt_war_on,
+                             session_label
+                      FROM {TABLE_IN_PERSON_PW_SESSIONS}
+                      WHERE event_id = :eid
+                    ) o
+                    WHERE lower(trim(o.city)) = lower(trim(:acity))
+                      AND o.prompt_war_on = :pwon
+                      AND lower(trim(COALESCE(o.session_label, ''))) = lower(trim(COALESCE(:slab, '')))
+                    LIMIT 1
+                    """
+                ),
+                base_params,
+            ).mappings().fetchone()
+            prev_id = int(pick["prev_id"]) if pick and pick.get("prev_id") is not None else None
+            out["submission_prior_challenge_title"] = (
+                str(pick["prev_title"]).strip() if pick and pick.get("prev_title") else None
+            )
+            out["submission_prior_challenge_id"] = prev_id
+
+            cur_ct = conn.execute(
+                text(
+                    f"""
+                    SELECT COUNT(DISTINCT s.leader_email_normalized)::BIGINT AS n
+                    FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} s
+                    WHERE {_ipcsr_sess_sql("s")}
+                      AND s.leader_email_normalized IS NOT NULL
+                    """
+                ),
+                base_params,
+            ).scalar()
+            distinct_teams = int(cur_ct or 0)
+            out["submission_distinct_teams"] = distinct_teams
+
+            if prev_id is None or distinct_teams == 0:
+                out["submission_fresh_vs_prior_challenge"] = distinct_teams
+                out["submission_returning_from_prior_challenge"] = 0
+            else:
+                cohort_row = conn.execute(
+                    text(
+                        f"""
+                        WITH cur AS (
+                          SELECT DISTINCT s.leader_email_normalized AS em
+                          FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} s
+                          WHERE {_ipcsr_sess_sql("s")}
+                            AND s.leader_email_normalized IS NOT NULL
+                        ),
+                        prev AS (
+                          SELECT DISTINCT p.leader_email_normalized AS em
+                          FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} p
+                          INNER JOIN {TABLE_IN_PERSON_PW_SESSIONS} ps ON ps.id = :prev_id
+                          WHERE p.event_id = :eid AND p.sheet_kind = 'main'
+                            AND p.attendance_city_normalized = lower(btrim(ps.city))
+                            AND p.prompt_war_on = ps.prompt_war_on
+                            AND p.session_label_normalized = lower(btrim(COALESCE(ps.session_label, '')))
+                            AND p.leader_email_normalized IS NOT NULL
+                        )
+                        SELECT
+                          (SELECT COUNT(*)::bigint FROM cur c
+                             WHERE EXISTS (SELECT 1 FROM prev p WHERE p.em = c.em)) AS ret,
+                          (SELECT COUNT(*)::bigint FROM cur c
+                             WHERE NOT EXISTS (SELECT 1 FROM prev p WHERE p.em = c.em)) AS fresh
+                        """
+                    ),
+                    {**base_params, "prev_id": prev_id},
+                ).mappings().fetchone()
+                if cohort_row:
+                    out["submission_returning_from_prior_challenge"] = int(cohort_row["ret"] or 0)
+                    out["submission_fresh_vs_prior_challenge"] = int(cohort_row["fresh"] or 0)
+
+            try:
+                xp = submission_analytics_svc.SubmissionCrossoverParams(
+                    in_person_event_id=int(event_id),
+                    virtual_event_id=DEFAULT_VIRTUAL_EVENT_ID,
+                    ip_sheet_kind="main",
+                    ip_attendance_city=city,
+                    ip_prompt_war_on=prompt_war_on,
+                    ip_session_label_normalized=slab,
+                    virtual_challenge_ids=(),
+                )
+                out["submission_crossover"] = _arena_submission_crossover_summary(
+                    submission_analytics_svc.load_submission_crossover(conn, xp)
+                )
+            except Exception as exc:  # noqa: BLE001
+                out["submission_crossover"] = {"error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        out["error"] = str(exc)
+    return out
+
+
 @app.get("/")
 def main_dashboard():
     in_person_event_id = request.args.get("inPersonEventId", type=int) or DEFAULT_IN_PERSON_EVENT_ID
@@ -6139,11 +8939,15 @@ def main_dashboard():
     v_ov_raw = (request.args.get("virtualOverview") or "").strip()
     if v_ov_raw:
         v_lb_scope, v_ov_cid = _decode_virtual_overview(v_ov_raw)
+        if not PW_GLOBAL_LEADERBOARDS_ENABLED and v_lb_scope == "global":
+            v_lb_scope = "arena"
+            v_ov_cid = None
         if v_lb_scope == "arena" and v_ov_cid is not None:
             challenge_id = int(v_ov_cid)
     else:
-        raw_v_lb = (request.args.get("vLbScope") or "global").strip().lower()
-        v_lb_scope = raw_v_lb if raw_v_lb in ("global", "arena") else "global"
+        _v_lb_default = "arena" if not PW_GLOBAL_LEADERBOARDS_ENABLED else "global"
+        raw_v_lb = (request.args.get("vLbScope") or _v_lb_default).strip().lower()
+        v_lb_scope = raw_v_lb if raw_v_lb in ("global", "arena") else _v_lb_default
     ip_ac_opts = _in_person_pw_options(in_person_event_id)
     ov_raw = (request.args.get("inPersonOverview") or "").strip()
     legacy_city = (request.args.get("inPersonTopCity") or "").strip() or None
@@ -6154,6 +8958,13 @@ def main_dashboard():
         ip_lb_scope, focus_city_raw, raw_sess = "city", legacy_city, legacy_sess
     else:
         ip_lb_scope, focus_city_raw, raw_sess = "global", None, ""
+    if not PW_GLOBAL_LEADERBOARDS_ENABLED and ip_lb_scope == "global" and ip_ac_opts:
+        o0 = _default_in_person_pw_session_for_redirect(ip_ac_opts) or ip_ac_opts[0]
+        focus_city_raw = str(o0.get("city") or "").strip() or None
+        iso = str(o0.get("prompt_war_on_iso") or "").strip()
+        lab = str(o0.get("session_label") or "")
+        raw_sess = f"{iso}|{lab}" if lab else iso
+        ip_lb_scope = "city"
     focus_pw_d, focus_pw_lab = _parse_main_dashboard_pw_session(raw_sess)
     focus_session_value = ""
     ip_focus_lb = None
@@ -6179,7 +8990,9 @@ def main_dashboard():
         )
     else:
         in_person_overview_value = "global"
-    ip_overview_options = [{"value": "global", "label": "Global (main challenge)"}]
+    ip_overview_options: list[dict[str, str]] = []
+    if PW_GLOBAL_LEADERBOARDS_ENABLED:
+        ip_overview_options.append({"value": "global", "label": "Global (main challenge)"})
     for o in ip_ac_opts:
         ip_overview_options.append(
             {
@@ -6217,7 +9030,9 @@ def main_dashboard():
     ocid = overview.get("overview_arena_challenge_id")
     if isinstance(ocid, int):
         challenge_id = ocid
-    virtual_overview_options = [{"value": "global", "label": "Global (all arenas)"}]
+    virtual_overview_options: list[dict[str, str]] = []
+    if PW_GLOBAL_LEADERBOARDS_ENABLED:
+        virtual_overview_options.append({"value": "global", "label": "Global (all arenas)"})
     seen_v_cids: set[int] = set()
     for ch in virtual_lb_challenges:
         cid = int(ch["id"])
@@ -6235,7 +9050,7 @@ def main_dashboard():
                 "label": f"Challenge {challenge_id}",
             }
         )
-    if v_lb_scope == "global":
+    if v_lb_scope == "global" and PW_GLOBAL_LEADERBOARDS_ENABLED:
         virtual_overview_value = "global"
     else:
         virtual_overview_value = _encode_virtual_overview_challenge(int(challenge_id))
@@ -6257,16 +9072,455 @@ def main_dashboard():
         v_lb_scope=v_lb_scope,
         virtual_overview_value=virtual_overview_value,
         virtual_overview_options=virtual_overview_options,
+        global_leaderboards_enabled=PW_GLOBAL_LEADERBOARDS_ENABLED,
     )
+
+
+@app.get("/api/in-person/sessions")
+def api_in_person_sessions_list():
+    eid = request.args.get("event_id", type=int)
+    if not eid:
+        return jsonify({"error": "event_id is required"}), 400
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    f"""
+                    SELECT
+                      s.id,
+                      s.city,
+                      s.prompt_war_on,
+                      s.session_label,
+                      s.scope_key,
+                      s.display_name,
+                      (SELECT COUNT(*)::bigint FROM {TABLE_IN_PERSON_MDC} r WHERE r.pw_session_id = s.id) AS n_mdc,
+                      (SELECT COUNT(*)::bigint FROM {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS} c
+                       WHERE c.pw_session_id = s.id) AS n_csr
+                    FROM {TABLE_IN_PERSON_PW_SESSIONS} s
+                    WHERE s.event_id = :eid
+                    ORDER BY s.prompt_war_on DESC, s.city, s.session_label
+                    """
+                ),
+                {"eid": int(eid)},
+            ).mappings().all()
+    except Exception as exc:  # noqa: BLE001
+        if _is_missing_in_person_pw_sessions_table(exc):
+            app.logger.warning(
+                "sessions list: in_person_pw_sessions missing — apply database/migrate_sessions.sql"
+            )
+            return jsonify(
+                {
+                    "event_id": int(eid),
+                    "sessions": [],
+                    "migration_required": True,
+                    "hint": "Run database/migrate_sessions.sql against this database (same DATABASE_URL as the app).",
+                }
+            )
+        app.logger.warning("sessions list failed: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+    out = []
+    for r in rows:
+        pwo = r["prompt_war_on"]
+        if isinstance(pwo, datetime):
+            pwo = pwo.date()
+        n_mdc = int(r.get("n_mdc") or 0)
+        n_csr = int(r.get("n_csr") or 0)
+        out.append(
+            {
+                "id": int(r["id"]),
+                "city": str(r.get("city") or ""),
+                "prompt_war_on": pwo.isoformat() if isinstance(pwo, date) else str(pwo)[:10],
+                "session_label": str(r.get("session_label") or ""),
+                "scope_key": str(r.get("scope_key") or ""),
+                "display_name": str(r.get("display_name") or ""),
+                "has_data": (n_mdc + n_csr) > 0,
+            }
+        )
+    return jsonify({"event_id": int(eid), "sessions": out})
+
+
+@app.post("/api/in-person/sessions")
+def api_in_person_sessions_create():
+    body = request.get_json(silent=True) or {}
+    eid = body.get("event_id")
+    city_raw = (body.get("city") or "").strip()
+    pwo_raw = body.get("prompt_war_on")
+    slab = str(body.get("session_label") or "").strip()[:IPCSR_SESSION_LABEL_MAX_LEN]
+    if eid is None or not city_raw or not pwo_raw:
+        return jsonify({"error": "event_id, city, and prompt_war_on are required"}), 400
+    try:
+        pwo = date.fromisoformat(str(pwo_raw).strip()[:10])
+    except ValueError:
+        return jsonify({"error": "prompt_war_on must be YYYY-MM-DD"}), 400
+    rej = _reject_legacy_prompt_war_on_date(pwo)
+    if rej:
+        return rej
+    city_n = city_raw.strip().lower()
+    try:
+        with engine.connect() as conn:
+            ev = conn.execute(
+                text("SELECT id, kind FROM events WHERE id = :id"),
+                {"id": int(eid)},
+            ).fetchone()
+            if not ev or str(ev[1]) != "in_person":
+                return jsonify({"error": "event must be in_person"}), 400
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": str(exc)}), 500
+    ins_sql = text(
+        f"""
+        INSERT INTO {TABLE_IN_PERSON_PW_SESSIONS} (event_id, city, prompt_war_on, session_label)
+        VALUES (:event_id, :city, :prompt_war_on, :session_label)
+        ON CONFLICT (event_id, city, prompt_war_on, session_label) DO NOTHING
+        RETURNING id, city, prompt_war_on, session_label, scope_key, display_name
+        """
+    )
+    try:
+        with engine.begin() as conn:
+            row = conn.execute(
+                ins_sql,
+                {
+                    "event_id": int(eid),
+                    "city": city_n,
+                    "prompt_war_on": pwo,
+                    "session_label": slab,
+                },
+            ).mappings().first()
+            if row:
+                pw_invalidate_read_caches()
+                rpwo = row["prompt_war_on"]
+                if isinstance(rpwo, datetime):
+                    rpwo = rpwo.date()
+                return (
+                    jsonify(
+                        {
+                            "id": int(row["id"]),
+                            "city": str(row.get("city") or ""),
+                            "prompt_war_on": rpwo.isoformat() if isinstance(rpwo, date) else str(rpwo)[:10],
+                            "session_label": str(row.get("session_label") or ""),
+                            "scope_key": str(row.get("scope_key") or ""),
+                            "display_name": str(row.get("display_name") or ""),
+                        }
+                    ),
+                    201,
+                )
+            ex = conn.execute(
+                text(
+                    f"""
+                    SELECT id, display_name
+                    FROM {TABLE_IN_PERSON_PW_SESSIONS}
+                    WHERE event_id = :event_id AND city = :city
+                      AND prompt_war_on = :prompt_war_on AND session_label = :session_label
+                    """
+                ),
+                {
+                    "event_id": int(eid),
+                    "city": city_n,
+                    "prompt_war_on": pwo,
+                    "session_label": slab,
+                },
+            ).mappings().first()
+            if not ex:
+                return jsonify({"error": "Session already exists"}), 409
+            return (
+                jsonify(
+                    {
+                        "error": "Session already exists",
+                        "existing": {"id": int(ex["id"]), "display_name": str(ex.get("display_name") or "")},
+                    }
+                ),
+                409,
+            )
+    except IntegrityError as exc:
+        app.logger.warning("sessions create conflict: %s", exc)
+        return jsonify({"error": "Session already exists"}), 409
+    except Exception as exc:  # noqa: BLE001
+        if _is_missing_in_person_pw_sessions_table(exc):
+            return jsonify(
+                {
+                    "error": "in_person_pw_sessions table is missing.",
+                    "hint": "psql with your DATABASE_URL: \\i database/migrate_sessions.sql",
+                }
+            ), 503
+        app.logger.warning("sessions create failed: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.delete("/api/in-person/sessions/<int:session_id>")
+def api_in_person_sessions_delete(session_id: int):
+    eid = request.args.get("event_id", type=int)
+    if not eid:
+        return jsonify({"error": "event_id is required"}), 400
+    sid = int(session_id)
+    try:
+        with engine.begin() as conn:
+            exists = conn.execute(
+                text(
+                    f"SELECT 1 FROM {TABLE_IN_PERSON_PW_SESSIONS} WHERE id = :sid AND event_id = :eid"
+                ),
+                {"sid": sid, "eid": int(eid)},
+            ).scalar_one_or_none()
+            if exists is None:
+                return jsonify({"error": "Session not found"}), 404
+            n_snap = conn.execute(
+                text(
+                    """
+                    UPDATE hawkeye_rsvp_snapshots
+                    SET pw_session_id = NULL
+                    WHERE event_id = :eid AND pw_session_id = :sid
+                    """
+                ),
+                {"eid": int(eid), "sid": sid},
+            ).rowcount
+            n_mdc = conn.execute(
+                text(
+                    f"""
+                    UPDATE {TABLE_IN_PERSON_MDC}
+                    SET pw_session_id = NULL
+                    WHERE event_id = :eid AND pw_session_id = :sid
+                    """
+                ),
+                {"eid": int(eid), "sid": sid},
+            ).rowcount
+            n_csr = conn.execute(
+                text(
+                    f"""
+                    UPDATE {TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS}
+                    SET pw_session_id = NULL
+                    WHERE event_id = :eid AND pw_session_id = :sid
+                    """
+                ),
+                {"eid": int(eid), "sid": sid},
+            ).rowcount
+            n_map = conn.execute(
+                text(
+                    """
+                    UPDATE event_external_mappings
+                    SET pw_session_id = NULL
+                    WHERE event_id = :eid AND pw_session_id = :sid
+                    """
+                ),
+                {"eid": int(eid), "sid": sid},
+            ).rowcount
+            res = conn.execute(
+                text(
+                    f"DELETE FROM {TABLE_IN_PERSON_PW_SESSIONS} WHERE id = :sid AND event_id = :eid RETURNING id"
+                ),
+                {"sid": sid, "eid": int(eid)},
+            ).scalar_one_or_none()
+            if res is None:
+                return jsonify({"error": "Session not found"}), 404
+        pw_invalidate_read_caches()
+        return (
+            jsonify(
+                {
+                    "ok": True,
+                    "id": sid,
+                    "unlinked": {
+                        "hawkeye_snapshots": int(n_snap or 0),
+                        "mdc_registrations": int(n_mdc or 0),
+                        "challenge_submissions": int(n_csr or 0),
+                        "hawkeye_mappings": int(n_map or 0),
+                    },
+                }
+            ),
+            200,
+        )
+    except Exception as exc:  # noqa: BLE001
+        if _is_missing_in_person_pw_sessions_table(exc):
+            return jsonify(
+                {
+                    "error": "in_person_pw_sessions table is missing.",
+                    "hint": "psql with your DATABASE_URL: \\i database/migrate_sessions.sql",
+                }
+            ), 503
+        app.logger.warning("sessions delete failed: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.post("/api/in-person/hawkeye/mapping")
+def api_in_person_hawkeye_mapping_save():
+    body = request.get_json(silent=True) or {}
+    eid = body.get("event_id")
+    event_tag = (body.get("event_tag") or "").strip()
+    if eid is None or not event_tag:
+        return jsonify({"error": "event_id and event_tag are required"}), 400
+    notes = body.get("notes")
+    notes_s = notes.strip() if isinstance(notes, str) else None
+    if notes_s == "":
+        notes_s = None
+    pw_sid = body.get("pw_session_id")
+    try:
+        pw_int = int(pw_sid) if pw_sid is not None and str(pw_sid).strip() != "" else None
+    except (TypeError, ValueError):
+        return jsonify({"error": "pw_session_id must be an integer"}), 400
+    try:
+        row = hawkeye_service.save_mapping(
+            engine, int(eid), event_tag, notes=notes_s, pw_session_id=pw_int
+        )
+        pw_invalidate_read_caches()
+        return jsonify(row)
+    except HawkeyeError as exc:
+        app.logger.warning("hawkeye mapping save failed: %s", exc)
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:  # noqa: BLE001
+        app.logger.warning("hawkeye mapping save failed: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.get("/api/in-person/hawkeye/mapping")
+def api_in_person_hawkeye_mapping_get():
+    eid = request.args.get("event_id", type=int)
+    if not eid:
+        return jsonify({"error": "event_id is required"}), 400
+    pw_sid = request.args.get("pw_session_id", type=int)
+    try:
+        if pw_sid:
+            m = hawkeye_service.get_mapping(engine, int(eid), pw_session_id=int(pw_sid))
+        else:
+            m = hawkeye_service.get_mapping(engine, int(eid))
+        if not m:
+            return jsonify({"configured": False})
+        return jsonify(m)
+    except Exception as exc:  # noqa: BLE001
+        app.logger.warning("hawkeye mapping get failed: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.post("/api/in-person/hawkeye/sync")
+def api_in_person_hawkeye_sync():
+    body = request.get_json(silent=True) or {}
+    eid = body.get("event_id")
+    if eid is None:
+        return jsonify({"error": "event_id is required"}), 400
+    pw_sid = body.get("pw_session_id")
+    try:
+        pw_int = int(pw_sid) if pw_sid is not None and str(pw_sid).strip() != "" else None
+    except (TypeError, ValueError):
+        return jsonify({"error": "pw_session_id must be an integer"}), 400
+    try:
+        out = hawkeye_service.sync_event(
+            engine,
+            int(eid),
+            triggered_by="manual",
+            pw_session_id=pw_int,
+            invalidate_caches=pw_invalidate_read_caches,
+        )
+        return jsonify(out)
+    except HawkeyeNotConfiguredError as exc:
+        app.logger.warning("hawkeye sync not configured: %s", exc)
+        return jsonify({"error": str(exc)}), 404
+    except HawkeyeError as exc:
+        app.logger.warning("hawkeye sync failed: %s", exc)
+        return jsonify({"error": str(exc)}), 502
+    except Exception as exc:  # noqa: BLE001
+        app.logger.warning("hawkeye sync unexpected error: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.get("/api/in-person/hawkeye/stats")
+def api_in_person_hawkeye_stats():
+    eid = request.args.get("event_id", type=int)
+    if not eid:
+        return jsonify({"error": "event_id is required"}), 400
+    pw_sid = request.args.get("pw_session_id", type=int)
+    try:
+        if pw_sid:
+            if not hawkeye_service.get_mapping(engine, int(eid), pw_session_id=int(pw_sid)):
+                return jsonify({"configured": False})
+            snap = hawkeye_service.get_latest_snapshot(engine, int(eid), pw_session_id=int(pw_sid))
+        else:
+            if not hawkeye_service.get_mapping(engine, int(eid)):
+                return jsonify({"configured": False})
+            snap = hawkeye_service.get_latest_snapshot(engine, int(eid))
+        if not snap:
+            return jsonify({"configured": True, "has_snapshot": False})
+        return jsonify({"configured": True, "has_snapshot": True, **snap})
+    except Exception as exc:  # noqa: BLE001
+        app.logger.warning("hawkeye stats failed: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.get("/api/in-person/hawkeye/events")
+def api_in_person_hawkeye_events():
+    """
+    Per-PW-session Hawkeye rows for one in-person event (defaults to
+    ``DEFAULT_IN_PERSON_EVENT_ID``). Each row carries the PW-session display
+    label, current ``external_key`` (if mapped) and latest snapshot stats.
+    """
+    eid = request.args.get("event_id", type=int) or DEFAULT_IN_PERSON_EVENT_ID
+    try:
+        sessions = _in_person_pw_options(int(eid))
+        with engine.connect() as conn:
+            rows = hawkeye_service.list_pw_session_rows(engine, int(eid), sessions)
+            rows = _overlay_manual_rsvp_on_hawkeye_event_rows(conn, int(eid), rows)
+        return jsonify({"event_id": int(eid), "events": rows})
+    except Exception as exc:  # noqa: BLE001
+        app.logger.warning("hawkeye list events failed: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.post("/api/in-person/hawkeye/fetch")
+def api_in_person_hawkeye_fetch():
+    """Save the Hawkeye event tag for a PW session and immediately fetch its stats."""
+    body = request.get_json(silent=True) or {}
+    eid = body.get("event_id")
+    event_tag = (body.get("event_tag") or "").strip()
+    if eid is None or not event_tag:
+        return jsonify({"error": "event_id and event_tag are required"}), 400
+    scope_key = body.get("scope_key")
+    scope_key = (scope_key or "").strip() if isinstance(scope_key, str) else ""
+    scope_obj = body.get("scope")
+    scope_dict = scope_obj if isinstance(scope_obj, dict) else None
+    notes = body.get("notes")
+    notes_s = notes.strip() if isinstance(notes, str) else None
+    if notes_s == "":
+        notes_s = None
+    pw_sid = body.get("pw_session_id")
+    try:
+        pw_int = int(pw_sid) if pw_sid is not None and str(pw_sid).strip() != "" else None
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "pw_session_id must be an integer"}), 400
+    try:
+        out = hawkeye_service.save_mapping_and_sync(
+            engine,
+            int(eid),
+            event_tag,
+            triggered_by="manual",
+            scope_key=scope_key,
+            scope=scope_dict,
+            notes=notes_s,
+            pw_session_id=pw_int,
+            invalidate_caches=pw_invalidate_read_caches,
+        )
+        return jsonify({"ok": True, **out})
+    except HawkeyeNotConfiguredError as exc:
+        app.logger.warning("hawkeye fetch not configured: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 404
+    except HawkeyeError as exc:
+        app.logger.warning("hawkeye fetch failed: %s", exc)
+        return jsonify({"ok": False, "error": str(exc), "status_code": exc.status_code}), 502
+    except Exception as exc:  # noqa: BLE001
+        app.logger.warning("hawkeye fetch unexpected error: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @app.get("/api/in-person/main-data-center/stats")
 def api_in_person_mdc_stats():
     """JSON payload for Main Data Center charts (optional ``mdc_date_from`` / ``mdc_date_to``, IST dates)."""
     eid = request.args.get("inPersonEventId", type=int) or DEFAULT_IN_PERSON_EVENT_ID
+    v_cross = request.args.get("crossoverVirtualEventId", type=int)
     d0 = _parse_mdc_dashboard_iso_date(request.args.get("mdc_date_from"))
     d1 = _parse_mdc_dashboard_iso_date(request.args.get("mdc_date_to"))
-    payload = _load_mdc_stats(eid, mode="in_person", date_from=d0, date_to=d1)
+    ip_cx = int(eid) if v_cross and int(v_cross) > 0 and int(eid) > 0 else None
+    v_cx = int(v_cross) if v_cross and int(v_cross) > 0 and int(eid) > 0 else None
+    payload = _load_mdc_stats(
+        eid,
+        mode="in_person",
+        date_from=d0,
+        date_to=d1,
+        mdc_crossover_in_person_event_id=ip_cx,
+        mdc_crossover_virtual_event_id=v_cx,
+    )
     return jsonify(payload)
 
 
@@ -6274,10 +9528,110 @@ def api_in_person_mdc_stats():
 def api_virtual_mdc_stats():
     """JSON payload for Virtual Main Data Center charts (optional ``mdc_date_from`` / ``mdc_date_to``, IST dates)."""
     eid = request.args.get("virtualEventId", type=int) or DEFAULT_VIRTUAL_EVENT_ID
+    ip_cross = request.args.get("crossoverInPersonEventId", type=int)
     d0 = _parse_mdc_dashboard_iso_date(request.args.get("mdc_date_from"))
     d1 = _parse_mdc_dashboard_iso_date(request.args.get("mdc_date_to"))
-    payload = _load_mdc_stats(eid, mode="virtual", date_from=d0, date_to=d1)
+    v_cx = int(eid) if ip_cross and int(ip_cross) > 0 and int(eid) > 0 else None
+    ip_cx = int(ip_cross) if ip_cross and int(ip_cross) > 0 and int(eid) > 0 else None
+    payload = _load_mdc_stats(
+        eid,
+        mode="virtual",
+        date_from=d0,
+        date_to=d1,
+        mdc_crossover_in_person_event_id=ip_cx,
+        mdc_crossover_virtual_event_id=v_cx,
+    )
     return jsonify(payload)
+
+
+@app.post("/api/import/virtual/challenge-attempts/preview")
+def api_import_virtual_challenge_attempts_preview():
+    return _preview_challenge_attempt_counts_core("virtual_challenge_attempts")
+
+
+@app.post("/api/import/virtual/challenge-attempts")
+def api_import_virtual_challenge_attempts():
+    return _import_virtual_challenge_attempts_core()
+
+
+@app.post("/api/import/in-person/challenge-attempts/preview")
+def api_import_in_person_challenge_attempts_preview():
+    return _preview_challenge_attempt_counts_core("in_person_challenge_attempts")
+
+
+@app.post("/api/import/in-person/challenge-attempts")
+def api_import_in_person_challenge_attempts():
+    return _import_in_person_challenge_attempts_core()
+
+
+@app.post("/admin/import/in-person/challenge-attempts")
+def admin_import_in_person_challenge_attempts():
+    nav_eid = request.form.get("inPersonEventId", type=int) or DEFAULT_IN_PERSON_EVENT_ID
+    back_import_url = url_for("in_person_import", inPersonEventId=nav_eid)
+    back_dashboard_url = url_for("in_person_page", inPersonEventId=nav_eid)
+    out = _import_in_person_challenge_attempts_core()
+    resp, status = out if isinstance(out, tuple) else (out, 200)
+    payload = resp.get_json(silent=True) if hasattr(resp, "get_json") else None
+    if status != 200:
+        msg = (payload or {}).get("error") if isinstance(payload, dict) else str(payload)
+        return (
+            render_template(
+                "challenge_attempts_patch_import_result.html",
+                title="In-person challenge attempts import",
+                ok=False,
+                message=msg or "Import failed",
+                stats=None,
+                error_detail=payload if isinstance(payload, dict) else None,
+                back_import_url=back_import_url,
+                back_dashboard_url=back_dashboard_url,
+                back_import_label="Back to In-person import",
+                back_dashboard_label="In-person dashboard",
+            ),
+            status,
+        )
+    stats = payload if isinstance(payload, dict) else {}
+    ok_eid = int(stats.get("in_person_event_id") or nav_eid)
+    return render_template(
+        "challenge_attempts_patch_import_result.html",
+        title="In-person challenge attempts import",
+        ok=True,
+        message="Attempts updated on in-person submission rows",
+        stats=stats,
+        error_detail=None,
+        back_import_url=url_for("in_person_import", inPersonEventId=ok_eid),
+        back_dashboard_url=url_for("in_person_page", inPersonEventId=ok_eid),
+        back_import_label="Back to In-person import",
+        back_dashboard_label="In-person dashboard",
+    )
+
+
+@app.post("/admin/import/virtual/challenge-attempts")
+def admin_import_virtual_challenge_attempts():
+    out = _import_virtual_challenge_attempts_core()
+    resp, status = out if isinstance(out, tuple) else (out, 200)
+    payload = resp.get_json(silent=True) if hasattr(resp, "get_json") else None
+    if status != 200:
+        msg = (payload or {}).get("error") if isinstance(payload, dict) else str(payload)
+        return (
+            render_template(
+                "virtual_challenge_submissions_import_result.html",
+                title="Virtual challenge attempts import",
+                ok=False,
+                message=msg or "Import failed",
+                stats=None,
+                error_detail=payload if isinstance(payload, dict) else None,
+            ),
+            status,
+        )
+    stats = payload if isinstance(payload, dict) else {}
+    return render_template(
+        "virtual_challenge_submissions_import_result.html",
+        title="Virtual challenge attempts import",
+        ok=True,
+        message="Attempts updated on submission rows",
+        stats=stats,
+        error_detail=None,
+    )
 
 
 @app.get("/in-person")
@@ -6287,15 +9641,38 @@ def in_person_page():
     challenge_id = request.args.get("challengeId", type=int) or DEFAULT_CHALLENGE_ID
     mdc_df = _parse_mdc_dashboard_iso_date(request.args.get("mdc_date_from"))
     mdc_dt = _parse_mdc_dashboard_iso_date(request.args.get("mdc_date_to"))
+    _ip_cx, _v_cx = (
+        (int(in_person_event_id), int(virtual_event_id))
+        if int(in_person_event_id) > 0 and int(virtual_event_id) > 0
+        else (None, None)
+    )
     data_center = _load_mdc_stats(
         in_person_event_id,
         mode="in_person",
         date_from=mdc_df,
         date_to=mdc_dt,
+        mdc_crossover_in_person_event_id=_ip_cx,
+        mdc_crossover_virtual_event_id=_v_cx,
     )
     ip_ac_city = (request.args.get("ipActionCenterCity") or "").strip() or None
     ip_pw_date = _parse_ipcsr_prompt_war_date_from_form(request.args.get("ipPromptWarDate"))
     ip_pw_label = _normalize_ipcsr_session_label(request.args.get("ipPromptWarLabel"))
+    _ip_pws = _in_person_pw_options(in_person_event_id)
+    if not PW_GLOBAL_LEADERBOARDS_ENABLED and not ip_ac_city and _ip_pws:
+        pw0 = _default_in_person_pw_session_for_redirect(_ip_pws) or _ip_pws[0]
+        return redirect(
+            url_for(
+                "in_person_page",
+                inPersonEventId=in_person_event_id,
+                virtualEventId=virtual_event_id,
+                challengeId=challenge_id,
+                ipActionCenterCity=pw0["city"],
+                ipPromptWarDate=pw0["prompt_war_on_iso"],
+                ipPromptWarLabel=pw0.get("session_label") or "",
+                mdc_date_from=request.args.get("mdc_date_from"),
+                mdc_date_to=request.args.get("mdc_date_to"),
+            )
+        )
     if ip_ac_city:
         if ip_pw_date is None:
             ip_pw_date = IPCSR_LEGACY_PROMPT_WAR_DATE
@@ -6315,6 +9692,18 @@ def in_person_page():
         if ip_ac_city and ip_pw_date
         else None
     )
+    ip_arena_stats = None
+    ip_submission_session_token_analytics = ""
+    if ip_ac_city and ip_pw_date:
+        ip_arena_stats = _in_person_action_center_stats(
+            event_id=in_person_event_id,
+            attendance_city=ip_ac_city,
+            prompt_war_on=ip_pw_date,
+            session_label=ip_pw_label or "",
+        )
+        ip_submission_session_token_analytics = _encode_ip_submission_session_token(
+            ip_ac_city, ip_pw_date, ip_pw_label or ""
+        )
     return render_template(
         "in_person.html",
         in_person_event_id=in_person_event_id,
@@ -6327,6 +9716,9 @@ def in_person_page():
         ip_ac_pw_date_iso=ip_pw_date.isoformat() if ip_ac_city and ip_pw_date else None,
         ip_ac_session_label=ip_pw_label if ip_ac_city else "",
         ip_ac_session_display=ip_ac_session_display,
+        ip_arena_stats=ip_arena_stats,
+        ip_submission_session_token_analytics=ip_submission_session_token_analytics,
+        global_leaderboards_enabled=PW_GLOBAL_LEADERBOARDS_ENABLED,
     )
 
 
@@ -6341,6 +9733,22 @@ def in_person_leaderboard():
     ip_ac_city = (request.args.get("ipActionCenterCity") or "").strip() or None
     ip_pw_date = _parse_ipcsr_prompt_war_date_from_form(request.args.get("ipPromptWarDate"))
     ip_pw_label = _normalize_ipcsr_session_label(request.args.get("ipPromptWarLabel"))
+    _ip_pws_lb = _in_person_pw_options(in_person_event_id)
+    if not PW_GLOBAL_LEADERBOARDS_ENABLED and not ip_ac_city and _ip_pws_lb:
+        pw0 = _default_in_person_pw_session_for_redirect(_ip_pws_lb) or _ip_pws_lb[0]
+        return redirect(
+            url_for(
+                "in_person_leaderboard",
+                inPersonEventId=in_person_event_id,
+                virtualEventId=virtual_event_id,
+                challengeId=challenge_id,
+                ipActionCenterCity=pw0["city"],
+                ipPromptWarDate=pw0["prompt_war_on_iso"],
+                ipPromptWarLabel=pw0.get("session_label") or "",
+                page=page,
+                per_page=per_page,
+            )
+        )
     if ip_ac_city:
         if ip_pw_date is None:
             ip_pw_date = IPCSR_LEGACY_PROMPT_WAR_DATE
@@ -6380,6 +9788,7 @@ def in_person_leaderboard():
         ip_ac_pw_date_iso=ip_pw_date.isoformat() if ip_ac_city and ip_pw_date else None,
         ip_ac_session_label=ip_pw_label if ip_ac_city else "",
         ip_ac_session_display=ip_ac_session_display,
+        global_leaderboards_enabled=PW_GLOBAL_LEADERBOARDS_ENABLED,
     )
 
 
@@ -6417,11 +9826,18 @@ def virtual_page():
         )
     mdc_df = _parse_mdc_dashboard_iso_date(request.args.get("mdc_date_from"))
     mdc_dt = _parse_mdc_dashboard_iso_date(request.args.get("mdc_date_to"))
+    _ip_cx, _v_cx = (
+        (int(in_person_event_id), int(virtual_event_id))
+        if int(in_person_event_id) > 0 and int(virtual_event_id) > 0
+        else (None, None)
+    )
     data_center = _load_mdc_stats(
         virtual_event_id,
         mode="virtual",
         date_from=mdc_df,
         date_to=mdc_dt,
+        mdc_crossover_in_person_event_id=_ip_cx,
+        mdc_crossover_virtual_event_id=_v_cx,
     )
     eligibility = None
     active_challenge_id = eligibility_requested
@@ -6470,6 +9886,20 @@ def virtual_page():
             standings_is_global = True
             standings_challenge_id = None
             standings_view_value = "global"
+    if not PW_GLOBAL_LEADERBOARDS_ENABLED and standings_is_global:
+        if challenge_id is not None and (not id_set_int or int(challenge_id) in id_set_int):
+            standings_is_global = False
+            standings_challenge_id = int(challenge_id)
+            standings_view_value = str(int(challenge_id))
+        elif id_set_int:
+            cid0 = sorted(id_set_int)[0]
+            standings_is_global = False
+            standings_challenge_id = cid0
+            standings_view_value = str(cid0)
+        else:
+            standings_is_global = False
+            standings_challenge_id = None
+            standings_view_value = "global"
     if standings_is_global:
         standings_payload = _virtual_global_submission_leaderboard(
             event_id=virtual_event_id, limit=400, offset=0
@@ -6506,6 +9936,7 @@ def virtual_page():
         standings_leaderboard=standings_leaderboard,
         standings_view_value=standings_view_value,
         arena_challenge_title=arena_challenge_title,
+        global_leaderboards_enabled=PW_GLOBAL_LEADERBOARDS_ENABLED,
     )
 
 
@@ -6518,6 +9949,15 @@ def virtual_submission_leaderboard():
     url_challenge = request.args.get("challengeId", type=int)
     arena_requested = request.args.get("arenaChallengeId", type=int)
     is_global = (request.args.get("global", type=int) or 0) == 1
+    if is_global and not PW_GLOBAL_LEADERBOARDS_ENABLED:
+        if challenges:
+            q = request.args.to_dict(flat=True)
+            q.pop("global", None)
+            q["arenaChallengeId"] = str(int(challenges[0]["id"]))
+            return redirect(f"{request.path}?{urlencode(q)}")
+        return redirect(
+            url_for("virtual_page", virtualEventId=virtual_event_id, inPersonEventId=in_person_event_id)
+        )
     if not is_global:
         if url_challenge is not None and id_set and url_challenge not in id_set and arena_requested is None:
             q = request.args.to_dict(flat=True)
@@ -6572,6 +10012,7 @@ def virtual_submission_leaderboard():
         per_page=per_page,
         total_pages=total_pages,
         is_global_leaderboard=is_global,
+        global_leaderboards_enabled=PW_GLOBAL_LEADERBOARDS_ENABLED,
     )
 
 
@@ -6582,6 +10023,21 @@ def overview_settings():
         title="Overview · Settings",
         description="Workspace defaults, API keys, and operational tools for the whole program.",
         show_admin_link=True,
+    )
+
+
+@app.get("/overview/submission-analytics")
+@audit_view(entity="overview_submission_analytics", action="VIEW", module="overview")
+def overview_submission_analytics():
+    in_person_event_id = request.args.get("inPersonEventId", type=int) or DEFAULT_IN_PERSON_EVENT_ID
+    virtual_event_id = request.args.get("virtualEventId", type=int) or DEFAULT_VIRTUAL_EVENT_ID
+    challenges = _load_virtual_challenges_brief(virtual_event_id)
+    return render_template(
+        "overview_submission_analytics.html",
+        title="Overview · Submission crossover",
+        in_person_event_id=in_person_event_id,
+        virtual_event_id=virtual_event_id,
+        virtual_challenges=challenges,
     )
 
 
@@ -6675,7 +10131,12 @@ def in_person_users():
     advanced = _parse_mdc_users_advanced_from_request(request.args)
     mdc_pw_raw = (request.args.get("mdc_pw_on") or "").strip()
     mdc_pw_d = _parse_ipcsr_prompt_war_date_from_form(mdc_pw_raw) if mdc_pw_raw else None
+    if mdc_pw_d is not None:
+        rej_u = _reject_legacy_prompt_war_on_date(mdc_pw_d)
+        if rej_u:
+            return rej_u
     mdc_sl = (request.args.get("mdc_session_label") or "").strip()[:200] or None
+    sk, sd = _parse_mdc_users_roster_sort(request.args, mode="in_person")
     users = _load_mdc_users_page(
         DEFAULT_IN_PERSON_EVENT_ID,
         page,
@@ -6685,11 +10146,14 @@ def in_person_users():
         advanced=advanced,
         mdc_pw_on=mdc_pw_d,
         mdc_session_label=mdc_sl,
+        roster_sort_key=sk,
+        roster_sort_dir=sd,
     )
     return render_template(
         "in_person_users.html",
         title="In-person · Users",
         users=users,
+        in_person_event_id=DEFAULT_IN_PERSON_EVENT_ID,
     )
 
 
@@ -6715,6 +10179,11 @@ def in_person_users():
                 "designation_years_max",
                 "participated_challenge_id",
                 "submission_session",
+                "arenaChallengeId",
+                "arenaTeamSegment",
+                "arenaAttemptsCompleted",
+                "sort",
+                "sort_dir",
             )
         )[:40],
     },
@@ -6726,7 +10195,12 @@ def in_person_users_export_csv():
     advanced = _parse_mdc_users_advanced_from_request(request.args)
     mdc_pw_raw = (request.args.get("mdc_pw_on") or "").strip()
     mdc_pw_d = _parse_ipcsr_prompt_war_date_from_form(mdc_pw_raw) if mdc_pw_raw else None
+    if mdc_pw_d is not None:
+        rej_x = _reject_legacy_prompt_war_on_date(mdc_pw_d)
+        if rej_x:
+            return rej_x
     mdc_sl = (request.args.get("mdc_session_label") or "").strip()[:200] or None
+    sk, sd = _parse_mdc_users_roster_sort(request.args, mode="in_person")
     rows, err = _fetch_mdc_users_export_rows(
         DEFAULT_IN_PERSON_EVENT_ID,
         q,
@@ -6734,6 +10208,8 @@ def in_person_users_export_csv():
         advanced=advanced,
         mdc_pw_on=mdc_pw_d,
         mdc_session_label=mdc_sl,
+        roster_sort_key=sk,
+        roster_sort_dir=sd,
     )
     if err:
         return Response(err, status=500, mimetype="text/plain; charset=utf-8")
@@ -6747,10 +10223,12 @@ def in_person_users_export_csv():
 
 @app.get("/in-person/settings")
 def in_person_settings():
+    in_person_event_id = request.args.get("inPersonEventId", type=int) or DEFAULT_IN_PERSON_EVENT_ID
     return render_template(
-        "module_sheet.html",
+        "in_person_settings.html",
         title="In-person · Settings",
         description="Funnel thresholds, import schedules, and city configuration.",
+        in_person_event_id=in_person_event_id,
     )
 
 
@@ -6760,18 +10238,24 @@ def virtual_users():
     per_page = request.args.get("per_page", default=25, type=int) or 25
     q = (request.args.get("q") or "").strip()[:200]
     cid = request.args.get("challengeId", type=int)
+    virtual_event_id = request.args.get("virtualEventId", type=int) or DEFAULT_VIRTUAL_EVENT_ID
     advanced = _parse_mdc_users_advanced_from_request(request.args)
+    sk, sd = _parse_mdc_users_roster_sort(request.args, mode="virtual")
     users = _load_mdc_users_page(
-        DEFAULT_VIRTUAL_EVENT_ID, page, per_page, q, None,
+        virtual_event_id, page, per_page, q, None,
         mode="virtual", challenge_id=cid, advanced=advanced,
+        roster_sort_key=sk,
+        roster_sort_dir=sd,
     )
-    challenges = _load_virtual_challenges_brief(DEFAULT_VIRTUAL_EVENT_ID)
+    challenges = _load_virtual_challenges_brief(virtual_event_id)
     return render_template(
         "virtual_users.html",
         title="Virtual · Users",
         users=users,
         virtual_challenges=challenges,
         active_challenge_id=cid,
+        active_virtual_event_id=virtual_event_id,
+        default_virtual_event_id=DEFAULT_VIRTUAL_EVENT_ID,
     )
 
 
@@ -6796,6 +10280,11 @@ def virtual_users():
                 "designation_years_max",
                 "participated_challenge_id",
                 "submission_session",
+                "arenaChallengeId",
+                "arenaTeamSegment",
+                "arenaAttemptsCompleted",
+                "sort",
+                "sort_dir",
             )
         )[:40],
     },
@@ -6803,9 +10292,18 @@ def virtual_users():
 def virtual_users_export_csv():
     q = (request.args.get("q") or "").strip()[:200]
     cid = request.args.get("challengeId", type=int)
+    virtual_event_id = request.args.get("virtualEventId", type=int) or DEFAULT_VIRTUAL_EVENT_ID
     advanced = _parse_mdc_users_advanced_from_request(request.args)
+    sk, sd = _parse_mdc_users_roster_sort(request.args, mode="virtual")
     rows, err = _fetch_mdc_users_export_rows(
-        DEFAULT_VIRTUAL_EVENT_ID, q, None, mode="virtual", challenge_id=cid, advanced=advanced
+        virtual_event_id,
+        q,
+        None,
+        mode="virtual",
+        challenge_id=cid,
+        advanced=advanced,
+        roster_sort_key=sk,
+        roster_sort_dir=sd,
     )
     if err:
         return Response(err, status=500, mimetype="text/plain; charset=utf-8")
@@ -7079,9 +10577,11 @@ def in_person_import():
 @app.get("/virtual/import")
 def virtual_import():
     virtual_event_id = request.args.get("virtualEventId", type=int) or DEFAULT_VIRTUAL_EVENT_ID
+    virtual_challenges = _load_virtual_challenges_brief(virtual_event_id)
     return render_template(
         "import_virtual.html",
         virtual_event_id=virtual_event_id,
+        virtual_challenges=virtual_challenges,
     )
 
 

@@ -22,6 +22,7 @@ HEADER_MAP: dict[str, str] = {
     "leader email": "leader_email",
     "leader phone": "leader_phone",
     "team size": "team_size",
+    "attempts completed": "attempts_completed",
     "problem statements": "problem_statements",
     "total score (latest attempt)": "total_score",
     "deployed link - (cloud run url)": "deployed_link",
@@ -179,7 +180,7 @@ def _row_to_payload(
         if not key:
             continue
         val = series[col]
-        if key in ("team_size",):
+        if key in ("team_size", "attempts_completed"):
             raw = _blank_to_none(val)
             if raw is None:
                 d[key] = None
@@ -261,15 +262,19 @@ def parse_virtual_challenge_submissions_workbook(
             sheet_rows += 1
             rows_out.append(payload)
 
-        per_sheet[sheet_name] = {"challenge_id": cid, "rows_written": sheet_rows}
+        per_sheet[sheet_name] = {"challenge_id": cid, "rows_parsed": sheet_rows}
 
-    # Last row wins for duplicate team name within the same challenge across the workbook.
+    rows_before_dedup = len(rows_out)
+    # Last row wins for duplicate leader email within the same challenge across the workbook.
     dedup: dict[tuple[int, str], dict[str, Any]] = {}
     for r in rows_out:
-        k = (int(r["challenge_id"]), str(r["team_name"]).strip().lower())
+        em = (str(r.get("leader_email") or "").strip().lower())
+        k = (int(r["challenge_id"]), em)
         dedup[k] = r
     rows_out = list(dedup.values())
 
+    stats["rows_parsed_with_team_email"] = rows_before_dedup
+    stats["rows_collapsed_duplicate_leader_email"] = rows_before_dedup - len(rows_out)
     stats["rows_valid"] = len(rows_out)
     if not rows_out:
         raise ValueError("No data rows with both Team Name and Leader Email across submission sheets.")

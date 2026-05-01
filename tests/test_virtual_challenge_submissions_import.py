@@ -87,4 +87,49 @@ def test_parse_workbook_minimal():
     assert rows[0]["team_name"] == "Team A"
     assert rows[0]["leader_email"] == "lead@example.com"
     assert stats["rows_valid"] == 1
+    assert stats["rows_parsed_with_team_email"] == 1
+    assert stats["rows_collapsed_duplicate_leader_email"] == 0
     assert "Submission Sprint" in stats["sheets"]
+    assert stats["sheets"]["Submission Sprint"]["rows_parsed"] == 1
+
+
+def test_parse_workbook_duplicate_leader_email_same_challenge_collapses():
+    challenges = [{"id": 5, "title": "Sprint", "import_sheet_suffix": None}]
+    df = pd.DataFrame(
+        [
+            {"Team Name": "Team A", "Leader Email": "same@example.com"},
+            {"Team Name": "Team B", "Leader Email": "same@example.com"},
+        ]
+    )
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="Submission Sprint", index=False)
+    buf.seek(0)
+
+    rows, stats = vc.parse_virtual_challenge_submissions_workbook(buf, "book.xlsx", challenges)
+    assert len(rows) == 1
+    assert rows[0]["team_name"] == "Team B"
+    assert rows[0]["leader_email"] == "same@example.com"
+    assert stats["rows_parsed_with_team_email"] == 2
+    assert stats["rows_collapsed_duplicate_leader_email"] == 1
+    assert stats["rows_valid"] == 1
+    assert stats["sheets"]["Submission Sprint"]["rows_parsed"] == 2
+
+
+def test_parse_workbook_same_team_name_different_emails_keeps_both():
+    challenges = [{"id": 5, "title": "Sprint", "import_sheet_suffix": None}]
+    df = pd.DataFrame(
+        [
+            {"Team Name": "Team A", "Leader Email": "a@example.com"},
+            {"Team Name": "Team A", "Leader Email": "b@example.com"},
+        ]
+    )
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, sheet_name="Submission Sprint", index=False)
+    buf.seek(0)
+
+    rows, stats = vc.parse_virtual_challenge_submissions_workbook(buf, "book.xlsx", challenges)
+    assert len(rows) == 2
+    assert stats["rows_collapsed_duplicate_leader_email"] == 0
+    assert stats["rows_valid"] == 2

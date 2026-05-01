@@ -25,11 +25,13 @@
          {% if not is_global %}bg-violet-600 text-white border-violet-600{% else %}bg-white text-slate-700 border-slate-200 hover:border-violet-200{% endif %}">
       Per challenge
     </a>
+    {% if global_leaderboards_enabled|default(true) %}
     <a href="{{ url_for('virtual_submission_leaderboard', virtualEventId=virtual_event_id, global=1) }}"
        class="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-semibold no-underline border transition-colors
          {% if is_global %}bg-violet-600 text-white border-violet-600{% else %}bg-white text-slate-700 border-slate-200 hover:border-violet-200{% endif %}">
       <span class="material-symbols-outlined text-[18px]">public</span> Global (all arenas)
     </a>
+    {% endif %}
   </div>
 
   {% if not is_global %}

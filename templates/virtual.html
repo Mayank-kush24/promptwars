@@ -175,8 +175,12 @@
 {% set slb = standings_leaderboard %}
 {% if not slb.is_global and slb.challenge %}
 {% set _vw_lb_full_href = url_for('virtual_submission_leaderboard', virtualEventId=virtual_event_id, inPersonEventId=in_person_event_id, arenaChallengeId=slb.challenge.id) %}
-{% else %}
+{% elif global_leaderboards_enabled|default(true) and slb.is_global %}
 {% set _vw_lb_full_href = url_for('virtual_submission_leaderboard', virtualEventId=virtual_event_id, inPersonEventId=in_person_event_id, global=1) %}
+{% elif slb.challenge %}
+{% set _vw_lb_full_href = url_for('virtual_submission_leaderboard', virtualEventId=virtual_event_id, inPersonEventId=in_person_event_id, arenaChallengeId=slb.challenge.id) %}
+{% else %}
+{% set _vw_lb_full_href = url_for('virtual_submission_leaderboard', virtualEventId=virtual_event_id, inPersonEventId=in_person_event_id, arenaChallengeId=challenge_id) %}
 {% endif %}
 <section id="virtual-standings" class="flex justify-center mb-8 lg:mb-10">
   <div class="bg-white rounded-2xl border border-violet-200/80 shadow-sm w-full max-w-6xl overflow-hidden flex flex-col">
@@ -185,7 +189,7 @@
         <div class="min-w-0 flex-1">
           <p class="text-[10px] font-bold uppercase tracking-widest text-violet-800/90 mb-1">Live standings (imported)</p>
           <h3 class="text-2xl sm:text-3xl font-bold text-slate-900 tracking-tight leading-tight">
-            {% if slb.is_global %}Global (all arenas){% elif slb.challenge and slb.challenge.title %}{{ slb.challenge.title }}{% else %}Standings{% endif %}
+            {% if slb.is_global and global_leaderboards_enabled|default(true) %}Global (all arenas){% elif slb.challenge and slb.challenge.title %}{{ slb.challenge.title }}{% else %}Standings{% endif %}
           </h3>
           <p class="text-sm text-slate-500 mt-2">
             <span class="font-semibold text-slate-800 tabular-nums">
@@ -207,7 +211,9 @@
             <span class="text-[10px] font-bold uppercase tracking-widest text-violet-800/90">View</span>
             <select name="standingsView" onchange="this.form.submit()"
                     class="px-3 py-2.5 rounded-xl border border-violet-200/90 bg-white text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-400/40 w-full">
+              {% if global_leaderboards_enabled|default(true) %}
               <option value="global" {% if slb.is_global %}selected{% endif %}>Global (all arenas)</option>
+              {% endif %}
               {% for ch in (virtual_challenges or []) %}
               <option value="{{ ch.id }}" {% if not slb.is_global and slb.challenge and slb.challenge.id == ch.id %}selected{% endif %}>{{ ch.title }} ({{ ch.status }})</option>
               {% endfor %}
@@ -275,131 +281,18 @@
 
 {% set n_arena_ch = (virtual_challenges or [])|length %}
 <div class="pw-virtual-arena-overview flex flex-col gap-6 sm:gap-8 mb-8 lg:mb-10 min-w-0" aria-label="Arena challenge and KPIs">
-<div class="sticky top-16 z-30 -mx-1 min-w-0 sm:mx-0 rounded-2xl border border-slate-200/80 bg-white/85 backdrop-blur-md px-3 sm:px-4 py-3 shadow-sm">
-  <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
-    <div class="flex flex-col gap-2 min-w-0 flex-1">
-      <span class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Arena</span>
-      {% if n_arena_ch > 5 %}
-      <form method="get" action="{{ url_for('virtual_page') }}" class="flex flex-wrap items-end gap-3">
-        <input type="hidden" name="virtualEventId" value="{{ virtual_event_id }}" />
-        <input type="hidden" name="inPersonEventId" value="{{ in_person_event_id }}" />
-        <input type="hidden" name="standingsView" value="{{ standings_view_value }}" />
-        {% if active_challenge_id %}<input type="hidden" name="challengeId" value="{{ active_challenge_id }}" />{% endif %}
-        <label class="flex flex-col gap-1 flex-1 min-w-[200px]">
-          <select name="arenaChallengeId" onchange="this.form.submit()"
-                  class="px-3 py-2.5 rounded-xl border border-violet-200/90 bg-white text-sm font-medium text-slate-800 focus:outline-none focus:ring-2 focus:ring-violet-400/40 w-full max-w-lg">
-            {% for ch in (virtual_challenges or []) %}
-              <option value="{{ ch.id }}" {% if challenge_id and ch.id == challenge_id %}selected{% endif %}>{{ ch.title }} ({{ ch.status }})</option>
-            {% else %}
-              <option value="">No challenges yet</option>
-            {% endfor %}
-          </select>
-        </label>
-      </form>
-      {% else %}
-      <div class="flex flex-wrap gap-2">
-        {% for ch in (virtual_challenges or []) %}
-          {% if active_challenge_id %}
-            {% set chip_href = url_for('virtual_page', virtualEventId=virtual_event_id, inPersonEventId=in_person_event_id, arenaChallengeId=ch.id, challengeId=active_challenge_id, standingsView=standings_view_value) %}
-          {% else %}
-            {% set chip_href = url_for('virtual_page', virtualEventId=virtual_event_id, inPersonEventId=in_person_event_id, arenaChallengeId=ch.id, standingsView=standings_view_value) %}
-          {% endif %}
-          <a href="{{ chip_href }}"
-             class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold border transition-colors no-underline
-               {% if challenge_id and ch.id == challenge_id %}pw-arena-chip-active{% else %}border-slate-200 bg-white/90 text-slate-600 hover:border-violet-200 hover:bg-violet-50/50{% endif %}">
-            <span class="truncate max-w-[10rem] sm:max-w-[14rem]">{{ ch.title }}</span>
-            <span class="shrink-0 text-[10px] uppercase tracking-wide opacity-80">({{ ch.status }})</span>
-          </a>
-        {% else %}
-          <span class="text-sm text-slate-500">No challenges yet.</span>
-        {% endfor %}
-      </div>
-      {% endif %}
-    </div>
-    <div class="flex flex-wrap items-center gap-3 shrink-0">
-      {% if challenge_id and arena_stats and not arena_stats.error and arena_stats.closes_at_display %}
-      <span class="hidden sm:inline-flex items-center gap-1 text-xs text-slate-500 tabular-nums">
-        <span class="material-symbols-outlined text-[16px] text-slate-400">event</span>
-        {{ arena_stats.closes_at_display }}
-      </span>
-      {% endif %}
-    </div>
-  </div>
-</div>
 
 {% if challenge_id and arena_stats %}
-{% if arena_stats.error %}
-<div class="glass-panel rounded-xl p-4 text-sm text-rose-800 border border-rose-200/80">{{ arena_stats.error }}</div>
-{% else %}
-<div class="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4 border-t border-slate-200/70">
-  <div class="glass-panel pw-bento p-4 sm:p-5 border border-slate-100/90">
-    <div class="flex justify-between items-start gap-2">
-      <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Registrations at open</span>
-      <span class="material-symbols-outlined text-slate-400 text-[20px] shrink-0">door_front</span>
-    </div>
-    {% if arena_stats.opens_at_set %}
-    <p class="font-display text-2xl text-slate-900 tabular-nums leading-tight mt-2">{{ "{:,}".format(arena_stats.registrations_at_open or 0) }}</p>
-    <p class="text-[11px] text-slate-500 mt-1 truncate" title="{{ arena_stats.opens_at_display or '' }}">≤ {{ arena_stats.opens_at_display or "—" }}</p>
-    {% else %}
-    <p class="text-sm text-slate-500 mt-3 leading-snug">Set <span class="font-mono text-xs">opens_at</span> on the challenge to show this.</p>
-    {% endif %}
-  </div>
-  <div class="glass-panel pw-bento p-4 sm:p-5 border border-slate-100/90">
-    <div class="flex justify-between items-start gap-2">
-      <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Registrations at close</span>
-      <span class="material-symbols-outlined text-violet-500 text-[20px] shrink-0">groups</span>
-    </div>
-    <p class="font-display text-2xl text-slate-900 tabular-nums leading-tight mt-2">{{ "{:,}".format(arena_stats.registrations_at_close or 0) }}</p>
-    <p class="text-[11px] text-slate-500 mt-1 truncate" title="{{ arena_stats.closes_at_display or '' }}">≤ {{ arena_stats.closes_at_display or "—" }}</p>
-    {% if arena_stats.opens_at_set and arena_stats.registrations_at_open is not none %}
-    <p class="mt-2 inline-flex items-center rounded-full bg-emerald-50 text-emerald-800 text-[10px] font-bold px-2 py-0.5 border border-emerald-100">
-      +{{ "{:,}".format((arena_stats.registrations_at_close or 0) - (arena_stats.registrations_at_open or 0)) }} during window
-    </p>
-    {% endif %}
-  </div>
-  <div class="glass-panel pw-bento p-4 sm:p-5 border border-[var(--pw-accent-border)] bg-[var(--pw-accent-soft)] col-span-2 lg:col-span-1">
-    <div class="flex justify-between items-start gap-2">
-      <span class="text-[10px] font-bold uppercase tracking-wider text-violet-800">Unique MDC-linked</span>
-      <span class="material-symbols-outlined text-violet-600 text-[20px] shrink-0">link</span>
-    </div>
-    <p class="font-display text-2xl text-violet-950 tabular-nums leading-tight mt-2">{{ "{:,}".format(arena_stats.unique_mdc_submissions or 0) }}</p>
-  </div>
-</div>
-<div class="glass-panel pw-bento mt-3 sm:mt-4 rounded-xl border border-slate-100/90 bg-white/95 shadow-sm overflow-hidden">
-  <div class="flex flex-col divide-y divide-slate-100 sm:flex-row sm:divide-y-0 sm:divide-x sm:divide-slate-100">
-    <div class="p-4 sm:p-5 flex-1 min-w-0">
-      <div class="flex justify-between items-start gap-2">
-        <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total teams (rows)</span>
-        <span class="material-symbols-outlined text-slate-400 text-[20px] shrink-0">leaderboard</span>
-      </div>
-      <p class="font-display text-2xl text-slate-900 tabular-nums leading-tight mt-2">{{ "{:,}".format(arena_stats.total_submissions or 0) }}</p>
-    </div>
-    <div class="p-4 sm:p-5 flex-1 min-w-0">
-      <div class="flex justify-between items-start gap-2">
-        <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Fresh vs prior challenge</span>
-        <span class="material-symbols-outlined text-emerald-500 text-[20px] shrink-0">person_add</span>
-      </div>
-      <p class="font-display text-2xl text-slate-900 tabular-nums leading-tight mt-2">{{ "{:,}".format(arena_stats.submission_fresh_vs_prior_challenge or 0) }}</p>
-      <p class="text-[11px] text-slate-500 mt-1 leading-snug">Distinct teams on this import with no row on the earlier round{% if arena_stats.submission_prior_challenge_title %} (<span class="font-medium text-slate-700">{{ arena_stats.submission_prior_challenge_title }}</span>){% endif %}, ordered by close date then open date.</p>
-    </div>
-    <div class="p-4 sm:p-5 flex-1 min-w-0">
-      <div class="flex justify-between items-start gap-2">
-        <span class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Also on prior challenge</span>
-        <span class="material-symbols-outlined text-violet-500 text-[20px] shrink-0">history</span>
-      </div>
-      <p class="font-display text-2xl text-slate-900 tabular-nums leading-tight mt-2">{{ "{:,}".format(arena_stats.submission_returning_from_prior_challenge or 0) }}</p>
-      <p class="text-[11px] text-slate-500 mt-1 leading-snug">Distinct teams with a row on this challenge and on the chronologically earlier round (same ordering).</p>
-    </div>
-  </div>
-</div>
-{% endif %}
+{% set submission_analytics_mode = 'virtual' %}
+{% set analytics_theme = 'violet' %}
+{% include 'partials/submission_analytics_arena.html' %}
 {% endif %}
 </div>
 
 <section id="main-data-center-virtual" class="flex flex-col gap-sm mb-2">
   <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-8">
     <div class="min-w-0 flex-1 max-w-3xl">
-      <h2 class="font-display text-headline-lg text-slate-900 leading-tight">Virtual Main Data Center</h2>
+      <h2 class="font-display text-headline-lg text-slate-900 leading-tight">Virtual registrations</h2>
       <p id="mdcTzNote" class="text-xs text-slate-500"></p>
     </div>
     {% if not data_center.error and data_center.chart_date_min and data_center.chart_date_max %}
@@ -414,51 +307,75 @@
 
 {% if data_center.error %}
   <div class="glass-panel rounded-2xl border border-amber-200/90 text-amber-950 p-md text-sm mb-6">
-    Virtual Main Data Center stats unavailable: {{ data_center.error }}
+    Virtual registration stats unavailable: {{ data_center.error }}
     <span class="block mt-1 text-xs text-amber-900">If you just added this feature, apply <code class="rounded bg-amber-100 px-1">database/init.sql</code> so the <code class="rounded bg-amber-100 px-1">virtual_main_data_center_registrations</code> table exists.</span>
   </div>
 {% else %}
-  <div class="glass-panel pw-bento rounded-2xl border border-slate-100/90 overflow-hidden mb-6">
-    <div class="flex flex-col divide-y md:divide-y-0 md:flex-row md:divide-x divide-slate-100 bg-white/70">
-      <div class="flex flex-1 min-w-0 items-center gap-3 px-4 py-3">
-        <span class="material-symbols-outlined shrink-0 text-violet-600 text-[22px]">groups</span>
+  <div class="mb-6 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm" role="region" aria-label="Registration summary">
+    <div class="flex flex-col">
+      <div class="flex flex-col divide-y divide-slate-200 sm:flex-row sm:divide-y-0 sm:divide-x sm:divide-slate-200">
+      <div class="flex min-w-0 flex-1 items-center gap-3 px-4 py-4 sm:gap-3.5 sm:px-5 sm:py-5">
+        <span class="material-symbols-outlined shrink-0 text-[26px] leading-none text-violet-600" aria-hidden="true">groups</span>
         <div class="min-w-0">
           <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Total registrations</p>
-          <p id="mdcPillTotalReg" class="font-display text-lg text-slate-900 tabular-nums leading-tight">{{ "{:,}".format(data_center.total_registrations or 0) }}</p>
+          <p id="mdcPillTotalReg" class="font-display text-xl font-bold tabular-nums leading-tight text-slate-900 sm:text-2xl">{{ "{:,}".format(data_center.total_registrations or 0) }}</p>
         </div>
       </div>
-      <div class="flex flex-1 min-w-0 items-center gap-3 px-4 py-3">
-        <span class="material-symbols-outlined shrink-0 text-fuchsia-600 text-[22px]">pin_drop</span>
-        <div class="min-w-0">
-          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Top city</p>
-          <p id="mdcPillTopCity" class="font-display text-lg text-slate-900 truncate" title="{{ data_center.pill_top_city or '—' }}">{{ data_center.pill_top_city or "—" }}</p>
-          {% if data_center.pill_top_city_count %}<p id="mdcPillTopCityMeta" class="text-[10px] text-slate-500 tabular-nums truncate">{{ "{:,}".format(data_center.pill_top_city_count) }} in top bucket</p>{% else %}<p id="mdcPillTopCityMeta" class="text-[10px] text-slate-500 tabular-nums truncate hidden"></p>{% endif %}
-        </div>
-      </div>
-      <div class="flex flex-1 min-w-0 items-center gap-3 px-4 py-3">
-        <span class="material-symbols-outlined shrink-0 text-indigo-600 text-[22px]">map</span>
-        <div class="min-w-0">
-          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Top state</p>
-          <p id="mdcPillTopState" class="font-display text-lg text-slate-900 truncate" title="{{ data_center.pill_top_state or '—' }}">{{ data_center.pill_top_state or "—" }}</p>
-          {% if data_center.pill_top_state_count %}<p id="mdcPillTopStateMeta" class="text-[10px] text-slate-500 tabular-nums truncate">{{ "{:,}".format(data_center.pill_top_state_count) }} in top bucket</p>{% else %}<p id="mdcPillTopStateMeta" class="text-[10px] text-slate-500 tabular-nums truncate hidden"></p>{% endif %}
-        </div>
-      </div>
-      <div class="flex flex-1 min-w-0 items-center gap-3 px-4 py-3">
-        <span class="material-symbols-outlined shrink-0 text-violet-600 text-[22px]">cake</span>
+      <div class="flex min-w-0 flex-1 items-center gap-3 px-4 py-4 sm:gap-3.5 sm:px-5 sm:py-5">
+        <span class="material-symbols-outlined shrink-0 text-[26px] leading-none text-violet-600" aria-hidden="true">cake</span>
         <div class="min-w-0">
           <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Average age</p>
-          <p id="mdcPillAvgAge" class="font-display text-lg text-slate-900 tabular-nums truncate">
+          <p id="mdcPillAvgAge" class="font-display text-xl font-bold tabular-nums leading-tight text-slate-900 sm:text-2xl truncate">
             {% if data_center.average_age is not none %}{{ data_center.average_age }} yrs{% else %}—{% endif %}
           </p>
-          {% if data_center.with_dob_count %}<p id="mdcPillDobMeta" class="text-[10px] text-slate-500 truncate">{{ "{:,}".format(data_center.with_dob_count) }} with DOB</p>{% else %}<p id="mdcPillDobMeta" class="text-[10px] text-slate-500 truncate hidden"></p>{% endif %}
+          {% if data_center.with_dob_count %}<p id="mdcPillDobMeta" class="mt-0.5 text-[11px] leading-snug text-slate-500 truncate">{{ "{:,}".format(data_center.with_dob_count) }} DOB</p>{% else %}<p id="mdcPillDobMeta" class="mt-0.5 text-[11px] leading-snug text-slate-500 truncate hidden"></p>{% endif %}
         </div>
       </div>
-      <div class="flex flex-1 min-w-0 items-center gap-3 px-4 py-3">
-        <span class="material-symbols-outlined shrink-0 text-sky-600 text-[22px]">trending_up</span>
+      <div class="flex min-w-0 flex-1 items-center gap-3 px-4 py-4 sm:gap-3.5 sm:px-5 sm:py-5">
+        <span class="material-symbols-outlined shrink-0 text-[26px] leading-none text-sky-600" aria-hidden="true">trending_up</span>
         <div class="min-w-0">
           <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Last 7 days</p>
-          <p id="mdcPillLast7" class="font-display text-lg text-slate-900 tabular-nums truncate">{{ "{:,}".format(data_center.registrations_last_7_days or 0) }}</p>
+          <p id="mdcPillLast7" class="font-display text-xl font-bold tabular-nums leading-tight text-slate-900 sm:text-2xl truncate">{{ "{:,}".format(data_center.registrations_last_7_days or 0) }}</p>
         </div>
+      </div>
+      {% if data_center.mdc_crossover_both_tracks is not none %}
+      <div class="flex min-w-0 flex-1 items-center gap-3 px-4 py-4 sm:gap-3.5 sm:px-5 sm:py-5">
+        <span class="material-symbols-outlined shrink-0 text-[26px] leading-none text-emerald-600" aria-hidden="true">compare_arrows</span>
+        <div class="min-w-0">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Also in in-person PW</p>
+          <p id="mdcPillCrossover" class="font-display text-xl font-bold tabular-nums leading-tight text-slate-900 sm:text-2xl truncate">{{ "{:,}".format(data_center.mdc_crossover_both_tracks or 0) }}</p>
+          <p id="mdcPillCrossoverMeta" class="mt-0.5 text-[11px] tabular-nums leading-snug text-slate-500 truncate">of {{ "{:,}".format(data_center.mdc_crossover_virtual_only|default(0)) }} virtual · any IP city</p>
+        </div>
+      </div>
+      {% endif %}
+      {% if data_center.mdc_crossover_virtual_reg_ip_action_center is not none %}
+      <div class="flex min-w-0 flex-1 items-center gap-3 px-4 py-4 sm:gap-3.5 sm:px-5 sm:py-5">
+        <span class="material-symbols-outlined shrink-0 text-[26px] leading-none text-teal-600" aria-hidden="true">hub</span>
+        <div class="min-w-0">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">In-person Action Center</p>
+          <p id="mdcPillIpActionCenterOverlap" class="font-display text-xl font-bold tabular-nums leading-tight text-slate-900 sm:text-2xl truncate">{{ "{:,}".format(data_center.mdc_crossover_virtual_reg_ip_action_center or 0) }}</p>
+          <p id="mdcPillIpActionCenterOverlapMeta" class="mt-0.5 text-[11px] tabular-nums leading-snug text-slate-500 truncate">virtual reg · any IP PW</p>
+        </div>
+      </div>
+      {% endif %}
+      </div>
+      <div class="flex flex-col divide-y divide-slate-200 border-t border-slate-200 sm:flex-row sm:divide-y-0 sm:divide-x sm:divide-slate-200">
+      <div class="flex min-w-0 flex-1 items-start gap-3 px-4 py-4 sm:gap-3.5 sm:px-5 sm:py-5 sm:basis-0 sm:min-w-[12rem]">
+        <span class="material-symbols-outlined shrink-0 text-[26px] leading-none text-fuchsia-600 mt-0.5" aria-hidden="true">pin_drop</span>
+        <div class="min-w-0 flex-1">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Top city</p>
+          <p id="mdcPillTopCity" class="font-display text-xl font-bold leading-snug text-slate-900 sm:text-2xl break-words" title="{{ data_center.pill_top_city or '—' }}">{{ data_center.pill_top_city or "—" }}</p>
+          {% if data_center.pill_top_city_count %}<p id="mdcPillTopCityMeta" class="mt-0.5 text-[11px] tabular-nums leading-snug text-slate-500">{{ "{:,}".format(data_center.pill_top_city_count) }} in top</p>{% else %}<p id="mdcPillTopCityMeta" class="mt-0.5 text-[11px] tabular-nums leading-snug text-slate-500 hidden"></p>{% endif %}
+        </div>
+      </div>
+      <div class="flex min-w-0 flex-1 items-start gap-3 px-4 py-4 sm:gap-3.5 sm:px-5 sm:py-5 sm:basis-0 sm:min-w-[12rem]">
+        <span class="material-symbols-outlined shrink-0 text-[26px] leading-none text-indigo-600 mt-0.5" aria-hidden="true">map</span>
+        <div class="min-w-0 flex-1">
+          <p class="text-[10px] font-bold uppercase tracking-wider text-slate-500">Top state</p>
+          <p id="mdcPillTopState" class="font-display text-xl font-bold leading-snug text-slate-900 sm:text-2xl break-words" title="{{ data_center.pill_top_state or '—' }}">{{ data_center.pill_top_state or "—" }}</p>
+          {% if data_center.pill_top_state_count %}<p id="mdcPillTopStateMeta" class="mt-0.5 text-[11px] tabular-nums leading-snug text-slate-500">{{ "{:,}".format(data_center.pill_top_state_count) }} in top</p>{% else %}<p id="mdcPillTopStateMeta" class="mt-0.5 text-[11px] tabular-nums leading-snug text-slate-500 hidden"></p>{% endif %}
+        </div>
+      </div>
       </div>
     </div>
   </div>
@@ -538,15 +455,29 @@
   window.__PW_MDC__ = {{ data_center | tojson }};
   window.__PW_ROUTES__ = {
     mdcUsersUrl: {{ url_for("virtual_users") | tojson }},
+    inPersonUsersUrl: {{ url_for("in_person_users") | tojson }},
     indiaGeoUrl: {{ url_for("static", filename="geo/in-all-claimed.geo.json") | tojson }},
-    mdcStatsApiUrl: {{ url_for("api_virtual_mdc_stats", virtualEventId=virtual_event_id) | tojson }},
+    mdcStatsApiUrl: {{ url_for("api_virtual_mdc_stats", virtualEventId=virtual_event_id, crossoverInPersonEventId=in_person_event_id) | tojson }},
     virtualEventId: {{ virtual_event_id | tojson }},
   };
   window.__PW__ = {
+    analyticsMode: "virtual",
+    submissionSessionToken: "",
+    inPersonEventId: {{ in_person_event_id|tojson }},
     challengeId: {{ challenge_id|tojson }},
+    activeChallengeId: {{ active_challenge_id|tojson }},
     virtualEventId: {{ virtual_event_id|tojson }},
+    arenaTeamSegments: {% if challenge_id and arena_stats and not arena_stats.error %} {{ {
+      "student": arena_stats.team_segment_student or 0,
+      "professional": arena_stats.team_segment_professional or 0,
+      "other": arena_stats.team_segment_other or 0,
+      "unknown": arena_stats.team_segment_unknown or 0,
+    } | tojson }} {% else %} null {% endif %},
+    attemptBucketsStudent: {% if challenge_id and arena_stats and not arena_stats.error %} {{ (arena_stats.attempt_buckets_student or []) | tojson }} {% else %} [] {% endif %},
+    attemptBucketsProfessional: {% if challenge_id and arena_stats and not arena_stats.error %} {{ (arena_stats.attempt_buckets_professional or []) | tojson }} {% else %} [] {% endif %},
   };
 </script>
 <script src="{{ url_for('static', filename='mdc_dashboard.js') }}" defer></script>
+<script src="{{ url_for('static', filename='pw_submission_analytics_charts.js') }}" defer></script>
 <script src="{{ url_for('static', filename='virtual.js') }}" defer></script>
 {% endblock %}
