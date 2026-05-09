@@ -31,9 +31,10 @@
         <a href="{{ url_for('virtual_page') }}" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">Cancel</a>
       </div>
     </form>
-    <div id="vcsr-import-panel" class="hidden mt-lg rounded-xl border border-slate-200 overflow-hidden shadow-sm" aria-live="polite">
-      <div id="vcsr-import-panel-header" class="px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-600 bg-slate-100 border-b border-slate-200"></div>
-      <div id="vcsr-import-panel-body" class="p-4 text-sm text-slate-700 bg-white"></div>
+    <div id="vcsr-import-panel" class="hidden mt-lg" aria-live="polite">
+      <div class="rounded-3xl bg-violet-50/40 py-6 px-2 sm:px-4">
+        <div id="vcsr-import-panel-inner"></div>
+      </div>
     </div>
   </div>
 
@@ -84,7 +85,24 @@
         </div>
       </div>
     </form>
-    <div id="vcsr-attempts-status" class="mt-md hidden rounded-xl border border-violet-100 bg-violet-50/70 px-4 py-3 text-sm text-slate-700" aria-live="polite"></div>
+    <div id="vcsr-attempts-status" class="mt-md hidden" aria-live="polite"></div>
+  </div>
+
+  <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm lg:col-span-2">
+    <h2 class="font-display text-headline-md text-slate-900 mb-sm">Vision UTS (API)</h2>
+    <p class="text-sm text-slate-600 mb-md max-w-3xl">
+      Fetch the latest registrations from the Vision UTS Datacenter endpoint and upsert into
+      <code class="rounded bg-slate-100 px-1 text-xs">virtual_main_data_center_registrations</code>
+      for event <strong>{{ virtual_event_id }}</strong>. Configure <code class="rounded bg-slate-100 px-1 text-xs">VISION_UTS_BASE_URL</code> and
+      <code class="rounded bg-slate-100 px-1 text-xs">VISION_UTS_EVENT_ID</code> in the server environment. This action does not change the optional 6-hour scheduler.
+    </p>
+    <div class="flex flex-wrap gap-2">
+      <button type="button" id="vision-uts-fetch-btn"
+              class="px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 disabled:pointer-events-none">
+        Fetch latest data
+      </button>
+    </div>
+    <div id="vision-uts-fetch-status" class="mt-md hidden" aria-live="polite"></div>
   </div>
 
   <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm lg:col-span-2">
@@ -101,7 +119,7 @@
         <a href="{{ url_for('virtual_page') }}" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">Cancel</a>
       </div>
     </form>
-    <p id="vmdc-import-status" class="text-sm text-slate-600 mt-md hidden" aria-live="polite"></p>
+    <div id="vmdc-import-status" class="mt-md hidden" aria-live="polite"></div>
   </div>
 </div>
 
@@ -110,46 +128,199 @@
      class="inline-flex items-center px-3 py-2 rounded-lg border border-slate-200 text-sm text-slate-600 hover:bg-slate-50 no-underline">Sign out</a>
 </div>
 
+<script src="{{ url_for('static', filename='js/pw_import_summary.js') }}"></script>
 <script>
+(function () {
+  var btn = document.getElementById("vision-uts-fetch-btn");
+  var panel = document.getElementById("vision-uts-fetch-status");
+  if (!btn || !panel) return;
+  var syncUrl = {{ url_for("api_virtual_main_data_center_vision_uts_sync")|tojson }};
+  var vid = {{ virtual_event_id|tojson }};
+  function fmt(n) {
+    try { return Number(n).toLocaleString(); } catch (e) { return String(n); }
+  }
+  btn.addEventListener("click", function () {
+    btn.disabled = true;
+    panel.classList.remove("hidden");
+    panel.innerHTML = pwImportSummaryCard({
+      variant: "neutral",
+      title: "Fetching from Vision UTS",
+      sectionLabel: "Status",
+      metaLeft: "Calling API…",
+      rowsHtml: '<p class="text-sm text-slate-600 py-4">Please keep this page open.</p>',
+    });
+    fetch(syncUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ virtual_event_id: vid }),
+    })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, status: r.status, body: j }; }); })
+      .then(function (res) {
+        btn.disabled = false;
+        var p = res.body || {};
+        if (res.status === 409 && p.skipped_due_to_lock) {
+          panel.innerHTML = pwImportSummaryCard({
+            variant: "neutral",
+            title: "Sync skipped",
+            sectionLabel: "Lock",
+            metaLeft: "Another sync is already running.",
+            rowsHtml: '<p class="text-sm text-slate-600 py-2">Try again in a few minutes.</p>',
+          });
+          return;
+        }
+        if (!res.ok) {
+          var err = p.error ? String(p.error) : "Request failed.";
+          panel.innerHTML = pwImportSummaryCard({
+            variant: "error",
+            title: "Fetch failed",
+            sectionLabel: "Error",
+            metaLeft: "",
+            rowsHtml: '<p class="py-2 text-sm text-rose-800 font-medium">' + pwImportSummaryEsc(err) + "</p>",
+          });
+          return;
+        }
+        var rows = "";
+        rows += pwImportSummaryRow("check", "Fetched (API rows)", fmt(p.fetched_count || 0));
+        rows += pwImportSummaryRow("check", "Inserted", fmt(p.inserted_count || 0));
+        rows += pwImportSummaryRow("check", "Updated", fmt(p.updated_count || 0));
+        rows += pwImportSummaryRow("warn", "Failed / skipped mapping", fmt(p.failed_count || 0));
+        rows += pwImportSummaryRow("check", "Execution time (ms)", fmt(p.execution_time_ms || 0));
+        panel.innerHTML = pwImportSummaryCard({
+          variant: "success",
+          title: "Vision UTS sync complete",
+          sectionLabel: "Summary",
+          metaLeft: "",
+          rowsHtml: rows,
+        });
+      })
+      .catch(function () {
+        btn.disabled = false;
+        panel.innerHTML = pwImportSummaryCard({
+          variant: "error",
+          title: "Fetch failed",
+          sectionLabel: "Error",
+          metaLeft: "",
+          rowsHtml: '<p class="py-2 text-sm text-rose-800 font-medium">Network error.</p>',
+        });
+      });
+  });
+})();
 (function () {
   var form = document.getElementById("vmdc-import-form");
   var statusEl = document.getElementById("vmdc-import-status");
   if (!form || !statusEl) return;
   var apiUrl = {{ url_for("api_import_virtual_main_data_center")|tojson }};
+  var adminUrl = {{ url_for("admin_page")|tojson }};
+  function fmt(n) {
+    try { return Number(n).toLocaleString(); } catch (e) { return String(n); }
+  }
   form.addEventListener("submit", function (e) {
     e.preventDefault();
     var fd = new FormData(form);
     statusEl.classList.remove("hidden");
-    statusEl.textContent = "Uploading…";
+    statusEl.innerHTML = pwImportSummaryCard({
+      variant: "neutral",
+      title: "Import in progress",
+      sectionLabel: "Status",
+      metaLeft: "Uploading your registration file…",
+      rowsHtml: '<p class="text-sm text-slate-600 py-4">Please keep this page open.</p>',
+    });
     fetch(apiUrl, { method: "POST", body: fd, credentials: "same-origin" })
       .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
       .then(function (res) {
         if (!res.ok) {
-          statusEl.textContent = (res.body && res.body.error) ? res.body.error : "Import failed.";
+          var err = (res.body && res.body.error) ? String(res.body.error) : "Import failed.";
+          statusEl.innerHTML = pwImportSummaryCard({
+            variant: "error",
+            title: "Import failed",
+            sectionLabel: "Summary",
+            metaLeft: "",
+            rowsHtml: '<p class="py-2 text-sm text-rose-800 font-medium">' + pwImportSummaryEsc(err) + "</p>",
+          });
           return;
         }
         var p = res.body || {};
-        statusEl.textContent =
-          "Done — created " +
-          (p.rows_created || 0) +
-          ", updated " +
-          (p.rows_updated || 0) +
-          ", written " +
-          (p.rows_written || 0) +
-          ".";
+        var read = p.rows_read != null ? p.rows_read : 0;
+        var after = p.rows_after_dedupe != null ? p.rows_after_dedupe : 0;
+        var dup = (p.duplicate_registration_keys_collapsed != null ? p.duplicate_registration_keys_collapsed : p.duplicate_emails_collapsed) || 0;
+        var merged = read >= after ? read - after : 0;
+        var rows = "";
+        rows += pwImportSummaryRow("check", "Total rows in file", fmt(read));
+        if (dup > 0 || merged > 0) {
+          rows += pwImportSummaryRow("warn", "Duplicated keys in file (extra rows)", fmt(dup));
+          rows += pwImportSummarySubrows([
+            { label: "Unique keys after dedupe", value: fmt(after) },
+            {
+              label: "Extra file rows merged (last row kept)",
+              value: fmt(merged),
+              infoTitle: "Rows that shared a registration key; last occurrence per key is imported.",
+            },
+          ]);
+        }
+        rows += pwImportSummaryTotalRow(
+          "Total rows written",
+          fmt(p.rows_written || 0),
+          "Rows inserted plus updated in the database for this upload."
+        );
+        var afterRows =
+          '<div class="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3">' +
+          '<div class="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-3 text-center">' +
+          '<p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Created</p>' +
+          '<p class="font-display text-2xl text-slate-900 tabular-nums mt-1">' +
+          fmt(p.rows_created || 0) +
+          "</p></div>" +
+          '<div class="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-3 text-center">' +
+          '<p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Updated</p>' +
+          '<p class="font-display text-2xl text-slate-900 tabular-nums mt-1">' +
+          fmt(p.rows_updated || 0) +
+          "</p></div>" +
+          '<div class="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-3 text-center">' +
+          '<p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Skipped</p>' +
+          '<p class="font-display text-2xl text-slate-900 tabular-nums mt-1">' +
+          fmt(p.rows_skipped || 0) +
+          "</p></div></div>";
+        if (p.archive_path) {
+          afterRows +=
+            '<p class="mt-4 text-xs text-slate-500">Archived copy: <code class="font-mono text-slate-700 break-all">' +
+            pwImportSummaryEsc(p.archive_path) +
+            "</code></p>";
+        }
+        var dash = {{ url_for("virtual_page")|tojson }};
+        var footer =
+          '<a href="' +
+          dash +
+          '" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">Virtual dashboard</a>' +
+          '<a href="' +
+          adminUrl +
+          '" class="inline-flex items-center rounded-lg bg-indigo-600 text-white px-5 py-2 text-sm font-semibold hover:bg-indigo-700 no-underline shadow-sm">Done</a>';
+        statusEl.innerHTML = pwImportSummaryCard({
+          variant: "success",
+          title: "Import summary",
+          metaLeft: "Virtual registrations import completed · " + fmt(read) + " rows in file",
+          importId: p.import_job_id,
+          rowsHtml: rows,
+          afterRowsHtml: afterRows,
+          footerHtml: footer,
+        });
       })
       .catch(function () {
-        statusEl.textContent = "Network error.";
+        statusEl.innerHTML = pwImportSummaryCard({
+          variant: "error",
+          title: "Import failed",
+          sectionLabel: "Summary",
+          metaLeft: "",
+          rowsHtml: '<p class="py-2 text-sm text-rose-800 font-medium">Network error.</p>',
+        });
       });
   });
 })();
 (function () {
   var form = document.getElementById("vcsr-import-form");
   var panel = document.getElementById("vcsr-import-panel");
-  var head = document.getElementById("vcsr-import-panel-header");
-  var body = document.getElementById("vcsr-import-panel-body");
+  var inner = document.getElementById("vcsr-import-panel-inner");
   var submitBtn = document.getElementById("vcsr-import-submit");
-  if (!form || !panel || !head || !body) return;
+  if (!form || !panel || !inner) return;
   var apiUrl = {{ url_for("api_import_virtual_challenge_submissions")|tojson }};
 
   function esc(s) {
@@ -159,6 +330,15 @@
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;");
+  }
+
+  function fmt(n) {
+    try { return Number(n).toLocaleString(); } catch (e) { return String(n); }
+  }
+
+  function fillPanel(html) {
+    panel.classList.remove("hidden");
+    inner.innerHTML = html;
   }
 
   function renderSheetsTable(sheets, label) {
@@ -193,25 +373,16 @@
     );
   }
 
-  function showPanel(kind, titleHtml, innerHtml) {
-    panel.classList.remove("hidden");
-    head.className =
-      "px-4 py-2.5 text-xs font-semibold uppercase tracking-wide border-b " +
-      (kind === "ok"
-        ? "text-emerald-800 bg-emerald-50 border-emerald-200"
-        : kind === "warn"
-          ? "text-amber-900 bg-amber-50 border-amber-200"
-          : "text-rose-800 bg-rose-50 border-rose-200");
-    head.innerHTML = titleHtml;
-    body.innerHTML = innerHtml;
-  }
-
   function runVcsrImport(fd) {
-    panel.classList.remove("hidden");
-    head.className =
-      "px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-600 bg-slate-100 border-b border-slate-200";
-    head.textContent = "Uploading…";
-    body.innerHTML = "<p class=\"text-slate-600\">Uploading…</p>";
+    fillPanel(
+      pwImportSummaryCard({
+        variant: "neutral",
+        title: "Import in progress",
+        sectionLabel: "Status",
+        metaLeft: "Uploading challenge submissions…",
+        rowsHtml: '<p class="text-sm text-slate-600 py-4">Please keep this page open.</p>',
+      })
+    );
     if (submitBtn) submitBtn.disabled = true;
     fetch(apiUrl, { method: "POST", body: fd, credentials: "same-origin" })
       .then(function (r) {
@@ -230,7 +401,8 @@
             "<p class=\"text-slate-800 font-medium\">These leader emails are not in the virtual Main Data Center yet.</p>"
           );
           parts409.push(
-            "<p class=\"text-sm text-slate-600 mt-2\">Create registration row(s) from the workbook (name and phone when present), then import all submissions?</p>"
+            "<p class=\"text-sm text-slate-600 mt-2\">Create registration row(s) from the workbook (name and phone when present), then import all submissions? " +
+              "Or skip those addresses and import only rows whose leader email already has a Main Data Center registration.</p>"
           );
           if (lis409) {
             parts409.push("<ul class=\"list-disc pl-5 max-h-40 overflow-y-auto mt-3\">" + lis409 + "</ul>");
@@ -249,14 +421,22 @@
               "</code></p>"
             );
           }
-          parts409.push(
-            "<div class=\"mt-4 flex flex-wrap gap-2\">" +
-              "<button type=\"button\" id=\"vcsr-confirm-mdc\" class=\"px-4 py-2 rounded-lg bg-amber-600 text-white text-sm font-semibold hover:bg-amber-700\">Create registrations and import</button>" +
-              "<button type=\"button\" id=\"vcsr-cancel-mdc\" class=\"px-4 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50\">Cancel</button>" +
-              "</div>"
+          var foot409 =
+            "<button type=\"button\" id=\"vcsr-confirm-mdc\" class=\"px-4 py-2 rounded-lg bg-amber-600 text-white text-sm font-semibold hover:bg-amber-700\">Create registrations and import</button>" +
+            "<button type=\"button\" id=\"vcsr-skip-mdc\" class=\"px-4 py-2 rounded-lg bg-violet-600 text-white text-sm font-semibold hover:bg-violet-700\">Skip missing & import</button>" +
+            "<button type=\"button\" id=\"vcsr-cancel-mdc\" class=\"px-4 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50\">Cancel</button>";
+          fillPanel(
+            pwImportSummaryCard({
+              variant: "warning",
+              title: "Confirm import",
+              sectionLabel: "Action needed",
+              metaLeft: "Some leader emails need registration rows before submissions can import.",
+              rowsHtml: parts409.join(""),
+              footerHtml: foot409,
+            })
           );
-          showPanel("warn", "Confirm import", parts409.join(""));
           var cbtn = document.getElementById("vcsr-confirm-mdc");
+          var sbtn = document.getElementById("vcsr-skip-mdc");
           var xbtn = document.getElementById("vcsr-cancel-mdc");
           if (cbtn) {
             cbtn.addEventListener("click", function () {
@@ -265,9 +445,24 @@
               runVcsrImport(fd2);
             });
           }
+          if (sbtn) {
+            sbtn.addEventListener("click", function () {
+              var fd2 = new FormData(form);
+              fd2.append("skip_missing_mdc_emails", "1");
+              runVcsrImport(fd2);
+            });
+          }
           if (xbtn) {
             xbtn.addEventListener("click", function () {
-              showPanel("err", "Import cancelled", "<p class=\"text-slate-600 text-sm\">No database changes were made.</p>");
+              fillPanel(
+                pwImportSummaryCard({
+                  variant: "error",
+                  title: "Import cancelled",
+                  sectionLabel: "Summary",
+                  metaLeft: "",
+                  rowsHtml: '<p class="text-slate-600 text-sm py-2">No database changes were made.</p>',
+                })
+              );
             });
           }
           return;
@@ -316,62 +511,95 @@
               "</code></p>"
             );
           }
-          showPanel("err", "Import blocked", parts.join(""));
+          fillPanel(
+            pwImportSummaryCard({
+              variant: "error",
+              title: "Import blocked",
+              sectionLabel: "Summary",
+              metaLeft: "",
+              rowsHtml: parts.join(""),
+            })
+          );
           return;
-        }
-        var okParts = [];
-        okParts.push(
-          "<div class=\"rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-950 text-sm\">" +
-          "<strong>Database updated.</strong> Upserted <strong>" +
-          esc(String(p.rows_written || 0)) +
-          "</strong> distinct submission row(s) (per challenge + leader email) into <code class=\"text-xs bg-emerald-100/80 rounded px-1\">virtual_challenge_submission_rows</code>." +
-          "</div>"
-        );
-        if (p.merge_policy) {
-          okParts.push("<p class=\"mt-2 text-xs text-slate-600\">" + esc(p.merge_policy) + "</p>");
         }
         var ps = p.parse_stats || {};
         var parsedTE = ps.rows_parsed_with_team_email;
         var collapsed = ps.rows_collapsed_duplicate_leader_email;
+        var written = p.rows_written || 0;
+        var sheets = ps.sheets || {};
+        var nTabs = Object.keys(sheets).length;
+        var rowsOk = "";
         if (parsedTE != null && collapsed != null && collapsed > 0) {
-          okParts.push(
-            "<p class=\"mt-2 text-xs text-amber-900 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2\">" +
-              "Sheet row counts are <strong>parsed</strong> lines (team + leader email). " +
-              "This file had <strong>" +
-              esc(String(parsedTE)) +
-              "</strong> such lines but <strong>" +
-              esc(String(collapsed)) +
-              "</strong> duplicated the same leader email within a challenge, so <strong>" +
-              esc(String(p.rows_written || 0)) +
-              "</strong> distinct rows were upserted." +
-            "</p>"
+          rowsOk += pwImportSummaryRow("check", "Parsed rows (team + leader email)", fmt(parsedTE));
+          rowsOk += pwImportSummaryRow("warn", "Duplicated leader emails in file (same challenge)", fmt(collapsed));
+          rowsOk += pwImportSummarySubrows([
+            {
+              label: "Distinct rows upserted",
+              value: fmt(written),
+              infoTitle: "Multiple sheet rows for the same leader email on one challenge collapse to one row; last row wins.",
+            },
+          ]);
+        }
+        if (nTabs > 0) {
+          rowsOk += pwImportSummaryRow("dot", "Workbook tabs matched", String(nTabs));
+          var tabSubs = [];
+          Object.keys(sheets).forEach(function (tab) {
+            var inf = sheets[tab] || {};
+            var rw =
+              inf.rows_parsed != null
+                ? fmt(inf.rows_parsed)
+                : inf.rows_written != null
+                  ? fmt(inf.rows_written)
+                  : "0";
+            tabSubs.push({ label: tab, value: rw + " parsed" });
+          });
+          rowsOk += pwImportSummarySubrows(tabSubs);
+        }
+        rowsOk += pwImportSummaryTotalRow(
+          "Distinct submissions upserted",
+          fmt(written),
+          "One row per (challenge, leader email) in virtual_challenge_submission_rows."
+        );
+        var skippedMdc = p.rows_skipped_missing_mdc != null ? Number(p.rows_skipped_missing_mdc) : 0;
+        if (!isNaN(skippedMdc) && skippedMdc > 0) {
+          rowsOk += pwImportSummaryRow(
+            "warn",
+            "Rows skipped (leader not in Main Data Center)",
+            fmt(skippedMdc)
           );
         }
-        if (p.import_job_id != null) {
-          okParts.push(
-            "<p class=\"mt-2 text-xs text-slate-600\">Import job id: <strong>#" +
-            esc(String(p.import_job_id)) +
-            "</strong> (table <code class=\"text-xs\">import_jobs</code>).</p>"
-          );
-        }
-        if (p.parse_stats && p.parse_stats.sheets) {
-          okParts.push(
-            "<div class=\"mt-4\">" +
-            renderSheetsTable(p.parse_stats.sheets, "Sheets in this run") +
-            "</div>"
-          );
+        var afterOk = "";
+        if (p.merge_policy) {
+          afterOk += '<p class="mt-3 text-xs text-slate-600">' + esc(p.merge_policy) + "</p>";
         }
         if (p.archive_path) {
-          okParts.push(
-            "<p class=\"mt-3 text-xs text-slate-500\">Archived copy: <code class=\"break-all\">" +
-              esc(p.archive_path) +
-            "</code></p>"
-          );
+          afterOk +=
+            '<p class="mt-4 text-xs text-slate-500">Archived copy: <code class="font-mono text-slate-700 break-all">' +
+            esc(p.archive_path) +
+            "</code></p>";
         }
-        showPanel("ok", "Import succeeded", okParts.join(""));
+        fillPanel(
+          pwImportSummaryCard({
+            variant: "success",
+            title: "Import summary",
+            sectionLabel: "Rows details",
+            metaLeft: "Database updated · " + fmt(written) + " distinct row(s)" + (nTabs ? " · " + nTabs + " sheet" + (nTabs === 1 ? "" : "s") : ""),
+            importId: p.import_job_id,
+            rowsHtml: rowsOk,
+            afterRowsHtml: afterOk,
+          })
+        );
       })
       .catch(function () {
-        showPanel("err", "Network error", "<p>Could not reach the server.</p>");
+        fillPanel(
+          pwImportSummaryCard({
+            variant: "error",
+            title: "Network error",
+            sectionLabel: "Summary",
+            metaLeft: "",
+            rowsHtml: '<p class="text-sm text-rose-800 py-2">Could not reach the server.</p>',
+          })
+        );
       })
       .finally(function () {
         if (submitBtn) submitBtn.disabled = false;
@@ -398,6 +626,10 @@
   var apiUrl = {{ url_for("api_import_virtual_challenge_attempts")|tojson }};
   var previewUrl = {{ url_for("api_import_virtual_challenge_attempts_preview")|tojson }};
   var mappingReady = false;
+
+  function fmtAtt(n) {
+    try { return Number(n).toLocaleString(); } catch (e) { return String(n); }
+  }
 
   function esc(s) {
     if (s == null) return "";
@@ -510,7 +742,13 @@
       fd.append("column_mapping", JSON.stringify({ email: em, attempts: ac }));
     }
     statusEl.classList.remove("hidden");
-    statusEl.innerHTML = "<p class=\"text-slate-600\">Uploading…</p>";
+    statusEl.innerHTML = pwImportSummaryCard({
+      variant: "neutral",
+      title: "Applying attempt counts",
+      sectionLabel: "Status",
+      metaLeft: "Uploading…",
+      rowsHtml: '<p class="text-sm text-slate-600 py-4">Please wait.</p>',
+    });
     if (submitBtn) submitBtn.disabled = true;
     fetch(apiUrl, { method: "POST", body: fd, credentials: "same-origin" })
       .then(function (r) {
@@ -521,8 +759,16 @@
       .then(function (res) {
         var p = res.body || {};
         if (!res.ok) {
-          statusEl.innerHTML =
-            "<p class=\"text-rose-800 font-medium\">" + esc((p && p.error) ? p.error : "Import failed.") + "</p>";
+          statusEl.innerHTML = pwImportSummaryCard({
+            variant: "error",
+            title: "Import failed",
+            sectionLabel: "Summary",
+            metaLeft: "",
+            rowsHtml:
+              '<p class="py-2 text-sm text-rose-800 font-medium">' +
+              esc((p && p.error) ? p.error : "Import failed.") +
+              "</p>",
+          });
           return;
         }
         var rowUn = p.leader_emails_not_matched_count || 0;
@@ -531,50 +777,68 @@
             ? p.leader_emails_not_matched_unique_count
             : (Array.isArray(p.leader_emails_not_matched) ? p.leader_emails_not_matched.length : 0);
         var emails = p.leader_emails_not_matched || [];
-        var parts = [];
-        var line =
-          "Updated " +
-          (p.rows_written || 0) +
-          " row(s). Sheet rows: " +
-          (p.rows_in_file || 0) +
-          ". Unmatched sheet rows: " +
-          rowUn;
-        if (uniq !== rowUn) {
-          line += " (" + uniq + " distinct leader emails).";
-        } else {
-          line += ".";
+        var rowsW = p.rows_written || 0;
+        var inFile = p.rows_in_file || 0;
+        var rowsH = "";
+        rowsH += pwImportSummaryRow("check", "Rows in upload file", fmtAtt(inFile));
+        if (rowUn > 0) {
+          rowsH += pwImportSummaryRow("warn", "Sheet rows with no matching submission row", fmtAtt(rowUn));
+          rowsH += pwImportSummarySubrows([
+            {
+              label: "Distinct unmatched leader emails",
+              value: fmtAtt(uniq),
+              infoTitle: uniq !== rowUn ? "Row count can exceed distinct emails when the sheet repeats addresses." : "",
+            },
+            { label: "Submission rows updated in database", value: fmtAtt(rowsW) },
+          ]);
         }
-        parts.push("<p class=\"font-medium text-slate-800\">" + esc(line) + "</p>");
+        rowsH += pwImportSummaryTotalRow(
+          "Rows updated",
+          fmtAtt(rowsW),
+          "attempts_completed applied on matching virtual_challenge_submission_rows for this challenge."
+        );
+        var afterH = "";
         if (rowUn > 0) {
           if (emails.length) {
-            parts.push(
-              "<p class=\"text-xs text-slate-600 mt-2\">These leader emails did not match any row in " +
-                "<code class=\"rounded bg-white/80 px-1 text-[11px] border border-violet-100\">virtual_challenge_submission_rows</code> " +
-                "for this challenge (comparison uses normalized email like the submission import).</p>"
-            );
+            afterH +=
+              '<p class="text-xs text-slate-600 mt-3">These leader emails did not match any row in <code class="rounded bg-slate-100 px-1 text-[11px]">virtual_challenge_submission_rows</code> for this challenge.</p>';
             var lis = emails.map(function (em) {
               return "<li class=\"break-all py-0.5\">" + esc(em) + "</li>";
             }).join("");
-            parts.push(
-              "<ul class=\"list-disc pl-5 mt-2 max-h-64 overflow-y-auto space-y-0.5 font-mono text-xs text-slate-900\">" +
-                lis +
-                "</ul>"
-            );
+            afterH +=
+              '<ul class="list-disc pl-5 mt-2 max-h-64 overflow-y-auto space-y-0.5 font-mono text-xs text-slate-900">' +
+              lis +
+              "</ul>";
           } else {
-            parts.push(
-              "<p class=\"text-xs text-amber-900 mt-2\">Unmatched rows had no non-empty leader email on the sheet, or could not be listed.</p>"
-            );
+            afterH +=
+              '<p class="text-xs text-amber-900 mt-3">Unmatched rows had no non-empty leader email on the sheet, or could not be listed.</p>';
           }
           if (emails.length >= 500) {
-            parts.push(
-              "<p class=\"text-xs text-amber-900 mt-2 font-medium\">Showing at most 500 distinct addresses in this response. Re-export from your source or inspect the archived upload if you need the full set.</p>"
-            );
+            afterH +=
+              '<p class="text-xs text-amber-900 mt-3 font-medium">Showing at most 500 distinct addresses in this response.</p>';
           }
         }
-        statusEl.innerHTML = parts.join("");
+        statusEl.innerHTML =
+          '<div class="rounded-3xl bg-violet-50/40 py-4 px-1 sm:px-2">' +
+          pwImportSummaryCard({
+            variant: "success",
+            title: "Import summary",
+            sectionLabel: "Rows details",
+            metaLeft: "Attempt counts applied · " + fmtAtt(inFile) + " sheet rows",
+            importId: p.import_job_id,
+            rowsHtml: rowsH,
+            afterRowsHtml: afterH,
+          }) +
+          "</div>";
       })
       .catch(function () {
-        statusEl.innerHTML = "<p class=\"text-rose-800 font-medium\">Network error.</p>";
+        statusEl.innerHTML = pwImportSummaryCard({
+          variant: "error",
+          title: "Network error",
+          sectionLabel: "Summary",
+          metaLeft: "",
+          rowsHtml: '<p class="py-2 text-sm text-rose-800 font-medium">Could not reach the server.</p>',
+        });
       })
       .finally(function () {
         if (submitBtn) submitBtn.disabled = false;

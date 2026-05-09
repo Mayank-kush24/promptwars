@@ -19,6 +19,15 @@ def _minimal_csv(extra: str = "") -> BytesIO:
     return BytesIO((header + row + extra).encode("utf-8"))
 
 
+def test_coerce_pw_date_cell_nat_to_none():
+    import numpy as np
+    import pandas as pd
+
+    assert etl_data_center._coerce_pw_date_cell(pd.NaT) is None
+    assert etl_data_center._coerce_pw_date_cell(pd.Timestamp("NaT")) is None
+    assert etl_data_center._coerce_pw_date_cell(np.datetime64("NaT")) is None
+
+
 def test_parse_csv_maps_headers_and_email_pk():
     rows, stats = etl_data_center.parse_main_data_center_file(_minimal_csv(), "reg.csv")
     assert stats["rows_read"] == 1
@@ -27,7 +36,7 @@ def test_parse_csv_maps_headers_and_email_pk():
     assert rows[0]["email"] == "a@example.com"
     assert rows[0]["full_name"] == "Ada Lovelace"
     assert rows[0]["attendance_city"] == "Mumbai"
-    assert rows[0]["prompt_war_on"] == etl_data_center._LEGACY_PW_DATE
+    assert rows[0]["prompt_war_on"] is None
     assert rows[0]["session_label"] == ""
     assert rows[0]["form_timestamp"] is not None
     assert rows[0]["form_timestamp"].tzinfo is not None

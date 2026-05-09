@@ -522,6 +522,7 @@ def test_module_subpages_render(client, no_admin_pw, monkeypatch, app_mod):
 
     monkeypatch.setattr(app_mod, "_load_mdc_users_page", _empty_mdc_users)
     monkeypatch.setattr(app_mod, "_load_virtual_challenges_brief", lambda _eid: [])
+    monkeypatch.setattr(app_mod, "_bootcamp_pw_options", lambda *_a, **_k: [])
     cases = (
         ("/overview/logs", "Overview · Logs"),
         ("/overview/settings", "Overview · Settings"),
@@ -531,11 +532,233 @@ def test_module_subpages_render(client, no_admin_pw, monkeypatch, app_mod):
         ("/in-person/settings", "In-person · Settings"),
         ("/virtual/users", "Virtual · Users"),
         ("/virtual/settings", "Virtual · Settings"),
+        ("/bootcamps", "Bootcamps · Dashboard"),
+        ("/bootcamps/import", "Bootcamps · Import"),
     )
     for path, title in cases:
         resp = client.get(path)
         assert resp.status_code == 200, path
         assert title in resp.get_data(as_text=True), path
+
+
+def test_bootcamps_page_with_session_params(client, no_admin_pw, monkeypatch, app_mod):
+    monkeypatch.setattr(
+        app_mod,
+        "_bootcamp_pw_options",
+        lambda *_a, **_k: [
+            {
+                "bootcamp_session_id": 1,
+                "city": "mumbai",
+                "bootcamp_on_iso": "2026-05-12",
+                "slot": "morning",
+                "display": "Mumbai · 12 May 2026 · Morning",
+                "team_count": 0,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        app_mod,
+        "_load_bootcamp_dashboard_stats",
+        lambda *_a, **_k: {
+            "attendees": 42,
+            "activations": 7,
+            "role_split": {"students": 30, "professionals": 12},
+            "activations_by_batch": [
+                {
+                    "batch_label": "Mumbai · 12 May 2026 · Morning",
+                    "activations": 7,
+                    "filter_city": "mumbai",
+                    "filter_date": "2026-05-12",
+                    "filter_slot": "morning",
+                }
+            ],
+            "crossover_virtual": {"registered_count": 0, "submissions_count": 0},
+        },
+    )
+    q = urlencode(
+        {"bcCity": "mumbai", "bcDate": "2026-05-12", "bcSlot": "morning"},
+    )
+    resp = client.get(f"/bootcamps?{q}")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "Bootcamps · Dashboard" in body
+    assert "Mumbai · 12 May 2026 · Morning" in body
+    assert "42" in body
+
+
+def test_bootcamps_import_page_renders(client, no_admin_pw):
+    resp = client.get("/bootcamps/import")
+    assert resp.status_code == 200
+    html = resp.get_data(as_text=True)
+    assert "Manage sessions" in html
+    assert "Manual entry" in html
+    assert "Bulk CSV" in html
+
+
+def test_api_bootcamp_sessions_missing_fields_returns_400(client, no_admin_pw):
+    resp = client.post("/api/bootcamp/sessions", json={})
+    assert resp.status_code == 400
+
+
+def test_api_bootcamp_sessions_bad_slot_returns_400(client, no_admin_pw):
+    resp = client.post(
+        "/api/bootcamp/sessions",
+        json={
+            "event_id": 3,
+            "city": "mumbai",
+            "bootcamp_on": "2026-05-12",
+            "slot": "noon",
+        },
+    )
+    assert resp.status_code == 400
+
+
+def test_api_bootcamp_metrics_put_omitted_integers_default_to_zero(client, no_admin_pw, monkeypatch, app_mod):
+    captured: dict = {}
+
+    class _Result:
+        rowcount = 1
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+        def execute(self, stmt, params=None):
+            s = str(stmt)
+            if "UPDATE" in s and "bootcamp_sessions" in s:
+                captured["params"] = dict(params or {})
+                return _Result()
+            return _Result()
+
+    class _Eng:
+        def begin(self):
+            return _Conn()
+
+    monkeypatch.setattr(app_mod, "engine", _Eng())
+    monkeypatch.setattr(app_mod, "_bootcamp_event_must_exist", lambda *_a, **_k: (True, ""))
+
+    resp = client.put(
+        "/api/bootcamp/sessions/99/metrics?event_id=3",
+        json={"topic": "Only topic"},
+    )
+    assert resp.status_code == 200
+    p = captured.get("params") or {}
+    assert p.get("a") == 0
+    assert p.get("ac") == 0
+    assert p.get("topic") == "Only topic"
+    assert p.get("audience_size") == 0
+    assert p.get("capacity") == 0
+
+
+def test_api_bootcamp_metrics_put_negative_returns_400(client, no_admin_pw):
+    resp = client.put(
+        "/api/bootcamp/sessions/1/metrics?event_id=3",
+        json={
+            "attendees": -1,
+            "activations": 0,
+            "students": 0,
+            "professionals": 0,
+        },
+    )
+    assert resp.status_code == 400
+    resp_cap = client.put(
+        "/api/bootcamp/sessions/1/metrics?event_id=3",
+        json={"capacity": -1},
+    )
+    assert resp_cap.status_code == 400
+    resp_aud = client.put(
+        "/api/bootcamp/sessions/1/metrics?event_id=3",
+        json={"audience_size": -1},
+    )
+    assert resp_aud.status_code == 400
+
+
+def test_api_bootcamp_metrics_put_text_fields_accepted(client, no_admin_pw, monkeypatch, app_mod):
+    captured: dict = {}
+
+    class _Result:
+        rowcount = 1
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+        def execute(self, stmt, params=None):
+            s = str(stmt)
+            if "UPDATE" in s and "bootcamp_sessions" in s:
+                captured["params"] = dict(params or {})
+                return _Result()
+            return _Result()
+
+    class _Eng:
+        def begin(self):
+            return _Conn()
+
+    monkeypatch.setattr(app_mod, "engine", _Eng())
+    monkeypatch.setattr(app_mod, "_bootcamp_event_must_exist", lambda *_a, **_k: (True, ""))
+
+    resp = client.put(
+        "/api/bootcamp/sessions/7/metrics?event_id=3",
+        json={
+            "topic": "LLM 101",
+            "venue_status": "Confirmed",
+            "design_link": "https://example.com/d",
+            "attendees": 5,
+            "activations": 0,
+            "students": 0,
+            "professionals": 0,
+        },
+    )
+    assert resp.status_code == 200
+    p = captured.get("params") or {}
+    assert p.get("topic") == "LLM 101"
+    assert p.get("venue_status") == "Confirmed"
+    assert p.get("design_link") == "https://example.com/d"
+    assert p.get("a") == 5
+
+
+def test_bootcamps_dashboard_stats_wiring_all_sessions(client, no_admin_pw, monkeypatch, app_mod):
+    calls: list[tuple] = []
+
+    def fake_stats(eid, *, city, bootcamp_on, slot):
+        calls.append((city, bootcamp_on, slot))
+        return {
+            "attendees": 99 if city else 0,
+            "activations": 1,
+            "role_split": {"students": 5, "professionals": 4},
+            "activations_by_batch": [],
+            "crossover_virtual": {"registered_count": 0, "submissions_count": 0},
+        }
+
+    monkeypatch.setattr(app_mod, "_load_bootcamp_dashboard_stats", fake_stats)
+    monkeypatch.setattr(app_mod, "_bootcamp_pw_options", lambda *_a, **_k: [])
+    client.get("/bootcamps")
+    assert calls[-1][0] is None
+
+    monkeypatch.setattr(
+        app_mod,
+        "_bootcamp_pw_options",
+        lambda *_a, **_k: [
+            {
+                "bootcamp_session_id": 1,
+                "city": "pune",
+                "bootcamp_on_iso": "2026-06-01",
+                "slot": "evening",
+                "display": "Pune · 01 Jun 2026 · Evening",
+                "team_count": 3,
+            }
+        ],
+    )
+    q = urlencode({"bcCity": "pune", "bcDate": "2026-06-01", "bcSlot": "evening"})
+    client.get(f"/bootcamps?{q}")
+    assert calls[-1][0] == "pune"
+    assert calls[-1][2] == "evening"
 
 
 def test_in_person_users_roster_table(client, no_admin_pw):
@@ -683,6 +906,73 @@ def test_module_import_pages_when_admin_open(client, no_admin_pw):
     assert "Challenge attempt counts" in body_v
     assert "/api/import/virtual/challenge-attempts" in body_v
     assert "/api/import/virtual/challenge-attempts/preview" in body_v
+
+
+def test_virtual_import_page_has_vision_uts_section(client, no_admin_pw):
+    resp = client.get("/virtual/import")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "Vision UTS" in body
+    assert "Fetch latest data" in body
+    assert "/api/virtual/main-data-center/vision-uts/sync" in body
+
+
+def test_api_virtual_vision_uts_sync_ok(client, app_mod, monkeypatch):
+    def fake_run(*_a, **_k):
+        return {
+            "status": "success",
+            "fetched_count": 2,
+            "inserted_count": 1,
+            "updated_count": 1,
+            "failed_count": 0,
+            "execution_time_ms": 12,
+            "skipped_due_to_lock": False,
+        }
+
+    monkeypatch.setattr(app_mod.vision_uts_sync_svc, "run_virtual_mdc_vision_uts_sync", fake_run)
+    resp = client.post("/api/virtual/main-data-center/vision-uts/sync", json={})
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["inserted_count"] == 1
+    assert data["fetched_count"] == 2
+
+
+def test_api_virtual_vision_uts_sync_error_502(client, app_mod, monkeypatch):
+    monkeypatch.setattr(
+        app_mod.vision_uts_sync_svc,
+        "run_virtual_mdc_vision_uts_sync",
+        lambda *a, **k: {
+            "status": "error",
+            "error": "boom",
+            "fetched_count": 0,
+            "inserted_count": 0,
+            "updated_count": 0,
+            "failed_count": 0,
+            "execution_time_ms": 1,
+            "skipped_due_to_lock": False,
+        },
+    )
+    resp = client.post("/api/virtual/main-data-center/vision-uts/sync", json={})
+    assert resp.status_code == 502
+    assert resp.get_json()["error"] == "boom"
+
+
+def test_api_virtual_vision_uts_sync_lock_409(client, app_mod, monkeypatch):
+    monkeypatch.setattr(
+        app_mod.vision_uts_sync_svc,
+        "run_virtual_mdc_vision_uts_sync",
+        lambda *a, **k: {
+            "status": "skipped",
+            "skipped_due_to_lock": True,
+            "fetched_count": 0,
+            "inserted_count": 0,
+            "updated_count": 0,
+            "failed_count": 0,
+            "execution_time_ms": 0,
+        },
+    )
+    resp = client.post("/api/virtual/main-data-center/vision-uts/sync", json={})
+    assert resp.status_code == 409
 
 
 def test_context_processor_injects_defaults(client, overview_stub):

@@ -1,0 +1,15 @@
+{
+  "client_ip": "127.0.0.1",
+  "event_id": 1,
+  "id": 2,
+  "mime_type": "application/vnd.ms-excel",
+  "module": "in_person_submissions",
+  "original_name": "subs.csv",
+  "sha256": "e807d1691231ecbab8e0d8e7382dfab8c0834cf4c5a7b5ea9a2b156a922a228f",
+  "size_bytes": 6,
+  "source_route": "/api/import/in-person",
+  "status": "received",
+  "stored_path": "in_person_submissions/2026/05/04/20260504T053413Z__e807d169__subs.csv",
+  "uploaded_at": "2026-05-04T05:34:13.352592+00:00",
+  "uploaded_by": "test@example.com"
+}

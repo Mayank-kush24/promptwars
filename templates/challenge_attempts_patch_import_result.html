@@ -1,65 +1,54 @@
 {% extends "layouts/base_app.html" %}
+{% from "partials/import_summary_macros.html" import import_summary_card, import_summary_row, import_summary_subrow, import_summary_total_row %}
 {% block title %}PromptWars — {{ title }}{% endblock %}
 {% block content %}
-<div class="flex flex-col gap-md max-w-4xl">
-  <h1 class="font-display text-headline-lg text-slate-900">{{ title }}</h1>
+<div class="rounded-3xl bg-violet-50/40 py-10 px-4 sm:px-8 max-w-4xl mx-auto w-full space-y-lg">
+  <h1 class="font-display text-headline-lg text-slate-900 px-1">{{ title }}</h1>
 
   {% if ok %}
-    <div class="px-4 py-3 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 text-sm font-medium">
-      {{ message }}
-    </div>
-    {% if stats and stats.get('merge_policy') %}
-      <p class="text-xs text-slate-600 max-w-3xl">{{ stats.merge_policy }}</p>
-    {% endif %}
-    {% if stats %}
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-md">
-        <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
-          <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Submission rows updated</p>
-          <p class="font-display text-3xl text-slate-900 tabular-nums mt-1">{{ "{:,}".format(stats.rows_written or 0) }}</p>
-          <p class="text-xs text-slate-500 mt-2">Rows in file: {{ "{:,}".format(stats.rows_in_file or 0) }}</p>
-        </div>
-        <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
-          <p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Import job</p>
-          <p class="font-display text-3xl text-slate-900 tabular-nums mt-1">{{ stats.import_job_id or "—" }}</p>
-          <p class="text-xs text-slate-500 mt-2">Unmatched sheet rows: {{ "{:,}".format(stats.leader_emails_not_matched_count or 0) }}</p>
-        </div>
+    {% set st = stats or {} %}
+    {% set written = st.get('rows_written', 0) or 0 %}
+    {% set in_file = st.get('rows_in_file', 0) or 0 %}
+    {% set unmatched = st.get('leader_emails_not_matched_count', 0) or 0 %}
+    {% call import_summary_card('success', 'Import summary', 'Rows details', message, st.get('import_job_id'), 'Import ID') %}
+      {{ import_summary_row('check', 'Rows in upload file', "{:,}".format(in_file)) }}
+      {% if unmatched > 0 %}
+        {{ import_summary_row('warn', 'Sheet rows with no matching submission row', "{:,}".format(unmatched)) }}
+        {{ import_summary_subrow('Rows updated in database', "{:,}".format(written), 'attempts_completed updated on existing submission rows for this session or challenge.') }}
+      {% endif %}
+      {% if st.get('merge_policy') %}
+        <p class="mt-3 text-xs text-slate-600">{{ st.merge_policy }}</p>
+      {% endif %}
+      {{ import_summary_total_row('Submission rows updated', "{:,}".format(written), 'Rows in in_person or virtual submission tables with attempts_completed applied.') }}
+      {% if st.get('archive_path') %}
+        <p class="mt-4 text-xs text-slate-500">Archived copy: <code class="font-mono text-slate-700 break-all">{{ st.archive_path }}</code></p>
+      {% endif %}
+      <div class="flex justify-end gap-3 mt-8 pt-1 flex-wrap items-center">
+        <a href="{{ back_import_url }}" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">← {{ back_import_label }}</a>
+        <a href="{{ back_dashboard_url }}" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">{{ back_dashboard_label }}</a>
+        <a href="{{ url_for('admin_page') }}" class="inline-flex items-center rounded-lg bg-indigo-600 text-white px-5 py-2 text-sm font-semibold hover:bg-indigo-700 no-underline shadow-sm">Done</a>
       </div>
-      {% if stats.archive_path %}
-        <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm">
-          <h2 class="font-display text-headline-md text-slate-900 mb-sm">Archived copy</h2>
-          <p class="text-sm text-slate-600">A timestamped copy of the original upload was stored at:</p>
-          <p class="mt-1 font-mono text-xs text-slate-700 break-all">{{ stats.archive_path }}</p>
+    {% endcall %}
+  {% else %}
+    {% call import_summary_card('error', title, 'Summary', '') %}
+      <p class="py-2 text-sm text-rose-800 font-medium">{{ message }}</p>
+      {% if error_detail and error_detail.get('nothing_written') %}
+        <div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950 mt-2">
+          <p class="font-semibold">No rows were written to the database.</p>
+          <p class="mt-1 text-amber-900/90">The file was parsed and archived when applicable, but <code class="rounded bg-amber-100/80 px-1 text-xs">attempts_completed</code> was not updated.</p>
         </div>
       {% endif %}
-    {% endif %}
-  {% else %}
-    <div class="px-4 py-3 rounded-xl bg-rose-50 text-rose-800 border border-rose-200 text-sm font-medium">
-      {{ message }}
-    </div>
-    {% if error_detail and error_detail.get('nothing_written') %}
-      <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
-        <p class="font-semibold">No rows were written to the database.</p>
-        <p class="mt-1 text-amber-900/90">The file was parsed and archived when applicable, but <code class="rounded bg-amber-100/80 px-1 text-xs">attempts_completed</code> was not updated.</p>
+      {% if error_detail %}
+        <details class="text-sm text-slate-600 mt-3">
+          <summary class="cursor-pointer font-medium text-slate-700">Full JSON response</summary>
+          <pre class="mt-2 p-3 rounded-lg bg-slate-50 border border-slate-200 overflow-auto text-xs">{{ error_detail|tojson(indent=2) }}</pre>
+        </details>
+      {% endif %}
+      <div class="flex justify-end gap-3 mt-8 pt-1 flex-wrap items-center">
+        <a href="{{ back_import_url }}" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">← {{ back_import_label }}</a>
+        <a href="{{ url_for('admin_page') }}" class="inline-flex items-center rounded-lg bg-indigo-600 text-white px-5 py-2 text-sm font-semibold hover:bg-indigo-700 no-underline shadow-sm">Done</a>
       </div>
-    {% endif %}
-    {% if error_detail %}
-      <details class="text-sm text-slate-600">
-        <summary class="cursor-pointer font-medium text-slate-700">Full JSON response</summary>
-        <pre class="mt-2 p-3 rounded-lg bg-slate-50 border border-slate-200 overflow-auto text-xs">{{ error_detail|tojson(indent=2) }}</pre>
-      </details>
-    {% endif %}
+    {% endcall %}
   {% endif %}
-
-  <div class="flex flex-wrap gap-3 pt-sm">
-    <a href="{{ back_import_url }}" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">
-      ← {{ back_import_label }}
-    </a>
-    <a href="{{ back_dashboard_url }}" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">
-      {{ back_dashboard_label }}
-    </a>
-    <a href="{{ url_for('admin_page') }}" class="inline-flex items-center rounded-lg bg-emerald-600 text-white px-4 py-2 text-sm font-semibold hover:bg-emerald-700 no-underline">
-      Admin
-    </a>
-  </div>
 </div>
 {% endblock %}

@@ -1,0 +1,15 @@
+{
+  "client_ip": "127.0.0.1",
+  "event_id": 1,
+  "id": 1,
+  "mime_type": "application/vnd.ms-excel",
+  "module": "in_person_rsvps",
+  "original_name": "rsvps.csv",
+  "sha256": "46aeba0d3ccb236bb944dcfcc2636c7681ba3d6849d25c28b701cf58fca48dd0",
+  "size_bytes": 6,
+  "source_route": "/api/import/in-person",
+  "status": "received",
+  "stored_path": "in_person_rsvps/2026/05/04/20260504T053413Z__46aeba0d__rsvps.csv",
+  "uploaded_at": "2026-05-04T05:34:13.351431+00:00",
+  "uploaded_by": "test@example.com"
+}

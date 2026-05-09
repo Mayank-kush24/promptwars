@@ -30,9 +30,8 @@ import pandas as pd
 # Trailing "( 2 )" / "(2)" on designation = years of experience (not inner parens like "(Co-founder)").
 _DESIGNATION_TRAILING_YEARS_RE = re.compile(r"\s*\(\s*(\d+)\s*\)\s*$")
 
-# Align with app IPCSR_LEGACY_PROMPT_WAR_DATE / session label cap (no import of Flask app).
-_LEGACY_PW_DATE = date(1970, 1, 1)
 _SESSION_LABEL_MAX_LEN = 64
+_SENTINEL_EPOCH_DATE = date(1970, 1, 1)
 
 
 def _normalize_mdc_session_label(raw: Any) -> str:
@@ -44,14 +43,45 @@ def _normalize_mdc_session_label(raw: Any) -> str:
     return s[:_SESSION_LABEL_MAX_LEN]
 
 
-def _coerce_pw_date_cell(val: Any) -> date:
-    if val is None or (isinstance(val, float) and pd.isna(val)):
-        return _LEGACY_PW_DATE
-    if isinstance(val, datetime):
-        return val.date()
-    if isinstance(val, date):
-        return val
-    return _LEGACY_PW_DATE
+def _coerce_pw_date_cell(val: Any) -> date | None:
+    """Calendar date for a Prompt War session, or ``None`` when the export has no usable date."""
+    if val is None or val is pd.NaT:
+        return None
+    try:
+        if pd.isna(val):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(val, float) and pd.isna(val):
+        return None
+    if isinstance(val, pd.Timestamp):
+        if pd.isna(val):
+            return None
+        d = val.date()
+    elif isinstance(val, datetime):
+        if pd.isna(val):
+            return None
+        d = val.date()
+    elif type(val) is date:
+        d = val
+    else:
+        s = str(val).strip()
+        if not s or s.lower() == "nat":
+            return None
+        try:
+            d = date.fromisoformat(s[:10])
+        except ValueError:
+            return None
+    if d == _SENTINEL_EPOCH_DATE:
+        return None
+    try:
+        if pd.isna(d):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if not isinstance(d, date):
+        return None
+    return d
 
 
 def split_designation_with_years(raw: Any) -> tuple[str | None, int | None]:
@@ -221,11 +251,11 @@ def parse_main_data_center_file(fileobj: BinaryIO, filename: str) -> tuple[list[
         out[c] = out[c].apply(lambda v: None if _blank_to_none(v) is None else str(v).strip())
 
     if "prompt_war_on" not in out.columns:
-        out["prompt_war_on"] = _LEGACY_PW_DATE
+        out["prompt_war_on"] = pd.NaT
     else:
         pdt = pd.to_datetime(out["prompt_war_on"], errors="coerce")
-        out["prompt_war_on"] = pdt.dt.date
-        out.loc[pdt.isna(), "prompt_war_on"] = _LEGACY_PW_DATE
+        pdt = pdt.mask(pdt == pd.Timestamp("1970-01-01"), pd.NaT)
+        out["prompt_war_on"] = pdt
 
     if "session_label" not in out.columns:
         out["session_label"] = ""

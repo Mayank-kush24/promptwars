@@ -101,9 +101,10 @@
       <a href="{{ url_for('in_person_page') }}" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">Cancel</a>
     </div>
   </form>
-  <div id="ip-ac-import-panel" class="hidden mt-lg rounded-xl border border-slate-200 overflow-hidden shadow-sm" aria-live="polite">
-    <div id="ip-ac-import-panel-header" class="px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-600 bg-slate-100 border-b border-slate-200"></div>
-    <div id="ip-ac-import-panel-body" class="p-4 text-sm text-slate-700 bg-white"></div>
+  <div id="ip-ac-import-panel" class="hidden mt-lg" aria-live="polite">
+    <div class="rounded-3xl bg-violet-50/40 py-6 px-2 sm:px-4">
+      <div id="ip-ac-import-panel-inner"></div>
+    </div>
   </div>
 </div>
 
@@ -158,7 +159,7 @@
       </div>
     </div>
   </form>
-  <div id="ipcsr-attempts-status" class="mt-md hidden rounded-xl border border-violet-100 bg-violet-50/70 px-4 py-3 text-sm text-slate-700" aria-live="polite"></div>
+  <div id="ipcsr-attempts-status" class="mt-md hidden" aria-live="polite"></div>
 </div>
 
 <div class="bg-white rounded-2xl border border-slate-200 p-lg shadow-sm mt-lg lg:col-span-2">
@@ -208,7 +209,7 @@
       <p class="text-xs font-semibold text-slate-600 uppercase tracking-wide mb-sm">Column → field</p>
       <div id="ip-rsvp-mapping-rows" class="flex flex-col gap-sm"></div>
     </div>
-    <div id="ip-rsvp-status" class="hidden rounded-xl border border-slate-200 px-4 py-3 text-sm" aria-live="polite"></div>
+    <div id="ip-rsvp-status" class="hidden mt-md" aria-live="polite"></div>
   </div>
 </div>
 
@@ -219,6 +220,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="{{ url_for('static', filename='js/pw_import_summary.js') }}"></script>
 <script>
 /** Read fetch body as text, then JSON; avoids false "Network error" when server returns HTML or empty body. */
 function pwParseImportApiResponse(r) {
@@ -280,45 +282,102 @@ function pwParseImportApiResponse(r) {
   }
 
   function renderStats(s) {
+    var read = s.rows_read != null ? s.rows_read : 0;
+    var after = s.rows_after_dedupe != null ? s.rows_after_dedupe : 0;
+    var dup = (s.duplicate_registration_keys_collapsed != null ? s.duplicate_registration_keys_collapsed : s.duplicate_emails_collapsed) || 0;
+    var merged = read >= after ? read - after : 0;
+    var written = s.rows_written != null ? s.rows_written : 0;
     var c = s.rows_created != null ? s.rows_created : 0;
     var u = s.rows_updated != null ? s.rows_updated : 0;
     var sk = s.rows_skipped != null ? s.rows_skipped : 0;
+    var rows = "";
+    rows += pwImportSummaryRow("check", "Total rows in file", fmt(read));
+    if (dup > 0 || merged > 0) {
+      rows += pwImportSummaryRow("warn", "Duplicated keys in file (extra rows)", fmt(dup));
+      rows += pwImportSummarySubrows([
+        { label: "Unique keys after dedupe", value: fmt(after) },
+        {
+          label: "Extra file rows merged (last row kept)",
+          value: fmt(merged),
+          infoTitle: "Rows that shared a registration key; last occurrence per key is imported.",
+        },
+      ]);
+    }
+    rows += pwImportSummaryTotalRow(
+      "Total rows written",
+      fmt(written),
+      "Rows inserted plus updated in the database for this upload."
+    );
+    var afterRows =
+      '<div class="mt-6 grid grid-cols-1 sm:grid-cols-3 gap-3">' +
+      '<div class="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-3 text-center">' +
+      '<p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Created</p>' +
+      '<p class="font-display text-2xl text-slate-900 tabular-nums mt-1">' + fmt(c) + "</p></div>" +
+      '<div class="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-3 text-center">' +
+      '<p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Updated</p>' +
+      '<p class="font-display text-2xl text-slate-900 tabular-nums mt-1">' + fmt(u) + "</p></div>" +
+      '<div class="rounded-xl border border-slate-100 bg-slate-50/80 px-3 py-3 text-center">' +
+      '<p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Skipped</p>' +
+      '<p class="font-display text-2xl text-slate-900 tabular-nums mt-1">' + fmt(sk) + "</p></div></div>";
+    if (s.archive_path) {
+      afterRows +=
+        '<p class="mt-4 text-xs text-slate-500">Archived copy: <code class="font-mono text-slate-700 break-all">' +
+        pwImportSummaryEsc(s.archive_path) +
+        "</code></p>";
+    }
+    var dash = {{ url_for("in_person_page")|tojson }};
+    var adm = {{ url_for("admin_page")|tojson }};
+    var footer =
+      '<a href="' +
+      dash +
+      '" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">In-person dashboard</a>' +
+      '<a href="' +
+      adm +
+      '" class="inline-flex items-center rounded-lg bg-indigo-600 text-white px-5 py-2 text-sm font-semibold hover:bg-indigo-700 no-underline shadow-sm">Done</a>';
     return (
-      '<div class="rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 text-sm font-medium px-4 py-3 mb-md">Done.</div>' +
-      '<div class="grid grid-cols-1 sm:grid-cols-3 gap-md mb-md">' +
-        '<div class="bg-slate-50 rounded-2xl border border-slate-200 p-lg">' +
-          '<p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Created</p>' +
-          '<p class="font-display text-3xl text-slate-900 tabular-nums mt-1">' + fmt(c) + '</p>' +
-          '<p class="text-xs text-slate-500 mt-2">New</p></div>' +
-        '<div class="bg-slate-50 rounded-2xl border border-slate-200 p-lg">' +
-          '<p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Updated</p>' +
-          '<p class="font-display text-3xl text-slate-900 tabular-nums mt-1">' + fmt(u) + '</p>' +
-          '<p class="text-xs text-slate-500 mt-2">Refreshed</p></div>' +
-        '<div class="bg-slate-50 rounded-2xl border border-slate-200 p-lg">' +
-          '<p class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Skipped</p>' +
-          '<p class="font-display text-3xl text-slate-900 tabular-nums mt-1">' + fmt(sk) + '</p>' +
-          '<p class="text-xs text-slate-500 mt-2">Skipped (no email)</p></div>' +
-      '</div>' +
-      '<div class="bg-slate-50 rounded-2xl border border-slate-200 p-lg text-sm text-slate-600">' +
-        '<h3 class="font-display text-headline-md text-slate-900 mb-sm">Details</h3>' +
-        '<ul class="space-y-1 list-none pl-0">' +
-          '<li class="flex justify-between gap-4 border-b border-slate-200 py-2"><span>Read</span><span class="tabular-nums font-medium text-slate-900">' + fmt(s.rows_read) + '</span></li>' +
-          '<li class="flex justify-between gap-4 border-b border-slate-200 py-2"><span>Written</span><span class="tabular-nums font-medium text-slate-900">' + fmt(s.rows_written) + '</span></li>' +
-          '<li class="flex justify-between gap-4 border-b border-slate-200 py-2"><span>After dedupe</span><span class="tabular-nums font-medium text-slate-900">' + fmt(s.rows_after_dedupe) + '</span></li>' +
-          '<li class="flex justify-between gap-4 py-2"><span>Duplicate keys (last kept)</span><span class="tabular-nums font-medium text-slate-900">' + fmt((s.duplicate_registration_keys_collapsed != null ? s.duplicate_registration_keys_collapsed : s.duplicate_emails_collapsed) || 0) + '</span></li>' +
-        '</ul></div>' +
-      '<div class="flex flex-wrap gap-3 mt-md">' +
-        '<a href="' + {{ url_for("in_person_page")|tojson }} + '" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">In-person dashboard</a>' +
-        '<a href="' + {{ url_for("admin_page")|tojson }} + '" class="inline-flex items-center rounded-lg bg-emerald-600 text-white px-4 py-2 text-sm font-semibold hover:bg-emerald-700 no-underline">Admin</a>' +
-      '</div>'
+      '<div class="rounded-3xl bg-violet-50/40 py-6 px-2 sm:px-4 -mx-2">' +
+      pwImportSummaryCard({
+        variant: "success",
+        title: "Import summary",
+        metaLeft: "Main Data Center import completed · " + fmt(read) + " rows in file",
+        importId: s.import_job_id,
+        rowsHtml: rows,
+        afterRowsHtml: afterRows,
+        footerHtml: footer,
+      }) +
+      "</div>"
     );
   }
 
   function renderError(data) {
-    var msg = (data && data.error) ? data.error : "Import failed.";
+    var msg = (data && data.error) ? String(data.error) : "Import failed.";
+    var body =
+      '<p class="py-2 text-sm text-rose-800 font-medium">' + pwImportSummaryEsc(msg) + "</p>" +
+      (data
+        ? '<pre class="mt-3 p-3 rounded-lg bg-slate-50 border border-slate-200 overflow-auto text-xs text-slate-700">' +
+          pwImportSummaryEsc(JSON.stringify(data, null, 2)) +
+          "</pre>"
+        : "");
+    var dash = {{ url_for("in_person_page")|tojson }};
+    var adm = {{ url_for("admin_page")|tojson }};
+    var footer =
+      '<a href="' +
+      dash +
+      '" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 no-underline">In-person dashboard</a>' +
+      '<a href="' +
+      adm +
+      '" class="inline-flex items-center rounded-lg bg-indigo-600 text-white px-5 py-2 text-sm font-semibold hover:bg-indigo-700 no-underline shadow-sm">Done</a>';
     return (
-      '<div class="rounded-xl bg-rose-50 text-rose-800 border border-rose-200 text-sm font-medium px-4 py-3">' + msg + '</div>' +
-      (data ? '<pre class="mt-3 p-3 rounded-lg bg-slate-50 border border-slate-200 overflow-auto text-xs text-slate-700">' + JSON.stringify(data, null, 2) + "</pre>" : "")
+      '<div class="rounded-3xl bg-violet-50/40 py-6 px-2 sm:px-4 -mx-2">' +
+      pwImportSummaryCard({
+        variant: "error",
+        title: "Import failed",
+        sectionLabel: "Summary",
+        metaLeft: "",
+        rowsHtml: body,
+        footerHtml: footer,
+      }) +
+      "</div>"
     );
   }
 
@@ -370,10 +429,9 @@ function pwParseImportApiResponse(r) {
 (function () {
   var form = document.getElementById("ip-ac-import-form");
   var panel = document.getElementById("ip-ac-import-panel");
-  var head = document.getElementById("ip-ac-import-panel-header");
-  var body = document.getElementById("ip-ac-import-panel-body");
+  var inner = document.getElementById("ip-ac-import-panel-inner");
   var submitBtn = document.getElementById("ip-ac-import-submit");
-  if (!form || !panel || !head || !body) return;
+  if (!form || !panel || !inner) return;
   var apiUrl = {{ url_for("api_import_in_person_action_center")|tojson }};
   var sessionsUrl = {{ url_for("api_in_person_sessions_list", event_id=(in_person_event_id|default(1)))|tojson }};
   var sessSel = document.getElementById("ip-ac-pw-session");
@@ -495,25 +553,25 @@ function pwParseImportApiResponse(r) {
     );
   }
 
-  function showPanel(kind, titleHtml, innerHtml) {
+  function fmtIp(n) {
+    try { return Number(n).toLocaleString(); } catch (e) { return String(n); }
+  }
+
+  function fillPanel(html) {
     panel.classList.remove("hidden");
-    head.className =
-      "px-4 py-2.5 text-xs font-semibold uppercase tracking-wide border-b " +
-      (kind === "ok"
-        ? "text-emerald-800 bg-emerald-50 border-emerald-200"
-        : kind === "warn"
-          ? "text-amber-900 bg-amber-50 border-amber-200"
-          : "text-rose-800 bg-rose-50 border-rose-200");
-    head.innerHTML = titleHtml;
-    body.innerHTML = innerHtml;
+    inner.innerHTML = html;
   }
 
   function runIpAcImport(fd) {
-    panel.classList.remove("hidden");
-    head.className =
-      "px-4 py-2.5 text-xs font-semibold uppercase tracking-wide text-slate-600 bg-slate-100 border-b border-slate-200";
-    head.textContent = "Uploading…";
-    body.innerHTML = "<p class=\"text-slate-600\">Uploading…</p>";
+    fillPanel(
+      pwImportSummaryCard({
+        variant: "neutral",
+        title: "Import in progress",
+        sectionLabel: "Status",
+        metaLeft: "Uploading Action Center workbook…",
+        rowsHtml: '<p class="text-sm text-slate-600 py-4">Please keep this page open.</p>',
+      })
+    );
     if (submitBtn) submitBtn.disabled = true;
     fetch(apiUrl, { method: "POST", body: fd, credentials: "same-origin" })
       .then(pwParseImportApiResponse)
@@ -541,13 +599,19 @@ function pwParseImportApiResponse(r) {
               "<p class=\"mt-3 text-xs text-slate-500\">Archived: <code class=\"break-all\">" + esc(p.archive_path) + "</code></p>"
             );
           }
-          parts409.push(
-            "<div class=\"mt-4 flex flex-wrap gap-2\">" +
-              "<button type=\"button\" id=\"ip-ac-confirm-mdc\" class=\"px-4 py-2 rounded-lg bg-amber-600 text-white text-sm font-semibold hover:bg-amber-700\">Create registrations and import</button>" +
-              "<button type=\"button\" id=\"ip-ac-cancel-mdc\" class=\"px-4 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50\">Cancel</button>" +
-              "</div>"
+          var foot409 =
+            "<button type=\"button\" id=\"ip-ac-confirm-mdc\" class=\"px-4 py-2 rounded-lg bg-amber-600 text-white text-sm font-semibold hover:bg-amber-700\">Create registrations and import</button>" +
+            "<button type=\"button\" id=\"ip-ac-cancel-mdc\" class=\"px-4 py-2 rounded-lg border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-slate-50\">Cancel</button>";
+          fillPanel(
+            pwImportSummaryCard({
+              variant: "warning",
+              title: "Confirm import",
+              sectionLabel: "Action needed",
+              metaLeft: "Some leader emails need registration rows before submissions can import.",
+              rowsHtml: parts409.join(""),
+              footerHtml: foot409,
+            })
           );
-          showPanel("warn", "Confirm import", parts409.join(""));
           var cbtn = document.getElementById("ip-ac-confirm-mdc");
           var xbtn = document.getElementById("ip-ac-cancel-mdc");
           if (cbtn) {
@@ -562,7 +626,15 @@ function pwParseImportApiResponse(r) {
           }
           if (xbtn) {
             xbtn.addEventListener("click", function () {
-              showPanel("err", "Import cancelled", "<p class=\"text-slate-600 text-sm\">No database changes were made.</p>");
+              fillPanel(
+                pwImportSummaryCard({
+                  variant: "error",
+                  title: "Import cancelled",
+                  sectionLabel: "Summary",
+                  metaLeft: "",
+                  rowsHtml: '<p class="text-slate-600 text-sm py-2">No database changes were made.</p>',
+                })
+              );
             });
           }
           return;
@@ -593,36 +665,79 @@ function pwParseImportApiResponse(r) {
           if (p.archive_path) {
             parts.push("<p class=\"mt-3 text-xs text-slate-500\">Archived: <code class=\"break-all\">" + esc(p.archive_path) + "</code></p>");
           }
-          showPanel("err", "Import blocked", parts.join(""));
+          fillPanel(
+            pwImportSummaryCard({
+              variant: "error",
+              title: "Import blocked",
+              sectionLabel: "Summary",
+              metaLeft: "",
+              rowsHtml: parts.join(""),
+            })
+          );
           return;
         }
-        var okParts = [];
-        okParts.push(
-          "<div class=\"rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-950 text-sm\">" +
-          "<strong>Database updated.</strong> Upserted <strong>" + esc(String(p.rows_written || 0)) +
-          "</strong> row(s).</div>"
-        );
-        if (p.merge_policy) okParts.push("<p class=\"mt-2 text-xs text-slate-600\">" + esc(p.merge_policy) + "</p>");
+        var written = p.rows_written || 0;
+        var sheets = (p.parse_stats && p.parse_stats.sheets) || {};
+        var nTabs = Object.keys(sheets).length;
+        var rowsOk = "";
         if (p.attendance_city) {
-          okParts.push("<p class=\"mt-2 text-xs text-slate-600\">Prompt War (city): <strong>" + esc(p.attendance_city) + "</strong></p>");
+          rowsOk += pwImportSummaryRow("dot", "Prompt War (attendance city)", esc(p.attendance_city));
+        }
+        if (nTabs > 0) {
+          rowsOk += pwImportSummaryRow("dot", "Workbook tabs in this run", String(nTabs));
+          var tabSubs = [];
+          Object.keys(sheets).forEach(function (tab) {
+            var inf = sheets[tab] || {};
+            var sk = inf.sheet_kind_label || inf.sheet_kind || "—";
+            var rw = inf.rows_written != null ? fmtIp(inf.rows_written) : "0";
+            var skp = inf.rows_skipped != null ? " · skipped " + fmtIp(inf.rows_skipped) : "";
+            tabSubs.push({ label: tab + " — " + sk, value: rw + " written" + skp });
+          });
+          rowsOk += pwImportSummarySubrows(tabSubs);
+        }
+        rowsOk += pwImportSummaryTotalRow(
+          "Total rows written",
+          fmtIp(written),
+          "Rows upserted into in_person_challenge_submission_rows for this run."
+        );
+        var afterOk = "";
+        if (p.merge_policy) {
+          afterOk += '<p class="mt-3 text-xs text-slate-600">' + esc(p.merge_policy) + "</p>";
         }
         if (p.parse_stats && p.parse_stats.mismatched_attendance_city) {
-          okParts.push(
-            "<p class=\"mt-2 text-xs text-amber-800\">Registration city mismatch for " +
+          afterOk +=
+            '<p class="mt-3 text-xs text-amber-800 rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2">Registration city mismatch for ' +
             esc(String(p.parse_stats.mismatched_attendance_city)) +
-            " leader row(s) (still imported).</p>"
-          );
-        }
-        if (p.parse_stats && p.parse_stats.sheets) {
-          okParts.push("<div class=\"mt-4\">" + renderSheetsTable(p.parse_stats.sheets, "Sheets in this run") + "</div>");
+            " leader row(s) (still imported).</p>";
         }
         if (p.archive_path) {
-          okParts.push("<p class=\"mt-3 text-xs text-slate-500\">Archived: <code class=\"break-all\">" + esc(p.archive_path) + "</code></p>");
+          afterOk +=
+            '<p class="mt-4 text-xs text-slate-500">Archived: <code class="font-mono text-slate-700 break-all">' +
+            esc(p.archive_path) +
+            "</code></p>";
         }
-        showPanel("ok", "Import succeeded", okParts.join(""));
+        fillPanel(
+          pwImportSummaryCard({
+            variant: "success",
+            title: "Import summary",
+            sectionLabel: "Rows details",
+            metaLeft: "Database updated · " + fmtIp(written) + " row(s)" + (nTabs ? " · " + nTabs + " sheet" + (nTabs === 1 ? "" : "s") : ""),
+            importId: p.import_job_id,
+            rowsHtml: rowsOk,
+            afterRowsHtml: afterOk,
+          })
+        );
       })
       .catch(function () {
-        showPanel("err", "Network error", "<p>Could not reach the server.</p>");
+        fillPanel(
+          pwImportSummaryCard({
+            variant: "error",
+            title: "Network error",
+            sectionLabel: "Summary",
+            metaLeft: "",
+            rowsHtml: '<p class="text-sm text-rose-800 py-2">Could not reach the server.</p>',
+          })
+        );
       })
       .finally(function () {
         if (submitBtn) submitBtn.disabled = false;
@@ -636,11 +751,27 @@ function pwParseImportApiResponse(r) {
     }
     var fd = new FormData(form);
     if (sessSel && sessSel.disabled) {
-      showPanel("err", "No PW session", "<p class=\"text-rose-800\">Add a PW session in Settings, then reload this page.</p>");
+      fillPanel(
+        pwImportSummaryCard({
+          variant: "error",
+          title: "No PW session",
+          sectionLabel: "Summary",
+          metaLeft: "",
+          rowsHtml: '<p class="text-sm text-rose-800 py-2">Add a PW session in Settings, then reload this page.</p>',
+        })
+      );
       return;
     }
     if (!fd.get("attendance_city") || !fd.get("prompt_war_on")) {
-      showPanel("err", "Missing session", "<p class=\"text-rose-800\">Select a PW session.</p>");
+      fillPanel(
+        pwImportSummaryCard({
+          variant: "error",
+          title: "Missing session",
+          sectionLabel: "Summary",
+          metaLeft: "",
+          rowsHtml: '<p class="text-sm text-rose-800 py-2">Select a PW session.</p>',
+        })
+      );
       return;
     }
     runIpAcImport(fd);
@@ -673,16 +804,25 @@ function pwParseImportApiResponse(r) {
       .replace(/"/g, "&quot;");
   }
 
+  function fmtR(n) {
+    try { return Number(n).toLocaleString(); } catch (e) { return String(n); }
+  }
+
   function showStatus(kind, html) {
-    statusEl.classList.remove("hidden", "border-rose-200", "bg-rose-50", "text-rose-800", "border-emerald-200", "bg-emerald-50", "text-emerald-900", "border-slate-200", "bg-slate-50", "text-slate-700");
-    if (kind === "err") {
-      statusEl.classList.add("border-rose-200", "bg-rose-50", "text-rose-800");
-    } else if (kind === "ok") {
-      statusEl.classList.add("border-emerald-200", "bg-emerald-50", "text-emerald-900");
-    } else {
-      statusEl.classList.add("border-slate-200", "bg-slate-50", "text-slate-700");
+    statusEl.className = "mt-md";
+    var inner = html;
+    if (String(html).indexOf("pw-import-summary-card") < 0) {
+      var variant = kind === "err" ? "error" : kind === "ok" ? "success" : "neutral";
+      var ttl = kind === "err" ? "Notice" : kind === "ok" ? "Done" : "Next step";
+      inner = pwImportSummaryCard({
+        variant: variant,
+        title: ttl,
+        sectionLabel: kind === "info" ? "Column mapping" : "Summary",
+        metaLeft: "",
+        rowsHtml: '<div class="text-sm py-1">' + html + "</div>",
+      });
     }
-    statusEl.innerHTML = html;
+    statusEl.innerHTML = '<div class="rounded-3xl bg-violet-50/40 py-4 px-1 sm:px-2">' + inner + "</div>";
     statusEl.classList.remove("hidden");
   }
 
@@ -861,27 +1001,34 @@ function pwParseImportApiResponse(r) {
         }
         var p = res.body;
         var ps = p.parse_stats || {};
+        var read = ps.rows_read || 0;
+        var emw = ps.emails_written != null ? ps.emails_written : 0;
+        var rowsCard = "";
+        rowsCard += pwImportSummaryRow("check", "Rows read from file", fmtR(read));
+        rowsCard += pwImportSummaryRow("dot", "Emails stored for this session & list type", fmtR(emw));
+        rowsCard += pwImportSummarySubrows([
+          { label: "Blank email rows", value: fmtR(ps.rows_blank_email || 0) },
+          { label: "Invalid email rows", value: fmtR(ps.rows_invalid_email || 0) },
+          { label: "Rows after dedupe", value: fmtR(ps.rows_after_dedupe || 0) },
+        ]);
+        rowsCard += pwImportSummaryTotalRow("Emails written to list", fmtR(emw), "Distinct emails stored for the selected PW session and RSVP list type.");
+        var afterR = "";
+        if (p.archive_path) {
+          afterR +=
+            '<p class="mt-4 text-xs text-slate-500">Archived: <code class="font-mono text-slate-700 break-all">' +
+            esc(p.archive_path) +
+            "</code></p>";
+        }
         showStatus(
           "ok",
-          "<p><strong>Done.</strong> Stored <strong>" +
-            esc(String(ps.emails_written != null ? ps.emails_written : 0)) +
-            "</strong> email(s) for this session and list type.</p>" +
-            "<ul class=\"mt-2 text-xs list-disc pl-5 text-slate-600\">" +
-            "<li>Rows read: " +
-            esc(String(ps.rows_read || 0)) +
-            "</li>" +
-            "<li>Blank email: " +
-            esc(String(ps.rows_blank_email || 0)) +
-            "</li>" +
-            "<li>Invalid email: " +
-            esc(String(ps.rows_invalid_email || 0)) +
-            "</li>" +
-            "<li>Deduped: " +
-            esc(String(ps.rows_after_dedupe || 0)) +
-            "</li></ul>" +
-            (p.archive_path
-              ? "<p class=\"mt-2 text-xs text-slate-500\">Archived: <code class=\"break-all\">" + esc(p.archive_path) + "</code></p>"
-              : "")
+          pwImportSummaryCard({
+            variant: "success",
+            title: "Import summary",
+            sectionLabel: "Rows details",
+            metaLeft: "RSVP list import completed · " + fmtR(read) + " rows in file",
+            rowsHtml: rowsCard,
+            afterRowsHtml: afterR,
+          })
         );
       })
       .catch(function () {
@@ -907,6 +1054,10 @@ function pwParseImportApiResponse(r) {
   var previewUrl = {{ url_for("api_import_in_person_challenge_attempts_preview")|tojson }};
   var sessionsUrl = {{ url_for("api_in_person_sessions_list", event_id=(in_person_event_id|default(1)))|tojson }};
   var mappingReady = false;
+
+  function fmtIpA(n) {
+    try { return Number(n).toLocaleString(); } catch (e) { return String(n); }
+  }
 
   function esc(s) {
     if (s == null) return "";
@@ -1056,7 +1207,16 @@ function pwParseImportApiResponse(r) {
     var fd = new FormData(form);
     if (!sessSel.value) {
       statusEl.classList.remove("hidden");
-      statusEl.innerHTML = "<p class=\"text-amber-800 font-medium\">Select a PW session.</p>";
+      statusEl.innerHTML =
+        '<div class="rounded-3xl bg-violet-50/40 py-4 px-1 sm:px-2">' +
+        pwImportSummaryCard({
+          variant: "error",
+          title: "Missing session",
+          sectionLabel: "Summary",
+          metaLeft: "",
+          rowsHtml: '<p class="text-sm text-amber-900 py-2 font-medium">Select a PW session.</p>',
+        }) +
+        "</div>";
       return;
     }
     if (mappingReady) {
@@ -1065,13 +1225,31 @@ function pwParseImportApiResponse(r) {
       if (!em || !ac) {
         statusEl.classList.remove("hidden");
         statusEl.innerHTML =
-          "<p class=\"text-amber-800 font-medium\">After preview, select both <strong>Email</strong> and <strong>Attempts</strong> columns (or clear mapping by choosing a new file without previewing).</p>";
+          '<div class="rounded-3xl bg-violet-50/40 py-4 px-1 sm:px-2">' +
+          pwImportSummaryCard({
+            variant: "error",
+            title: "Column mapping",
+            sectionLabel: "Summary",
+            metaLeft: "",
+            rowsHtml:
+              '<p class="text-sm text-amber-900 py-2 font-medium">After preview, select both <strong>Email</strong> and <strong>Attempts</strong> columns (or choose a new file without previewing).</p>',
+          }) +
+          "</div>";
         return;
       }
       fd.append("column_mapping", JSON.stringify({ email: em, attempts: ac }));
     }
     statusEl.classList.remove("hidden");
-    statusEl.innerHTML = "<p class=\"text-slate-600\">Uploading…</p>";
+    statusEl.innerHTML =
+      '<div class="rounded-3xl bg-violet-50/40 py-4 px-1 sm:px-2">' +
+      pwImportSummaryCard({
+        variant: "neutral",
+        title: "Applying attempt counts",
+        sectionLabel: "Status",
+        metaLeft: "Uploading…",
+        rowsHtml: '<p class="text-sm text-slate-600 py-4">Please wait.</p>',
+      }) +
+      "</div>";
     if (submitBtn) submitBtn.disabled = true;
     fetch(apiUrl, { method: "POST", body: fd, credentials: "same-origin" })
       .then(function (r) {
@@ -1083,7 +1261,18 @@ function pwParseImportApiResponse(r) {
         var p = res.body || {};
         if (!res.ok) {
           statusEl.innerHTML =
-            "<p class=\"text-rose-800 font-medium\">" + esc((p && p.error) ? p.error : "Import failed.") + "</p>";
+            '<div class="rounded-3xl bg-violet-50/40 py-4 px-1 sm:px-2">' +
+            pwImportSummaryCard({
+              variant: "error",
+              title: "Import failed",
+              sectionLabel: "Summary",
+              metaLeft: "",
+              rowsHtml:
+                '<p class="py-2 text-sm text-rose-800 font-medium">' +
+                esc((p && p.error) ? p.error : "Import failed.") +
+                "</p>",
+            }) +
+            "</div>";
           return;
         }
         var rowUn = p.leader_emails_not_matched_count || 0;
@@ -1092,46 +1281,71 @@ function pwParseImportApiResponse(r) {
             ? p.leader_emails_not_matched_unique_count
             : (Array.isArray(p.leader_emails_not_matched) ? p.leader_emails_not_matched.length : 0);
         var emails = p.leader_emails_not_matched || [];
-        var parts = [];
-        var line =
-          "Updated " +
-          (p.rows_written || 0) +
-          " row(s). Sheet rows: " +
-          (p.rows_in_file || 0) +
-          ". Unmatched sheet rows: " +
-          rowUn;
-        if (uniq !== rowUn) {
-          line += " (" + uniq + " distinct leader emails).";
-        } else {
-          line += ".";
-        }
-        parts.push("<p class=\"font-medium text-slate-800\">" + esc(line) + "</p>");
+        var rowsW = p.rows_written || 0;
+        var inFile = p.rows_in_file || 0;
+        var rowsH = "";
+        rowsH += pwImportSummaryRow("check", "Rows in upload file", fmtIpA(inFile));
         if (rowUn > 0) {
-          if (emails.length) {
-            parts.push(
-              "<p class=\"text-xs text-slate-600 mt-2\">These leader emails did not match any row in " +
-                "<code class=\"rounded bg-white/80 px-1 text-[11px] border border-violet-100\">in_person_challenge_submission_rows</code> " +
-                "for this session and segment (comparison uses normalized email).</p>"
-            );
-            var lis = emails.map(function (em) {
-              return "<li class=\"break-all py-0.5\">" + esc(em) + "</li>";
-            }).join("");
-            parts.push(
-              "<ul class=\"list-disc pl-5 mt-2 max-h-64 overflow-y-auto space-y-0.5 font-mono text-xs text-slate-900\">" +
-                lis +
-                "</ul>"
-            );
-          }
-          if (emails.length >= 500) {
-            parts.push(
-              "<p class=\"text-xs text-amber-900 mt-2 font-medium\">Showing at most 500 distinct addresses in this response.</p>"
-            );
-          }
+          rowsH += pwImportSummaryRow("warn", "Sheet rows with no matching submission row", fmtIpA(rowUn));
+          rowsH += pwImportSummarySubrows([
+            {
+              label: "Distinct unmatched leader emails",
+              value: fmtIpA(uniq),
+              infoTitle:
+                uniq !== rowUn ? "Row count can exceed distinct emails when the sheet repeats addresses." : "",
+            },
+            { label: "Submission rows updated in database", value: fmtIpA(rowsW) },
+          ]);
         }
-        statusEl.innerHTML = parts.join("");
+        rowsH += pwImportSummaryTotalRow(
+          "Rows updated",
+          fmtIpA(rowsW),
+          "attempts_completed applied on matching in_person_challenge_submission_rows for this session and segment."
+        );
+        var afterH = "";
+        if (rowUn > 0 && emails.length) {
+          afterH +=
+            '<p class="text-xs text-slate-600 mt-3">These leader emails did not match any row in <code class="rounded bg-slate-100 px-1 text-[11px]">in_person_challenge_submission_rows</code> for this session and segment.</p>';
+          var lis = emails.map(function (em) {
+            return "<li class=\"break-all py-0.5\">" + esc(em) + "</li>";
+          }).join("");
+          afterH +=
+            '<ul class="list-disc pl-5 mt-2 max-h-64 overflow-y-auto space-y-0.5 font-mono text-xs text-slate-900">' +
+            lis +
+            "</ul>";
+        }
+        if (rowUn > 0 && !emails.length) {
+          afterH +=
+            '<p class="text-xs text-amber-900 mt-3">Unmatched rows had no non-empty leader email on the sheet, or could not be listed.</p>';
+        }
+        if (emails.length >= 500) {
+          afterH +=
+            '<p class="text-xs text-amber-900 mt-3 font-medium">Showing at most 500 distinct addresses in this response.</p>';
+        }
+        statusEl.innerHTML =
+          '<div class="rounded-3xl bg-violet-50/40 py-4 px-1 sm:px-2">' +
+          pwImportSummaryCard({
+            variant: "success",
+            title: "Import summary",
+            sectionLabel: "Rows details",
+            metaLeft: "Attempt counts applied · " + fmtIpA(inFile) + " sheet rows",
+            importId: p.import_job_id,
+            rowsHtml: rowsH,
+            afterRowsHtml: afterH,
+          }) +
+          "</div>";
       })
       .catch(function () {
-        statusEl.innerHTML = "<p class=\"text-rose-800 font-medium\">Network error.</p>";
+        statusEl.innerHTML =
+          '<div class="rounded-3xl bg-violet-50/40 py-4 px-1 sm:px-2">' +
+          pwImportSummaryCard({
+            variant: "error",
+            title: "Network error",
+            sectionLabel: "Summary",
+            metaLeft: "",
+            rowsHtml: '<p class="py-2 text-sm text-rose-800 font-medium">Could not reach the server.</p>',
+          }) +
+          "</div>";
       })
       .finally(function () {
         if (submitBtn) submitBtn.disabled = false;

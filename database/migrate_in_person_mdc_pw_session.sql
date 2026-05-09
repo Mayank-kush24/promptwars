@@ -1,12 +1,16 @@
 -- In-person MDC: Prompt War session per registration (city + date + optional label).
 -- Idempotent; safe to re-run.
 
--- 1) Session columns (legacy = sentinel date + empty label → "City · (legacy)" in UI)
+-- 1) Session columns (NULL prompt_war_on = no session date yet in UI)
 ALTER TABLE in_person_main_data_center_registrations
-  ADD COLUMN IF NOT EXISTS prompt_war_on DATE NOT NULL DEFAULT DATE '1970-01-01',
+  ADD COLUMN IF NOT EXISTS prompt_war_on DATE,
   ADD COLUMN IF NOT EXISTS session_label TEXT NOT NULL DEFAULT '';
 
 -- 2) Drop old uniqueness (one row per email per event)
+--    After RENAME from main_data_center_registrations, PostgreSQL keeps the old constraint name.
+ALTER TABLE in_person_main_data_center_registrations
+  DROP CONSTRAINT IF EXISTS main_data_center_registrations_event_id_email_normalized_key;
+
 ALTER TABLE in_person_main_data_center_registrations
   DROP CONSTRAINT IF EXISTS in_person_main_data_center_registrations_event_id_email_normalized_key;
 

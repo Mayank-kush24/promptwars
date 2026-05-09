@@ -1,0 +1,15 @@
+{
+  "client_ip": null,
+  "event_id": 7,
+  "id": 1,
+  "mime_type": "text/csv",
+  "module": "in_person_mdc",
+  "original_name": "demo.csv",
+  "sha256": "492d5ea496056f1a6a6592241032fab764c321596317930b4fa0e1e8bc3b7470",
+  "size_bytes": 8,
+  "source_route": "/admin/import/in-person/main-data-center",
+  "status": "received",
+  "stored_path": "in_person_mdc/2026/05/04/20260504T053413Z__492d5ea4__demo.csv",
+  "uploaded_at": "2026-05-04T05:34:13.327023+00:00",
+  "uploaded_by": null
+}

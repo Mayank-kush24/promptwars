@@ -10,6 +10,11 @@
     box-shadow: 0 6px 22px -8px rgba(167, 139, 250, 0.6);
     border-color: transparent;
   }
+  .pw-module-tabs[data-active-module="bootcamps"] .pw-module-tabs-indicator {
+    background: linear-gradient(90deg, #fde68a 0%, #fcd34d 35%, #fb923c 70%, #f97316 100%);
+    box-shadow: 0 6px 20px -8px rgba(249, 115, 22, 0.4);
+    border-color: transparent;
+  }
 </style>
 <header class="pw-shell-header fixed top-0 right-0 left-0 md:left-[var(--pw-sidebar-current)] z-30 bg-white border-b border-slate-200 h-16 flex items-center justify-between px-3 sm:px-4 md:px-5">
   {# Left cluster (to the right of the sidebar): partner + app wordmarks — not H2S (that is in the sidebar). #}
@@ -47,15 +52,16 @@
          role="tablist" aria-label="Module" data-active-module="{{ pw_module }}">
       <span class="pw-module-tabs-indicator pointer-events-none absolute top-1 bottom-1 left-0 rounded-full bg-white shadow-sm ring-1 ring-slate-200/60 opacity-0"
             aria-hidden="true"></span>
+      {% set _pw_mod_short = {'overview': 'Overview', 'in_person': 'In-person', 'virtual': 'Virtual', 'bootcamps': 'Bootcamps'} %}
       {% for m in pw_modules %}
-        {% set _short = ('Overview' if m.id == 'overview' else ('In-person' if m.id == 'in_person' else ('Virtual' if m.id == 'virtual' else m.label))) %}
-        {% set _active_text = 'text-slate-900' if m.id == 'overview' else 'text-white' %}
+        {% set _short = _pw_mod_short.get(m.id, m.label) %}
+        {% set _active_text = 'text-slate-900' if m.id in ('overview', 'bootcamps') else 'text-white' %}
         <a href="{{ m.href }}"
            role="tab"
            aria-selected="{{ 'true' if pw_module == m.id else 'false' }}"
            data-module-id="{{ m.id }}"
            title="{{ m.label }}"
-           class="pw-module-tab relative z-[1] inline-flex h-full min-h-0 items-center justify-center rounded-full px-3 lg:px-4 text-xs font-semibold whitespace-nowrap no-underline {% if pw_module == m.id %}is-active {{ _active_text }}{% else %}text-slate-500 hover:text-slate-800{% endif %}">{{ _short }}</a>
+           class="pw-module-tab relative z-[1] inline-flex h-full min-h-0 items-center justify-center rounded-full px-2.5 lg:px-3.5 text-xs font-semibold whitespace-nowrap no-underline {% if pw_module == m.id %}is-active {{ _active_text }}{% else %}text-slate-500 hover:text-slate-800{% endif %}">{{ _short }}</a>
       {% endfor %}
     </div>
   </div>
@@ -101,19 +107,22 @@
      aria-label="Mobile navigation">
   <div class="border-b border-slate-100 p-3">
     <p class="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-1.5">Module</p>
-    <div class="pw-module-tabs pw-module-tabs--mobile relative grid h-[44px] grid-cols-3 items-center gap-1 rounded-full border border-slate-200 bg-slate-100 p-1 shadow-inner box-border"
+    {% set _pw_mod_grid_n = pw_modules|length if pw_modules|length > 0 else 1 %}
+    <div class="pw-module-tabs pw-module-tabs--mobile relative grid h-[44px] items-center gap-0.5 rounded-full border border-slate-200 bg-slate-100 p-1 shadow-inner box-border"
+         style="grid-template-columns: repeat({{ _pw_mod_grid_n }}, minmax(0, 1fr));"
          role="tablist" aria-label="Module" data-active-module="{{ pw_module }}">
       <span class="pw-module-tabs-indicator pointer-events-none absolute top-1 bottom-1 left-0 rounded-full bg-white shadow-sm ring-1 ring-slate-200/60 opacity-0"
             aria-hidden="true"></span>
+      {% set _pw_mod_short_m = {'overview': 'Overview', 'in_person': 'In-person', 'virtual': 'Virtual', 'bootcamps': 'Bootcamps'} %}
       {% for m in pw_modules %}
-        {% set _short = ('Overview' if m.id == 'overview' else ('In-person' if m.id == 'in_person' else ('Virtual' if m.id == 'virtual' else m.label))) %}
-        {% set _active_text = 'text-slate-900' if m.id == 'overview' else 'text-white' %}
+        {% set _short = _pw_mod_short_m.get(m.id, m.label) %}
+        {% set _active_text = 'text-slate-900' if m.id in ('overview', 'bootcamps') else 'text-white' %}
         <a href="{{ m.href }}"
            role="tab"
            aria-selected="{{ 'true' if pw_module == m.id else 'false' }}"
            data-module-id="{{ m.id }}"
            title="{{ m.label }}"
-           class="pw-module-tab relative z-[1] inline-flex items-center justify-center rounded-full px-2 py-1.5 text-[13px] font-semibold no-underline text-center {% if pw_module == m.id %}is-active {{ _active_text }}{% else %}text-slate-500 hover:text-slate-800{% endif %}">{{ _short }}</a>
+           class="pw-module-tab relative z-[1] inline-flex items-center justify-center rounded-full px-1 py-1.5 text-[11px] sm:text-[12px] font-semibold no-underline text-center {% if pw_module == m.id %}is-active {{ _active_text }}{% else %}text-slate-500 hover:text-slate-800{% endif %}">{{ _short }}</a>
       {% endfor %}
     </div>
   </div>

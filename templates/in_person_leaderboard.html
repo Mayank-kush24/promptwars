@@ -5,7 +5,6 @@
   <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-sm">
     <div>
       <h1 class="font-display text-headline-lg text-slate-900">Action Center · Full leaderboard</h1>
-      <p class="font-body-md text-slate-600 max-w-3xl mt-1">Main challenge teams for this session.</p>
     </div>
     <a href="{{ url_for('in_person_page', inPersonEventId=in_person_event_id, virtualEventId=virtual_event_id, challengeId=challenge_id, ipActionCenterCity=ip_action_center_city or none, ipPromptWarDate=ip_ac_pw_date_iso or none, ipPromptWarLabel=ip_ac_session_label or none) }}"
        class="inline-flex items-center gap-1 text-sm font-semibold text-emerald-700 hover:underline no-underline shrink-0">

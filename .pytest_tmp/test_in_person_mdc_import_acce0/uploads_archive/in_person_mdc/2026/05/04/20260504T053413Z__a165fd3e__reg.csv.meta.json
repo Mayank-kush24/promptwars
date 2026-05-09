@@ -1,0 +1,15 @@
+{
+  "client_ip": "127.0.0.1",
+  "event_id": 1,
+  "id": 1,
+  "mime_type": "application/vnd.ms-excel",
+  "module": "in_person_mdc",
+  "original_name": "reg.csv",
+  "sha256": "a165fd3ee6025f6e322a34df10bb59d51c7921ac19d57ab7e3f92150841425a9",
+  "size_bytes": 151,
+  "source_route": "/api/import/in-person/main-data-center",
+  "status": "received",
+  "stored_path": "in_person_mdc/2026/05/04/20260504T053413Z__a165fd3e__reg.csv",
+  "uploaded_at": "2026-05-04T05:34:13.357830+00:00",
+  "uploaded_by": "test@example.com"
+}

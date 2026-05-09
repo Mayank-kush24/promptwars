@@ -1,0 +1,15 @@
+{
+  "client_ip": null,
+  "event_id": null,
+  "id": 1,
+  "mime_type": "text/csv",
+  "module": "other",
+  "original_name": "x.csv",
+  "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+  "size_bytes": 1,
+  "source_route": "/x",
+  "status": "received",
+  "stored_path": "other/2026/05/04/20260504T053413Z__2d711642__x.csv",
+  "uploaded_at": "2026-05-04T05:34:13.334463+00:00",
+  "uploaded_by": null
+}

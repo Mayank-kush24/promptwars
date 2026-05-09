@@ -1,0 +1,31 @@
+{# Sticky Bootcamp session filter: native <select> when sessions exist; otherwise one chip.
+   Expects: bootcamp_event_id, bootcamp_pw_options, bc_city, bc_date_iso, bc_slot
+#}
+{% set n_bc = (bootcamp_pw_options or [])|length %}
+<div class="sticky top-16 z-30 -mx-1 min-w-0 sm:mx-0 mb-6 rounded-2xl border border-slate-200/80 bg-white/90 backdrop-blur-md px-3 sm:px-4 py-3 shadow-sm">
+  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+    <span class="text-[10px] font-bold uppercase tracking-widest text-slate-500">Bootcamp (city · date · slot)</span>
+    {% if n_bc >= 1 %}
+    <div class="relative min-w-0 w-full sm:w-auto sm:max-w-lg sm:min-w-[280px] flex-1 sm:flex-initial">
+      <select class="w-full min-w-0 cursor-pointer appearance-none rounded-xl border border-amber-200/90 bg-white py-2.5 pl-3 pr-10 text-sm font-medium text-slate-800 shadow-sm transition-colors hover:border-amber-300 focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-200/80"
+              aria-label="Bootcamp session"
+              onchange="var u = this.options[this.selectedIndex].getAttribute('data-url'); if (u) window.location.href = u;">
+        {% for pw in (bootcamp_pw_options or []) %}
+        {% set _chip_active = bc_city == pw.city and (bc_date_iso or '') == (pw.bootcamp_on_iso or '') and (bc_slot or '') == (pw.slot or '') %}
+        <option data-url="{{ url_for('bootcamps_page', bootcampEventId=bootcamp_event_id, bcCity=pw.city, bcDate=pw.bootcamp_on_iso, bcSlot=pw.slot) }}"
+                {% if _chip_active %}selected{% endif %}>{{ pw.display }} ({{ pw.team_count }})</option>
+        {% endfor %}
+      </select>
+      <span class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2 text-slate-500" aria-hidden="true">
+        <span class="material-symbols-outlined text-[22px]">expand_more</span>
+      </span>
+    </div>
+    {% else %}
+    <div class="flex flex-wrap gap-2">
+      <span class="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs sm:text-sm font-semibold border border-amber-200 bg-amber-50/80 text-amber-950">
+        All Bootcamps
+      </span>
+    </div>
+    {% endif %}
+  </div>
+</div>

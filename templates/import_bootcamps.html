@@ -1,0 +1,668 @@
+{% extends "layouts/base_app.html" %}
+{% block title %}PromptWars — {{ title }}{% endblock %}
+{% block extra_head %}
+<style>
+  @keyframes pw-bc-spin { to { transform: rotate(360deg); } }
+  .pw-bc-spinner {
+    width: 40px; height: 40px;
+    border: 3px solid #e2e8f0;
+    border-top-color: #d97706;
+    border-radius: 50%;
+    animation: pw-bc-spin 0.75s linear infinite;
+  }
+  @keyframes pw-bc-bar {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(200%); }
+  }
+  .pw-bc-progress-track {
+    height: 4px; background: #e2e8f0; border-radius: 999px; overflow: hidden;
+  }
+  .pw-bc-progress-bar {
+    height: 100%; width: 40%; background: linear-gradient(90deg, #f59e0b, #fb923c);
+    border-radius: 999px;
+    animation: pw-bc-bar 1.2s ease-in-out infinite;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="flex flex-col gap-sm">
+  <h1 class="font-display text-headline-lg text-slate-900">{{ title }}</h1>
+  <p class="font-body-md text-slate-600 max-w-3xl">
+    Create sessions (city · date · morning/evening), then enter counts manually or upload a CSV / XLSX.
+    <a href="{{ url_for('bootcamps_page') }}" class="text-amber-800 font-semibold underline-offset-2 hover:underline">Back to Bootcamps dashboard</a>
+  </p>
+</div>
+
+<div id="bc-import-overlay" class="hidden fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm px-4" aria-live="polite">
+  <div class="bg-white rounded-2xl border border-slate-200 shadow-xl p-8 max-w-sm w-full flex flex-col items-center gap-md">
+    <div class="pw-bc-spinner" role="status" aria-label="Loading"></div>
+    <p id="bc-import-status" class="text-sm font-medium text-slate-700 text-center">Working…</p>
+    <div class="w-full max-w-xs pw-bc-progress-track">
+      <div class="pw-bc-progress-bar"></div>
+    </div>
+  </div>
+</div>
+
+<section class="mt-lg bg-white rounded-2xl border border-slate-200 p-lg shadow-sm" aria-labelledby="bc-sessions-heading">
+  <h2 id="bc-sessions-heading" class="font-display text-headline-md text-slate-900 mb-sm">Manage sessions</h2>
+  <p class="text-xs text-slate-500 mb-md max-w-prose">City is stored as a lowercase slug. Slot must be <strong>morning</strong> or <strong>evening</strong>.</p>
+  <div id="bc-sessions-load-error" class="hidden mb-md rounded-xl border border-rose-200 bg-rose-50/80 text-rose-800 px-4 py-3 text-sm" role="alert"></div>
+  <div id="bc-sessions-feedback" class="hidden mb-md rounded-xl border px-4 py-3 text-sm" role="status"></div>
+  <div class="overflow-x-auto rounded-xl border border-slate-100 mb-lg">
+    <table class="w-full text-left text-sm min-w-[560px]">
+      <thead class="bg-slate-50 text-slate-500">
+        <tr class="border-b border-slate-200">
+          <th class="py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider">Session</th>
+          <th class="py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-right">Attendees</th>
+          <th class="py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-right">Activations</th>
+          <th class="py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-right">Students</th>
+          <th class="py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-right">Professionals</th>
+          <th class="py-2.5 px-3 text-[11px] font-semibold uppercase tracking-wider text-right">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="bc-sessions-tbody" class="text-slate-800">
+        <tr><td colspan="6" class="py-8 text-center text-sm text-slate-500">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <h3 class="font-display text-headline-sm text-slate-900 mb-md">Add session</h3>
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-md items-end max-w-5xl">
+    <label class="flex flex-col gap-xs">
+      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">City</span>
+      <select id="bc-session-add-city" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm">
+        <option value="">— Select or type below —</option>
+      </select>
+    </label>
+    <label class="flex flex-col gap-xs">
+      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">City (free text)</span>
+      <input id="bc-session-add-city-text" type="text" placeholder="e.g. mumbai"
+             class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+    </label>
+    <label class="flex flex-col gap-xs">
+      <span class="text-xs font-semibold text-slate-600 uppercase tracking-wide">Date</span>
+      <input id="bc-session-add-date" type="date" required
+             class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm min-h-[42px] w-full max-w-[220px]" />
+    </label>
+    <label class="flex flex-col gap-xs">
+      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Slot</span>
+      <select id="bc-session-add-slot" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm">
+        <option value="morning">Morning</option>
+        <option value="evening">Evening</option>
+      </select>
+    </label>
+    <div>
+      <button type="button" id="bc-session-add-btn" class="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-amber-700">Add session</button>
+    </div>
+  </div>
+</section>
+
+<section class="mt-lg bg-white rounded-2xl border border-slate-200 p-lg shadow-sm" aria-labelledby="bc-manual-heading">
+  <h2 id="bc-manual-heading" class="font-display text-headline-md text-slate-900 mb-sm">Manual entry</h2>
+  <p class="text-xs text-slate-500 mb-md">Pick a session, edit fields, then save (same endpoint as bulk import upsert).</p>
+  <label class="flex flex-col gap-xs max-w-2xl mb-lg">
+    <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Session</span>
+    <select id="bc-metrics-session" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm">
+      <option value="">— Select —</option>
+    </select>
+  </label>
+
+  <div class="flex flex-col gap-md max-w-3xl">
+    <details class="group rounded-xl border border-slate-200 bg-slate-50/50 open:bg-white" open>
+      <summary class="cursor-pointer list-none px-4 py-3 font-display text-headline-sm text-slate-900 flex items-center justify-between">
+        <span>Status</span>
+        <span class="text-slate-400 text-xs group-open:rotate-0">▼</span>
+      </summary>
+      <div class="px-4 pb-4 pt-0 grid grid-cols-1 sm:grid-cols-2 gap-md">
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Venue status</span>
+          <input id="bc-m-venue-status" type="text" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Speaker status</span>
+          <input id="bc-m-speaker-status" type="text" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+      </div>
+    </details>
+    <details class="group rounded-xl border border-slate-200 bg-slate-50/50 open:bg-white" open>
+      <summary class="cursor-pointer list-none px-4 py-3 font-display text-headline-sm text-slate-900">Content</summary>
+      <div class="px-4 pb-4 pt-0 grid grid-cols-1 gap-md">
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Topic</span>
+          <input id="bc-m-topic" type="text" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Speaker details</span>
+          <textarea id="bc-m-speaker-details" rows="2" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm resize-y min-h-[4rem]"></textarea>
+        </label>
+        <label class="flex flex-col gap-xs max-w-md">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Audience type</span>
+          <input id="bc-m-audience-type" type="text" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+      </div>
+    </details>
+    <details class="group rounded-xl border border-slate-200 bg-slate-50/50 open:bg-white" open>
+      <summary class="cursor-pointer list-none px-4 py-3 font-display text-headline-sm text-slate-900">Logistics</summary>
+      <div class="px-4 pb-4 pt-0 grid grid-cols-1 sm:grid-cols-2 gap-md">
+        <label class="flex flex-col gap-xs sm:col-span-2">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Location</span>
+          <input id="bc-m-location" type="text" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+        <label class="flex flex-col gap-xs sm:col-span-2">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Complete address</span>
+          <textarea id="bc-m-complete-address" rows="2" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm resize-y min-h-[4rem]"></textarea>
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Audience size</span>
+          <input id="bc-m-audience-size" type="number" min="0" value="0" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm tabular-nums" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Capacity</span>
+          <input id="bc-m-capacity" type="number" min="0" value="0" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm tabular-nums" />
+        </label>
+      </div>
+    </details>
+    <details class="group rounded-xl border border-slate-200 bg-slate-50/50 open:bg-white">
+      <summary class="cursor-pointer list-none px-4 py-3 font-display text-headline-sm text-slate-900">Operations</summary>
+      <div class="px-4 pb-4 pt-0 grid grid-cols-1 gap-md">
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">F&amp;B</span>
+          <input id="bc-m-fnb" type="text" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Printables</span>
+          <input id="bc-m-printables" type="text" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+      </div>
+    </details>
+    <details class="group rounded-xl border border-slate-200 bg-slate-50/50 open:bg-white">
+      <summary class="cursor-pointer list-none px-4 py-3 font-display text-headline-sm text-slate-900">Links</summary>
+      <div class="px-4 pb-4 pt-0 grid grid-cols-1 gap-md">
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Design link</span>
+          <input id="bc-m-design-link" type="url" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Deck</span>
+          <input id="bc-m-deck-link" type="url" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm" />
+        </label>
+      </div>
+    </details>
+    <details class="group rounded-xl border border-slate-200 bg-slate-50/50 open:bg-white" open>
+      <summary class="cursor-pointer list-none px-4 py-3 font-display text-headline-sm text-slate-900">Metrics</summary>
+      <div class="px-4 pb-4 pt-0 grid grid-cols-1 sm:grid-cols-2 gap-md">
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Attendees</span>
+          <input id="bc-m-attendees" type="number" min="0" value="0" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm tabular-nums" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Activations</span>
+          <input id="bc-m-activations" type="number" min="0" value="0" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm tabular-nums" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Students</span>
+          <input id="bc-m-students" type="number" min="0" value="0" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm tabular-nums" />
+        </label>
+        <label class="flex flex-col gap-xs">
+          <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">Professionals</span>
+          <input id="bc-m-professionals" type="number" min="0" value="0" class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm tabular-nums" />
+        </label>
+      </div>
+    </details>
+    <div>
+      <button type="button" id="bc-metrics-save-btn" class="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-amber-700">Save session</button>
+    </div>
+  </div>
+</section>
+
+<section class="mt-lg bg-white rounded-2xl border border-slate-200 p-lg shadow-sm relative overflow-hidden" id="bc-bulk-card">
+  <h2 class="font-display text-headline-md text-slate-900 mb-sm">Bulk CSV / XLSX</h2>
+  <p class="text-sm text-slate-600 mb-md">
+    Required: <code class="text-xs bg-slate-100 px-1 rounded">city</code>,
+    <code class="text-xs bg-slate-100 px-1 rounded">bootcamp_on</code>,
+    <code class="text-xs bg-slate-100 px-1 rounded">slot</code>.
+    All other columns are optional and default to blank/0.
+    Download the CSV template for the exact column order.
+    Missing sessions are created on import.
+  </p>
+  <p class="mb-md">
+    <a href="{{ url_for('static', filename='templates/bootcamp_sessions_template.csv') }}"
+       class="text-sm font-semibold text-amber-800 underline-offset-2 hover:underline" download>Download CSV template</a>
+  </p>
+  <div class="flex flex-col sm:flex-row gap-3 mb-md">
+    <label class="flex flex-col gap-xs flex-1">
+      <span class="text-xs font-semibold text-slate-500 uppercase tracking-wide">File</span>
+      <input id="bc-file-preview" type="file" accept=".csv,.xlsx,.xls,text/csv"
+             class="text-sm file:mr-3 file:px-3 file:py-2 file:rounded-lg file:border-0 file:bg-amber-600 file:text-white file:cursor-pointer hover:file:bg-amber-700" />
+    </label>
+    <div class="flex items-end gap-2">
+      <button type="button" id="bc-preview-btn" class="px-4 py-2 rounded-lg border border-slate-200 bg-white text-sm font-semibold text-slate-800 hover:bg-slate-50">Preview</button>
+      <button type="button" id="bc-import-btn" class="px-4 py-2 rounded-lg bg-amber-600 text-white text-sm font-semibold hover:bg-amber-700 disabled:opacity-50" disabled>Import</button>
+    </div>
+  </div>
+  <div id="bc-preview-summary" class="hidden mb-md text-sm text-slate-700"></div>
+  <div id="bc-preview-table-wrap" class="hidden max-h-72 overflow-y-auto rounded-xl border border-slate-100">
+    <table class="w-full text-left text-sm min-w-[480px]">
+      <thead class="sticky top-0 bg-white border-b border-slate-200 text-slate-500 text-[11px] uppercase">
+        <tr>
+          <th class="py-2 px-2">Row</th>
+          <th class="py-2 px-2">Status</th>
+          <th class="py-2 px-2">Action</th>
+          <th class="py-2 px-2">Message</th>
+        </tr>
+      </thead>
+      <tbody id="bc-preview-tbody"></tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script id="pw-bootcamps-import" type="application/json">{{ {
+  "eventId": bootcamp_event_id,
+  "inPersonEventId": in_person_event_id,
+  "sessionsListUrl": url_for("api_bootcamp_sessions_list", event_id=bootcamp_event_id),
+  "sessionsCreateUrl": url_for("api_bootcamp_sessions_create"),
+  "sessionDeleteUrlTpl": url_for("api_bootcamp_sessions_delete", session_id=987654321, event_id=bootcamp_event_id),
+  "metricsPutUrlTpl": url_for("api_bootcamp_sessions_metrics_update", session_id=987654321, event_id=bootcamp_event_id),
+  "citiesUrl": url_for("api_in_person_attendance_cities", inPersonEventId=in_person_event_id),
+  "previewUrl": url_for("api_import_bootcamp_sessions_preview", bootcampEventId=bootcamp_event_id),
+  "importUrl": url_for("api_import_bootcamp_sessions", bootcampEventId=bootcamp_event_id),
+} | tojson }}</script>
+<script>
+(function () {
+  var cfg = {};
+  try {
+    var el = document.getElementById("pw-bootcamps-import");
+    cfg = el ? JSON.parse(el.textContent || "{}") : {};
+  } catch (e) { cfg = {}; }
+
+  var eventId = Number(cfg.eventId || 3);
+  var overlay = document.getElementById("bc-import-overlay");
+  var statusEl = document.getElementById("bc-import-status");
+  var errBox = document.getElementById("bc-sessions-load-error");
+  var fb = document.getElementById("bc-sessions-feedback");
+  var tbody = document.getElementById("bc-sessions-tbody");
+  var citySel = document.getElementById("bc-session-add-city");
+  var cityText = document.getElementById("bc-session-add-city-text");
+  var dateInp = document.getElementById("bc-session-add-date");
+  var slotSel = document.getElementById("bc-session-add-slot");
+  var addBtn = document.getElementById("bc-session-add-btn");
+  var metricsSession = document.getElementById("bc-metrics-session");
+  var mVenue = document.getElementById("bc-m-venue-status");
+  var mSpkSt = document.getElementById("bc-m-speaker-status");
+  var mTopic = document.getElementById("bc-m-topic");
+  var mSpkDet = document.getElementById("bc-m-speaker-details");
+  var mAudType = document.getElementById("bc-m-audience-type");
+  var mLoc = document.getElementById("bc-m-location");
+  var mAddr = document.getElementById("bc-m-complete-address");
+  var mAudSz = document.getElementById("bc-m-audience-size");
+  var mCap = document.getElementById("bc-m-capacity");
+  var mFnb = document.getElementById("bc-m-fnb");
+  var mPrint = document.getElementById("bc-m-printables");
+  var mDesign = document.getElementById("bc-m-design-link");
+  var mDeck = document.getElementById("bc-m-deck-link");
+  var mAtt = document.getElementById("bc-m-attendees");
+  var mAct = document.getElementById("bc-m-activations");
+  var mStu = document.getElementById("bc-m-students");
+  var mPro = document.getElementById("bc-m-professionals");
+  var saveMetricsBtn = document.getElementById("bc-metrics-save-btn");
+  var fileInp = document.getElementById("bc-file-preview");
+  var previewBtn = document.getElementById("bc-preview-btn");
+  var importBtn = document.getElementById("bc-import-btn");
+  var prevSummary = document.getElementById("bc-preview-summary");
+  var prevWrap = document.getElementById("bc-preview-table-wrap");
+  var prevTbody = document.getElementById("bc-preview-tbody");
+
+  function showOverlay(msg) {
+    if (statusEl) statusEl.textContent = msg || "Working…";
+    if (overlay) overlay.classList.remove("hidden");
+  }
+  function hideOverlay() {
+    if (overlay) overlay.classList.add("hidden");
+  }
+
+  function showErr(msg) {
+    if (!errBox) return;
+    errBox.textContent = msg;
+    errBox.classList.remove("hidden");
+  }
+  function clearErr() {
+    if (errBox) errBox.classList.add("hidden");
+  }
+  function showFb(ok, msg) {
+    if (!fb) return;
+    fb.textContent = msg;
+    fb.className = "mb-md rounded-xl border px-4 py-3 text-sm " + (ok
+      ? "border-emerald-200 bg-emerald-50/80 text-emerald-900"
+      : "border-rose-200 bg-rose-50/80 text-rose-900");
+    fb.classList.remove("hidden");
+  }
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  function fmtInt(n) {
+    var x = Number(n);
+    if (!isFinite(x)) return "—";
+    return x.toLocaleString();
+  }
+
+  function sessionUrlWithId(tpl, sid) {
+    return (tpl || "").replace("987654321", String(sid));
+  }
+
+  var sessionsCache = [];
+
+  function fillMetricsSelect() {
+    if (!metricsSession) return;
+    var v = metricsSession.value;
+    metricsSession.innerHTML = '<option value="">— Select —</option>';
+    sessionsCache.forEach(function (s) {
+      var opt = document.createElement("option");
+      opt.value = String(s.id);
+      opt.textContent = s.display_name || (s.city + " · " + s.bootcamp_on + " · " + s.slot);
+      opt.setAttribute("data-venue-status", String(s.venue_status || ""));
+      opt.setAttribute("data-speaker-status", String(s.speaker_status || ""));
+      opt.setAttribute("data-topic", String(s.topic || ""));
+      opt.setAttribute("data-speaker-details", String(s.speaker_details || ""));
+      opt.setAttribute("data-audience-type", String(s.audience_type || ""));
+      opt.setAttribute("data-location", String(s.location || ""));
+      opt.setAttribute("data-complete-address", String(s.complete_address || ""));
+      opt.setAttribute("data-food-beverage", String(s.food_beverage || ""));
+      opt.setAttribute("data-printables", String(s.printables || ""));
+      opt.setAttribute("data-design-link", String(s.design_link || ""));
+      opt.setAttribute("data-deck-link", String(s.deck_link || ""));
+      opt.setAttribute("data-audience-size", String(s.audience_size != null ? s.audience_size : 0));
+      opt.setAttribute("data-capacity", String(s.capacity != null ? s.capacity : 0));
+      opt.setAttribute("data-attendees", String(s.attendees_count || 0));
+      opt.setAttribute("data-activations", String(s.activations_count || 0));
+      opt.setAttribute("data-students", String(s.students_count || 0));
+      opt.setAttribute("data-professionals", String(s.professionals_count || 0));
+      metricsSession.appendChild(opt);
+    });
+    if (v) metricsSession.value = v;
+  }
+
+  function onMetricsSessionChange() {
+    var opt = metricsSession && metricsSession.selectedOptions && metricsSession.selectedOptions[0];
+    if (!opt || !opt.value) return;
+    function setVal(el, v) { if (el) el.value = v != null ? String(v) : ""; }
+    setVal(mVenue, opt.getAttribute("data-venue-status"));
+    setVal(mSpkSt, opt.getAttribute("data-speaker-status"));
+    setVal(mTopic, opt.getAttribute("data-topic"));
+    setVal(mSpkDet, opt.getAttribute("data-speaker-details"));
+    setVal(mAudType, opt.getAttribute("data-audience-type"));
+    setVal(mLoc, opt.getAttribute("data-location"));
+    setVal(mAddr, opt.getAttribute("data-complete-address"));
+    setVal(mFnb, opt.getAttribute("data-food-beverage"));
+    setVal(mPrint, opt.getAttribute("data-printables"));
+    setVal(mDesign, opt.getAttribute("data-design-link"));
+    setVal(mDeck, opt.getAttribute("data-deck-link"));
+    setVal(mAudSz, opt.getAttribute("data-audience-size") || "0");
+    setVal(mCap, opt.getAttribute("data-capacity") || "0");
+    mAtt.value = opt.getAttribute("data-attendees") || "0";
+    mAct.value = opt.getAttribute("data-activations") || "0";
+    mStu.value = opt.getAttribute("data-students") || "0";
+    mPro.value = opt.getAttribute("data-professionals") || "0";
+  }
+
+  function renderSessionsTable() {
+    if (!tbody) return;
+    if (!sessionsCache.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="py-8 text-center text-sm text-slate-500">No sessions yet. Add one above.</td></tr>';
+      fillMetricsSelect();
+      return;
+    }
+    tbody.innerHTML = sessionsCache.map(function (s) {
+      var delU = sessionUrlWithId(cfg.sessionDeleteUrlTpl, s.id);
+      return (
+        '<tr class="border-b border-slate-100">' +
+          '<td class="py-2.5 px-3"><div class="font-medium">' + escapeHtml(s.display_name || "") + '</div>' +
+            '<div class="text-[11px] text-slate-400 font-mono">' + escapeHtml(s.city) + " · " + escapeHtml(s.bootcamp_on) + " · " + escapeHtml(s.slot) + "</div></td>" +
+          '<td class="py-2.5 px-3 text-right tabular-nums">' + fmtInt(s.attendees_count) + "</td>" +
+          '<td class="py-2.5 px-3 text-right tabular-nums">' + fmtInt(s.activations_count) + "</td>" +
+          '<td class="py-2.5 px-3 text-right tabular-nums">' + fmtInt(s.students_count) + "</td>" +
+          '<td class="py-2.5 px-3 text-right tabular-nums">' + fmtInt(s.professionals_count) + "</td>" +
+          '<td class="py-2.5 px-3 text-right">' +
+            '<button type="button" class="bc-del text-rose-700 text-xs font-semibold hover:underline" data-url="' + escapeHtml(delU) + '">Delete</button>' +
+          "</td>" +
+        "</tr>"
+      );
+    }).join("");
+    tbody.querySelectorAll(".bc-del").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var u = btn.getAttribute("data-url");
+        if (!u || !window.confirm("Delete this session?")) return;
+        showOverlay("Deleting…");
+        fetch(u, { method: "DELETE", credentials: "same-origin" })
+          .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+          .then(function (x) {
+            hideOverlay();
+            if (!x.ok) throw new Error((x.j && x.j.error) || "Failed");
+            showFb(true, "Session deleted.");
+            loadSessions();
+          })
+          .catch(function (e) {
+            hideOverlay();
+            showFb(false, e.message || "Delete failed");
+          });
+      });
+    });
+    fillMetricsSelect();
+  }
+
+  function loadSessions() {
+    clearErr();
+    var u = cfg.sessionsListUrl || "";
+    if (!u) return;
+    showOverlay("Loading sessions…");
+    fetch(u, { credentials: "same-origin" })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (x) {
+        hideOverlay();
+        if (!x.ok) throw new Error((x.j && x.j.error) || "Failed");
+        sessionsCache = x.j.sessions || [];
+        renderSessionsTable();
+      })
+      .catch(function (e) {
+        hideOverlay();
+        showErr(e.message || "Could not load sessions");
+        sessionsCache = [];
+        renderSessionsTable();
+      });
+  }
+
+  function loadCities() {
+    var u = cfg.citiesUrl || "";
+    if (!citySel || !u) return;
+    fetch(u, { credentials: "same-origin" })
+      .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (x) {
+        if (!x.ok) return;
+        var list = (x.j.attendance_cities || []);
+        list.forEach(function (c) {
+          var name = typeof c === "string" ? c : (c && c.city) || "";
+          if (!name) return;
+          var slug = String(name).trim().toLowerCase().replace(/\s+/g, "_");
+          var opt = document.createElement("option");
+          opt.value = slug;
+          opt.textContent = name;
+          citySel.appendChild(opt);
+        });
+      })
+      .catch(function () { /* optional */ });
+  }
+
+  if (addBtn) {
+    addBtn.addEventListener("click", function () {
+      var city = (cityText && cityText.value.trim()) || (citySel && citySel.value) || "";
+      var d = (dateInp && dateInp.value) || "";
+      var slot = (slotSel && slotSel.value) || "";
+      if (!city || !d || !slot) {
+        showFb(false, "City, date, and slot are required.");
+        return;
+      }
+      showOverlay("Creating session…");
+      fetch(cfg.sessionsCreateUrl, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event_id: eventId,
+          city: city,
+          bootcamp_on: d,
+          slot: slot,
+        }),
+      })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j, st: r.status }; }); })
+        .then(function (x) {
+          hideOverlay();
+          if (x.st === 409) {
+            showFb(false, (x.j && x.j.error) || "Session already exists");
+            loadSessions();
+            return;
+          }
+          if (!x.ok) throw new Error((x.j && x.j.error) || "Failed");
+          showFb(true, "Session created.");
+          if (cityText) cityText.value = "";
+          loadSessions();
+        })
+        .catch(function (e) {
+          hideOverlay();
+          showFb(false, e.message || "Create failed");
+        });
+    });
+  }
+
+  if (metricsSession) metricsSession.addEventListener("change", onMetricsSessionChange);
+
+  if (saveMetricsBtn) {
+    saveMetricsBtn.addEventListener("click", function () {
+      var sid = metricsSession && metricsSession.value;
+      if (!sid) {
+        showFb(false, "Select a session.");
+        return;
+      }
+      var u = sessionUrlWithId(cfg.metricsPutUrlTpl, sid);
+      var body = {
+        venue_status: (mVenue && mVenue.value) || "",
+        speaker_status: (mSpkSt && mSpkSt.value) || "",
+        topic: (mTopic && mTopic.value) || "",
+        speaker_details: (mSpkDet && mSpkDet.value) || "",
+        audience_type: (mAudType && mAudType.value) || "",
+        location: (mLoc && mLoc.value) || "",
+        complete_address: (mAddr && mAddr.value) || "",
+        food_beverage: (mFnb && mFnb.value) || "",
+        printables: (mPrint && mPrint.value) || "",
+        design_link: (mDesign && mDesign.value) || "",
+        deck_link: (mDeck && mDeck.value) || "",
+        audience_size: Number(mAudSz && mAudSz.value || 0),
+        capacity: Number(mCap && mCap.value || 0),
+        attendees: Number(mAtt && mAtt.value || 0),
+        activations: Number(mAct && mAct.value || 0),
+        students: Number(mStu && mStu.value || 0),
+        professionals: Number(mPro && mPro.value || 0),
+      };
+      showOverlay("Saving…");
+      fetch(u, {
+        method: "PUT",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (x) {
+          hideOverlay();
+          if (!x.ok) throw new Error((x.j && x.j.error) || "Failed");
+          showFb(true, "Session saved.");
+          loadSessions();
+        })
+        .catch(function (e) {
+          hideOverlay();
+          showFb(false, e.message || "Save failed");
+        });
+    });
+  }
+
+  function renderPreviewTable(details, summary) {
+    if (!prevTbody || !prevWrap || !prevSummary) return;
+    prevSummary.classList.remove("hidden");
+    prevSummary.textContent = summary || "";
+    prevWrap.classList.remove("hidden");
+    prevTbody.innerHTML = (details || []).map(function (d) {
+      return (
+        "<tr class=\"border-b border-slate-100\">" +
+          "<td class=\"py-1.5 px-2 tabular-nums\">" + escapeHtml(String(d.row_index || "")) + "</td>" +
+          "<td class=\"py-1.5 px-2\">" + escapeHtml(String(d.status || "")) + "</td>" +
+          "<td class=\"py-1.5 px-2\">" + escapeHtml(String(d.action || "")) + "</td>" +
+          "<td class=\"py-1.5 px-2 text-slate-600\">" + escapeHtml(String(d.message || "")) + "</td>" +
+        "</tr>"
+      );
+    }).join("");
+  }
+
+  if (previewBtn) {
+    previewBtn.addEventListener("click", function () {
+      var f = fileInp && fileInp.files && fileInp.files[0];
+      if (!f) {
+        showFb(false, "Choose a file first.");
+        return;
+      }
+      var fd = new FormData();
+      fd.append("bootcamp_metrics", f);
+      showOverlay("Preview…");
+      fetch(cfg.previewUrl, { method: "POST", body: fd, credentials: "same-origin" })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (x) {
+          hideOverlay();
+          if (!x.ok) throw new Error((x.j && x.j.error) || "Preview failed");
+          var s = x.j.summary || {};
+          var summary = "Would insert: " + fmtInt(s.would_insert) + " · Would update: " + fmtInt(s.would_update) + " · Errors: " + fmtInt(s.errors);
+          renderPreviewTable(x.j.details, summary);
+          if (importBtn) importBtn.disabled = false;
+        })
+        .catch(function (e) {
+          hideOverlay();
+          showFb(false, e.message || "Preview failed");
+        });
+    });
+  }
+
+  if (importBtn) {
+    importBtn.addEventListener("click", function () {
+      var f = fileInp && fileInp.files && fileInp.files[0];
+      if (!f) {
+        showFb(false, "Choose a file first.");
+        return;
+      }
+      var fd = new FormData();
+      fd.append("bootcamp_metrics", f);
+      if (!window.confirm("Apply import to the database?")) return;
+      showOverlay("Importing…");
+      fetch(cfg.importUrl, { method: "POST", body: fd, credentials: "same-origin" })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+        .then(function (x) {
+          hideOverlay();
+          if (!x.ok) throw new Error((x.j && x.j.error) || "Import failed");
+          var s = x.j.summary || {};
+          var summary = "Inserted: " + fmtInt(s.inserted) + " · Updated: " + fmtInt(s.updated) + " · Errors: " + fmtInt(s.errors);
+          renderPreviewTable(x.j.details, summary);
+          showFb(true, "Import finished.");
+          loadSessions();
+        })
+        .catch(function (e) {
+          hideOverlay();
+          showFb(false, e.message || "Import failed");
+        });
+    });
+  }
+
+  loadCities();
+  loadSessions();
+})();
+</script>
+{% endblock %}

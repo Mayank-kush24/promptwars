@@ -1,0 +1,15 @@
+{
+  "client_ip": "127.0.0.1",
+  "event_id": 2,
+  "id": 1,
+  "mime_type": "application/vnd.ms-excel",
+  "module": "virtual_mdc",
+  "original_name": "vbad.csv",
+  "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+  "size_bytes": 1,
+  "source_route": "/api/import/virtual/main-data-center",
+  "status": "received",
+  "stored_path": "virtual_mdc/2026/05/04/20260504T053413Z__2d711642__vbad.csv",
+  "uploaded_at": "2026-05-04T05:34:13.346909+00:00",
+  "uploaded_by": "test@example.com"
+}

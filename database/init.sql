@@ -19,6 +19,7 @@ DROP TABLE IF EXISTS virtual_main_data_center_registrations CASCADE;
 DROP TABLE IF EXISTS in_person_main_data_center_registrations CASCADE;
 -- Legacy name (pre-split); safe no-op on fresh installs
 DROP TABLE IF EXISTS main_data_center_registrations CASCADE;
+DROP TABLE IF EXISTS bootcamp_sessions CASCADE;
 DROP TABLE IF EXISTS events CASCADE;
 
 CREATE TABLE events (
@@ -26,13 +27,74 @@ CREATE TABLE events (
   parent_event_id INTEGER REFERENCES events (id) ON DELETE SET NULL,
   slug TEXT NOT NULL UNIQUE,
   name TEXT NOT NULL,
-  kind TEXT NOT NULL CHECK (kind IN ('in_person', 'virtual')),
+  kind TEXT NOT NULL CHECK (kind IN ('in_person', 'virtual', 'bootcamp')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_events_parent ON events (parent_event_id);
 CREATE INDEX idx_events_kind ON events (kind);
+
+CREATE TABLE bootcamp_sessions (
+  id SERIAL PRIMARY KEY,
+  event_id INTEGER NOT NULL REFERENCES events (id) ON DELETE CASCADE,
+  city TEXT NOT NULL,
+  bootcamp_on DATE NOT NULL,
+  slot TEXT NOT NULL CHECK (slot IN ('morning', 'evening')),
+  scope_key TEXT GENERATED ALWAYS AS (
+    city
+    || '|'
+    || lpad(extract(year FROM bootcamp_on)::int::text, 4, '0')
+    || '-' || lpad(extract(month FROM bootcamp_on)::int::text, 2, '0')
+    || '-' || lpad(extract(day FROM bootcamp_on)::int::text, 2, '0')
+    || '|'
+    || slot
+  ) STORED,
+  display_name TEXT NOT NULL DEFAULT '',
+  venue_status TEXT NOT NULL DEFAULT '',
+  speaker_status TEXT NOT NULL DEFAULT '',
+  topic TEXT NOT NULL DEFAULT '',
+  speaker_details TEXT NOT NULL DEFAULT '',
+  audience_size INTEGER NOT NULL DEFAULT 0 CHECK (audience_size >= 0),
+  audience_type TEXT NOT NULL DEFAULT '',
+  location TEXT NOT NULL DEFAULT '',
+  complete_address TEXT NOT NULL DEFAULT '',
+  food_beverage TEXT NOT NULL DEFAULT '',
+  printables TEXT NOT NULL DEFAULT '',
+  design_link TEXT NOT NULL DEFAULT '',
+  deck_link TEXT NOT NULL DEFAULT '',
+  capacity INTEGER NOT NULL DEFAULT 0 CHECK (capacity >= 0),
+  attendees_count INTEGER NOT NULL DEFAULT 0 CHECK (attendees_count >= 0),
+  activations_count INTEGER NOT NULL DEFAULT 0 CHECK (activations_count >= 0),
+  students_count INTEGER NOT NULL DEFAULT 0 CHECK (students_count >= 0),
+  professionals_count INTEGER NOT NULL DEFAULT 0 CHECK (professionals_count >= 0),
+  metrics_updated_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT uq_bootcamp_sessions_event_city_date_slot UNIQUE (event_id, city, bootcamp_on, slot)
+);
+
+CREATE INDEX idx_bootcamp_sessions_event_id ON bootcamp_sessions (event_id);
+CREATE INDEX idx_bootcamp_sessions_scope_key ON bootcamp_sessions (scope_key);
+
+CREATE OR REPLACE FUNCTION fn_bootcamp_sessions_set_display_name()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.display_name :=
+    initcap(NEW.city)
+    || to_char(NEW.bootcamp_on::timestamp, 'DD Mon YYYY')
+    || ' · '
+    || initcap(NEW.slot);
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tr_bootcamp_sessions_display
+  BEFORE INSERT OR UPDATE OF city, bootcamp_on, slot
+  ON bootcamp_sessions
+  FOR EACH ROW
+  EXECUTE PROCEDURE fn_bootcamp_sessions_set_display_name();
 
 CREATE TABLE import_jobs (
   id SERIAL PRIMARY KEY,
@@ -76,7 +138,8 @@ CREATE INDEX idx_upload_archive_uploaded_at ON upload_archive (uploaded_at DESC)
 CREATE INDEX idx_upload_archive_module ON upload_archive (module);
 CREATE INDEX idx_upload_archive_sha256 ON upload_archive (sha256);
 
--- In-person Main Data Center: Vision export (CSV/XLSX). One row per email per in-person event.
+-- In-person Main Data Center: Vision export (CSV/XLSX). One row per email per in-person event
+-- (re-import updates that row, including prompt_war_on / session_label when the export includes them).
 CREATE TABLE in_person_main_data_center_registrations (
   id BIGSERIAL PRIMARY KEY,
   event_id INTEGER NOT NULL REFERENCES events (id) ON DELETE CASCADE,
@@ -111,17 +174,12 @@ CREATE TABLE in_person_main_data_center_registrations (
   github_url TEXT,
   linkedin_url TEXT,
   attendance_city TEXT,
-  prompt_war_on DATE NOT NULL DEFAULT DATE '1970-01-01',
+  prompt_war_on DATE,
   session_label TEXT NOT NULL DEFAULT '',
   session_label_normalized TEXT GENERATED ALWAYS AS (lower(btrim(session_label))) STORED,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT uq_ip_mdc_event_email_pw_session UNIQUE (
-    event_id,
-    email_normalized,
-    prompt_war_on,
-    session_label_normalized
-  )
+  CONSTRAINT uq_ip_mdc_event_email UNIQUE (event_id, email_normalized)
 );
 
 CREATE INDEX idx_ip_mdc_event ON in_person_main_data_center_registrations (event_id);
@@ -171,6 +229,25 @@ CREATE TABLE virtual_main_data_center_registrations (
 
 CREATE INDEX idx_v_mdc_event ON virtual_main_data_center_registrations (event_id);
 CREATE INDEX idx_v_mdc_event_updated ON virtual_main_data_center_registrations (event_id, updated_at DESC);
+
+CREATE TABLE vision_uts_virtual_mdc_sync_state (
+  event_id INTEGER PRIMARY KEY REFERENCES events (id) ON DELETE CASCADE,
+  last_success_at TIMESTAMPTZ,
+  last_run_started_at TIMESTAMPTZ,
+  last_run_finished_at TIMESTAMPTZ,
+  last_run_status TEXT,
+  last_rows_fetched INTEGER,
+  last_rows_inserted INTEGER,
+  last_rows_updated INTEGER,
+  last_rows_failed INTEGER,
+  last_error TEXT,
+  last_triggered_by TEXT,
+  last_payload_digest TEXT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_vision_uts_vmdc_sync_state_updated
+  ON vision_uts_virtual_mdc_sync_state (updated_at DESC);
 
 CREATE TABLE cities (
   id SERIAL PRIMARY KEY,
@@ -324,7 +401,7 @@ CREATE TABLE in_person_challenge_submission_rows (
   in_person_mdc_registration_id BIGINT REFERENCES in_person_main_data_center_registrations (id) ON DELETE SET NULL,
   attendance_city TEXT NOT NULL,
   attendance_city_normalized TEXT GENERATED ALWAYS AS (lower(btrim(attendance_city))) STORED,
-  prompt_war_on DATE NOT NULL DEFAULT DATE '1970-01-01',
+  prompt_war_on DATE,
   session_label TEXT NOT NULL DEFAULT '',
   session_label_normalized TEXT GENERATED ALWAYS AS (lower(btrim(session_label))) STORED,
   sheet_kind TEXT NOT NULL CHECK (sheet_kind IN ('warmup', 'main')),
@@ -466,7 +543,8 @@ LEFT JOIN (
 INSERT INTO events (slug, name, kind)
 VALUES
   ('demo-in-person', 'Demo In-Person Tour', 'in_person'),
-  ('demo-virtual', 'Demo Virtual Arena', 'virtual');
+  ('demo-virtual', 'Demo Virtual Arena', 'virtual'),
+  ('bootcamps-default', 'Bootcamps', 'bootcamp');
 
 INSERT INTO cities (event_id, name, slug)
 SELECT e.id, v.name, v.slug

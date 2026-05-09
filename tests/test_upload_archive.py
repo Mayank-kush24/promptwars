@@ -52,6 +52,14 @@ class _OneResult:
         return self._value
 
 
+class _FetchoneResult:
+    def __init__(self, row):
+        self._row = row
+
+    def fetchone(self):
+        return self._row
+
+
 class FakeEngine:
     """Minimal stand-in for SQLAlchemy Engine used by upload_archive helpers."""
 
@@ -70,6 +78,28 @@ class FakeEngine:
     @contextmanager
     def connect(self):
         yield _RecorderConn(self.store)
+
+
+class _MdcImportRecorderConn(_RecorderConn):
+    """Extends archive recorder so in-person MDC import can reach upsert in tests."""
+
+    def execute(self, stmt, params=None):
+        sql = str(stmt)
+        if "SELECT id, kind FROM events" in sql:
+            return _FetchoneResult((1, "in_person"))
+        if "in_person_main_data_center_registrations" in sql and "INSERT" in sql.upper():
+            return _OneResult(True)
+        return super().execute(stmt, params)
+
+
+class MdcImportFakeEngine(FakeEngine):
+    @contextmanager
+    def begin(self):
+        yield _MdcImportRecorderConn(self.store)
+
+    @contextmanager
+    def connect(self):
+        yield _MdcImportRecorderConn(self.store)
 
 
 @pytest.fixture
@@ -307,3 +337,60 @@ def test_in_person_two_file_import_archives_both_uploads(
             u["status"] for u in fake_engine.store["updates"].get(archive_id, [])
         ]
         assert "failed" in statuses
+
+
+def test_in_person_mdc_import_accepts_legacy_pw_date_when_no_session(
+    client, no_admin_pw, monkeypatch, app_mod, archive_root
+):
+    """Vision exports often omit Prompt War date; ETL leaves prompt_war_on NULL."""
+    _patch_engine(monkeypatch, app_mod, MdcImportFakeEngine())
+
+    from tests.test_etl_data_center import _minimal_csv
+
+    buf = _minimal_csv()
+    buf.seek(0)
+    resp = client.post(
+        "/api/import/in-person/main-data-center",
+        data={"main_data_center": (buf, "reg.csv")},
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    body = resp.get_json()
+    assert body.get("status") == "success"
+    assert body.get("rows_written") == 1
+
+
+def test_in_person_mdc_import_rejects_legacy_pw_date_with_session_label(
+    client, no_admin_pw, monkeypatch, app_mod, archive_root
+):
+    _patch_engine(monkeypatch, app_mod, MdcImportFakeEngine())
+    from scripts import etl_data_center
+
+    rows, stats = etl_data_center.parse_main_data_center_file(
+        io.BytesIO(
+            (
+                "Email,Full Name,Prompt War Date,PW Session\n"
+                "z@example.com,Zed,1970-01-01,Morning\n"
+            ).encode("utf-8")
+        ),
+        "x.csv",
+    )
+
+    def _fake_parse(_stream, _name):
+        return rows, stats
+
+    monkeypatch.setattr(app_mod.etl_data_center, "parse_main_data_center_file", _fake_parse)
+
+    resp = client.post(
+        "/api/import/in-person/main-data-center",
+        data={
+            "main_data_center": (
+                io.BytesIO(b"Email\nz@example.com\n"),
+                "ignored.csv",
+            )
+        },
+        content_type="multipart/form-data",
+    )
+    assert resp.status_code == 400
+    err = (resp.get_json() or {}).get("error", "")
+    assert "prompt war date" in err.lower() or "pw session label" in err.lower()

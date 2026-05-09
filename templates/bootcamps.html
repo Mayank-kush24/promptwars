@@ -1,0 +1,141 @@
+{% extends "layouts/base_app.html" %}
+{% block title %}{{ title }}{% endblock %}
+
+{% macro _bc_fmt_num(n) -%}
+{%- if n is none -%}—{%- else -%}{{ n }}{%- endif -%}
+{%- endmacro %}
+
+{% block hero %}{% endblock %}
+
+{% block content %}
+{% set rs = bootcamp_stats.role_split %}
+{% set batches = bootcamp_stats.activations_by_batch %}
+{% set xv = bootcamp_stats.crossover_virtual %}
+{% set at = bootcamp_stats.attendees %}
+{% set acount = bootcamp_stats.activations %}
+
+<div class="flex flex-col gap-8">
+  <div>
+    <h1 class="font-display text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Bootcamps</h1>
+    <p class="mt-1 text-sm text-slate-500">
+      {% if bc_session_display %}{{ bc_session_display }}{% else %}All Bootcamps{% endif %}
+      <span class="text-slate-400"> · </span>
+      <span class="text-slate-400">Key metrics</span>
+      <span class="text-slate-400"> · </span>
+      <a href="{{ url_for('bootcamps_import_page') }}" class="text-amber-800 font-semibold hover:underline">Import data</a>
+    </p>
+  </div>
+
+  {% include 'partials/bootcamp_session_bar.html' %}
+
+  {# 1. Attendees, activations, students, professionals #}
+  <section aria-labelledby="bc-stat-counts-heading">
+    <h2 id="bc-stat-counts-heading" class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">
+      Session metrics
+    </h2>
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm flex flex-col justify-between min-h-[120px]">
+        <div class="flex justify-between items-start gap-2">
+          <span class="text-sm font-semibold text-slate-700">Attendees</span>
+          <span class="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-700" aria-hidden="true">
+            <span class="material-symbols-outlined text-[22px]">groups</span>
+          </span>
+        </div>
+        <p class="font-display text-3xl font-bold tabular-nums text-slate-900 mt-2">{{ _bc_fmt_num(at) }}</p>
+      </div>
+      <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm flex flex-col justify-between min-h-[120px]">
+        <div class="flex justify-between items-start gap-2">
+          <span class="text-sm font-semibold text-slate-700">Activations</span>
+          <span class="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-700" aria-hidden="true">
+            <span class="material-symbols-outlined text-[22px]">bolt</span>
+          </span>
+        </div>
+        <p class="font-display text-3xl font-bold tabular-nums text-slate-900 mt-2">{{ _bc_fmt_num(acount) }}</p>
+      </div>
+      <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm flex flex-col justify-between min-h-[120px]">
+        <div class="flex justify-between items-start gap-2">
+          <span class="text-sm font-semibold text-slate-700">Students</span>
+          <span class="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-700" aria-hidden="true">
+            <span class="material-symbols-outlined text-[22px]">school</span>
+          </span>
+        </div>
+        <p class="font-display text-3xl font-bold tabular-nums text-slate-900 mt-2">{{ _bc_fmt_num(rs.students) }}</p>
+      </div>
+      <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm flex flex-col justify-between min-h-[120px]">
+        <div class="flex justify-between items-start gap-2">
+          <span class="text-sm font-semibold text-slate-700">Professionals</span>
+          <span class="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-orange-50 text-orange-700" aria-hidden="true">
+            <span class="material-symbols-outlined text-[22px]">work</span>
+          </span>
+        </div>
+        <p class="font-display text-3xl font-bold tabular-nums text-slate-900 mt-2">{{ _bc_fmt_num(rs.professionals) }}</p>
+      </div>
+    </div>
+  </section>
+
+  {# 2. All sessions (history) #}
+  <section aria-labelledby="bc-stat-batch-heading">
+    <h2 id="bc-stat-batch-heading" class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">
+      All sessions
+    </h2>
+    <div class="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="min-w-full text-left text-sm">
+          <thead class="border-b border-slate-200 bg-slate-50/80">
+            <tr>
+              <th scope="col" class="px-4 py-3 font-semibold text-slate-700">Session</th>
+              <th scope="col" class="px-4 py-3 font-semibold text-slate-700 text-right tabular-nums">Activations</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-100">
+            {% if batches|length == 0 %}
+            <tr>
+              <td class="px-4 py-8 text-slate-500 text-center" colspan="2">No sessions yet. Add data from <a href="{{ url_for('bootcamps_import_page') }}" class="text-amber-800 font-semibold hover:underline">Bootcamps · Import</a>.</td>
+            </tr>
+            {% else %}
+              {% for row in batches %}
+              <tr>
+                <td class="px-4 py-3 text-slate-900">
+                  <a href="{{ url_for('bootcamps_page', bootcampEventId=bootcamp_event_id, bcCity=row.filter_city, bcDate=row.filter_date, bcSlot=row.filter_slot) }}"
+                     class="text-amber-900 font-medium hover:underline">{{ row.batch_label if row.batch_label is not none else "—" }}</a>
+                </td>
+                <td class="px-4 py-3 text-right tabular-nums text-slate-900">{{ _bc_fmt_num(row.activations) }}</td>
+              </tr>
+              {% endfor %}
+            {% endif %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  {# 3. Bootcamp attendees → PW Virtual registration & submissions #}
+  <section aria-labelledby="bc-stat-xv-heading">
+    <h2 id="bc-stat-xv-heading" class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">
+      Bootcamp attendees → Prompt Wars Virtual
+    </h2>
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm flex flex-col justify-between min-h-[120px]">
+        <div class="flex justify-between items-start gap-2">
+          <span class="text-sm font-semibold text-slate-700">Registered for PW Virtual</span>
+          <span class="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-violet-50 text-violet-700" aria-hidden="true">
+            <span class="material-symbols-outlined text-[22px]">person_add</span>
+          </span>
+        </div>
+        <p class="font-display text-3xl font-bold tabular-nums text-slate-900 mt-2">{{ _bc_fmt_num(xv.registered_count) }}</p>
+        <p class="text-xs text-slate-500 mt-2">Participants who attended a bootcamp and registered for Virtual.</p>
+      </div>
+      <div class="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm flex flex-col justify-between min-h-[120px]">
+        <div class="flex justify-between items-start gap-2">
+          <span class="text-sm font-semibold text-slate-700">Virtual submissions</span>
+          <span class="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-sky-50 text-sky-700" aria-hidden="true">
+            <span class="material-symbols-outlined text-[22px]">upload</span>
+          </span>
+        </div>
+        <p class="font-display text-3xl font-bold tabular-nums text-slate-900 mt-2">{{ _bc_fmt_num(xv.submissions_count) }}</p>
+        <p class="text-xs text-slate-500 mt-2">Submissions from that cohort (placeholder).</p>
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}

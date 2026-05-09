@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS in_person_challenge_submission_rows (
   in_person_mdc_registration_id BIGINT REFERENCES in_person_main_data_center_registrations (id) ON DELETE SET NULL,
   attendance_city TEXT NOT NULL,
   attendance_city_normalized TEXT GENERATED ALWAYS AS (lower(btrim(attendance_city))) STORED,
-  prompt_war_on DATE NOT NULL DEFAULT DATE '1970-01-01',
+  prompt_war_on DATE,
   session_label TEXT NOT NULL DEFAULT '',
   session_label_normalized TEXT GENERATED ALWAYS AS (lower(btrim(session_label))) STORED,
   sheet_kind TEXT NOT NULL CHECK (sheet_kind IN ('warmup', 'main')),
@@ -87,7 +87,7 @@ $$;
 -- Prompt War session (date + optional label): widen natural key (idempotent).
 -- ---------------------------------------------------------------------------
 ALTER TABLE in_person_challenge_submission_rows
-  ADD COLUMN IF NOT EXISTS prompt_war_on DATE NOT NULL DEFAULT DATE '1970-01-01';
+  ADD COLUMN IF NOT EXISTS prompt_war_on DATE;
 
 ALTER TABLE in_person_challenge_submission_rows
   ADD COLUMN IF NOT EXISTS session_label TEXT NOT NULL DEFAULT '';

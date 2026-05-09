@@ -23,6 +23,7 @@ os.environ.setdefault("FLASK_DEBUG", "0")
 os.environ.setdefault("FLASK_USE_RELOADER", "0")
 os.environ.setdefault("H2S_CDI_MODULE_ID", "promptwars-test")
 os.environ.setdefault("H2S_CDI_URL", "http://127.0.0.1:9")
+os.environ.setdefault("VISION_UTS_SCHEDULER_ENABLED", "0")
 
 import app as app_module  # noqa: E402
 

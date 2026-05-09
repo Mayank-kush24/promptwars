@@ -36,8 +36,8 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
   NEW.display_name :=
-    initcap(NEW.city)
     || ' · '
+    initcap(NEW.city)
     || to_char(NEW.prompt_war_on::timestamp, 'DD Mon YYYY')
     || CASE
          WHEN btrim(COALESCE(NEW.session_label, '')) <> '' THEN ' · ' || NEW.session_label
@@ -71,7 +71,6 @@ SELECT DISTINCT
   COALESCE(r.session_label, '')
 FROM in_person_main_data_center_registrations r
 WHERE r.prompt_war_on IS NOT NULL
-  AND r.prompt_war_on <> DATE '1970-01-01'
   AND trim(COALESCE(r.attendance_city, '')) <> ''
 ON CONFLICT (event_id, city, prompt_war_on, session_label) DO NOTHING;
 

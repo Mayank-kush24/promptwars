@@ -21,7 +21,20 @@ from pathlib import Path
 from urllib.parse import urlencode
 
 from dotenv import load_dotenv
-from flask import Flask, g, jsonify, make_response, redirect, render_template, request, Response, send_from_directory, session, url_for
+from flask import (
+    Flask,
+    g,
+    has_app_context,
+    jsonify,
+    make_response,
+    redirect,
+    render_template,
+    request,
+    Response,
+    send_from_directory,
+    session,
+    url_for,
+)
 from logging.handlers import RotatingFileHandler
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -37,6 +50,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts import (  # noqa: E402
+    etl_bootcamp_sessions,
     etl_data_center,
     etl_in_person,
     etl_in_person_challenge_submissions,
@@ -46,12 +60,22 @@ from services import hawkeye as hawkeye_service  # noqa: E402
 from services import submission_analytics as submission_analytics_svc  # noqa: E402
 from services import in_person_rsvp_list_import as ip_rsvp_list_svc  # noqa: E402
 from services import virtual_challenge_attempts_sheet as vcsr_attempts_sheet_svc  # noqa: E402
+from services import vision_uts_sync as vision_uts_sync_svc  # noqa: E402
 from services.hawkeye import HawkeyeError, HawkeyeNotConfiguredError  # noqa: E402
 from services.upload_archive import archive_upload, mark_archive_status  # noqa: E402
 
-load_dotenv(ROOT / ".env")
+# ``override=True``: values from ``.env`` replace same-named vars already in the process
+# environment (e.g. empty placeholders from the shell/IDE). Otherwise a blank inherited
+# ``VISION_UTS_BASE_URL=`` can hide a non-empty line in ``.env``.
+load_dotenv(ROOT / ".env", override=True)
 
-from h2s_cdi_auth import get_portal_url, register_h2s_cdi_auth, register_with_portal  # noqa: E402
+from h2s_cdi_auth import (  # noqa: E402
+    get_module_pages,
+    get_portal_url,
+    get_user,
+    register_h2s_cdi_auth,
+    register_with_portal,
+)
 
 DATABASE_URL = os.environ.get(
     "DATABASE_URL",
@@ -96,6 +120,7 @@ USE_RELOADER = _env_bool("FLASK_USE_RELOADER", DEBUG_MODE)
 
 DEFAULT_IN_PERSON_EVENT_ID = int(os.environ.get("DEFAULT_IN_PERSON_EVENT_ID", "1"))
 DEFAULT_VIRTUAL_EVENT_ID = int(os.environ.get("DEFAULT_VIRTUAL_EVENT_ID", "2"))
+DEFAULT_BOOTCAMP_EVENT_ID = int(os.environ.get("DEFAULT_BOOTCAMP_EVENT_ID", "3"))
 DEFAULT_CHALLENGE_ID = int(os.environ.get("DEFAULT_CHALLENGE_ID", "1"))
 
 # Cross-arena / all-PW global leaderboard UI and routes (set PW_GLOBAL_LEADERBOARDS_ENABLED=1 to show again).
@@ -106,7 +131,35 @@ TABLE_IN_PERSON_MDC = "in_person_main_data_center_registrations"
 TABLE_VIRTUAL_MDC = "virtual_main_data_center_registrations"
 TABLE_IN_PERSON_CHALLENGE_SUBMISSIONS = "in_person_challenge_submission_rows"
 TABLE_IN_PERSON_PW_SESSIONS = "in_person_pw_sessions"
+TABLE_BOOTCAMP_SESSIONS = "bootcamp_sessions"
 TABLE_IN_PERSON_RSVP_LIST_EMAILS = "in_person_pw_session_rsvp_list_emails"
+
+
+def _in_person_mdc_prompt_war_on_allows_null(conn: Connection) -> bool:
+    """True when ``prompt_war_on`` accepts NULL (see ``database/migrate_prompt_war_on_nullable.sql``)."""
+    oid = conn.execute(
+        text("SELECT to_regclass(:tn)::oid"),
+        {"tn": TABLE_IN_PERSON_MDC},
+    ).scalar()
+    if oid is None:
+        return True
+    allows = conn.execute(
+        text(
+            """
+            SELECT NOT a.attnotnull
+            FROM pg_attribute a
+            WHERE a.attrelid = :oid
+              AND a.attname = 'prompt_war_on'
+              AND a.attnum > 0
+              AND NOT a.attisdropped
+            """
+        ),
+        {"oid": int(oid)},
+    ).scalar()
+    if allows is None:
+        return True
+    return bool(allows)
+
 
 # Attendance-city dropdowns (MDC import, PW sessions, Action Center) are built from distinct MDC values;
 # add cities here so they appear before any registration uses them (case-insensitive dedupe vs MDC).
@@ -355,9 +408,20 @@ def _mdc_users_virtual_submission_score_select_sql(table: str, challenge_id: int
     ) AS mdc_submission_score"""
 
 
-# In-person Action Center: legacy rows (pre–Prompt War session) use this date + empty session_label.
-IPCSR_LEGACY_PROMPT_WAR_DATE = date(1970, 1, 1)
 IPCSR_SESSION_LABEL_MAX_LEN = 64
+
+
+def _ipcsr_pw_date_effective(prompt_war_on: date | datetime | None) -> date | None:
+    """Normalize DB/form values: missing session date is ``None`` (never store epoch as a real date)."""
+    if prompt_war_on is None:
+        return None
+    if isinstance(prompt_war_on, datetime):
+        prompt_war_on = prompt_war_on.date()
+    if not isinstance(prompt_war_on, date):
+        return None
+    if prompt_war_on == date(1970, 1, 1):
+        return None
+    return prompt_war_on
 
 
 def _parse_ipcsr_prompt_war_date_from_form(raw: str | None) -> date | None:
@@ -372,19 +436,6 @@ def _parse_ipcsr_prompt_war_date_from_form(raw: str | None) -> date | None:
 
 def _normalize_ipcsr_session_label(raw: str | None) -> str:
     return (raw or "").strip()[:IPCSR_SESSION_LABEL_MAX_LEN]
-
-
-def _ipcsr_is_legacy_unassigned_pw(
-    prompt_war_on: date | datetime | None, session_label: str | None
-) -> bool:
-    """Sentinel MDC row: 1970-01-01 with no session label (pre–PW session assignment)."""
-    if prompt_war_on is None:
-        return False
-    if isinstance(prompt_war_on, datetime):
-        prompt_war_on = prompt_war_on.date()
-    if prompt_war_on != IPCSR_LEGACY_PROMPT_WAR_DATE:
-        return False
-    return not (session_label or "").strip()
 
 
 def _is_missing_in_person_pw_sessions_table(exc: BaseException) -> bool:
@@ -410,22 +461,32 @@ def _reject_legacy_prompt_war_on_date(
     return None
 
 
-def _ipcsr_pw_session_display(*, city: str, prompt_war_on: date, session_label: str) -> str:
-    if _ipcsr_is_legacy_unassigned_pw(prompt_war_on, session_label):
+def _ipcsr_pw_session_display(*, city: str, prompt_war_on: date | None, session_label: str) -> str:
+    pwe = _ipcsr_pw_date_effective(prompt_war_on)
+    if pwe is None:
         return f"{city} · no PW session date"
-    d = prompt_war_on.strftime("%d %b %Y")
+    d = pwe.strftime("%d %b %Y")
     if (session_label or "").strip():
         return f"{city} · {d} · {session_label.strip()}"
     return f"{city} · {d}"
 
 
-def _pw_session_rsvp_row_key(city: str, prompt_war_on: date | str, session_label: str) -> tuple[str, str, str]:
+def _pw_session_rsvp_row_key(
+    city: str, prompt_war_on: date | str | None, session_label: str
+) -> tuple[str, str, str]:
     """Stable dedupe key for MDC + challenge-submission PW session rows."""
-    if isinstance(prompt_war_on, str):
-        prompt_war_on = date.fromisoformat(prompt_war_on[:10])
+    dkey = ""
+    if isinstance(prompt_war_on, str) and (prompt_war_on or "").strip():
+        prompt_war_on = date.fromisoformat(prompt_war_on.strip()[:10])
+    if isinstance(prompt_war_on, datetime):
+        prompt_war_on = prompt_war_on.date()
+    if isinstance(prompt_war_on, date):
+        pwe = _ipcsr_pw_date_effective(prompt_war_on)
+        if pwe is not None:
+            dkey = pwe.isoformat()
     return (
         city.strip().lower(),
-        prompt_war_on.isoformat(),
+        dkey,
         (session_label or "").strip(),
     )
 
@@ -467,9 +528,9 @@ def _decode_in_person_overview(raw: str | None) -> tuple[str, str | None, str]:
             city = str(o.get("c") or "").strip() or None
             iso = str(o.get("i") or "").strip()
             lab = str(o.get("l") or "")
-            if not city or not iso:
+            if not city:
                 return "global", None, ""
-            raw_sess = f"{iso}|{lab}" if lab else iso
+            raw_sess = f"{iso}|{lab}"
             return "city", city, raw_sess
         except (ValueError, json.JSONDecodeError, OSError, TypeError):
             return "global", None, ""
@@ -720,6 +781,8 @@ MODULE_PAGES: list[dict[str, str]] = [
     {"pageId": "virtual_users", "label": "Virtual · Users", "path": "/virtual/users"},
     {"pageId": "virtual_import", "label": "Virtual · Import", "path": "/virtual/import"},
     {"pageId": "virtual_settings", "label": "Virtual · Settings", "path": "/virtual/settings"},
+    {"pageId": "bootcamps_dashboard", "label": "Bootcamps · Dashboard", "path": "/bootcamps"},
+    {"pageId": "bootcamps_import", "label": "Bootcamps · Import", "path": "/bootcamps/import"},
 ]
 
 # Longest-prefix wins inside h2s_cdi_auth; order here is readability only.
@@ -740,6 +803,7 @@ _H2S_PATH_PAGE_RULES: list[tuple[str, str]] = [
     ("/overview/logs", "overview_logs"),
     ("/api/import/virtual/challenge-submissions", "virtual_import"),
     ("/api/import/virtual/main-data-center", "virtual_import"),
+    ("/api/virtual/main-data-center/vision-uts/sync", "virtual_import"),
     ("/virtual/import", "virtual_import"),
     ("/api/import/in-person/main-data-center", "in_person_import"),
     ("/api/import/in-person/action-center", "in_person_import"),
@@ -779,6 +843,11 @@ _H2S_PATH_PAGE_RULES: list[tuple[str, str]] = [
     ("/in-person", "in_person_dashboard"),
     ("/virtual/settings", "virtual_settings"),
     ("/virtual", "virtual_dashboard"),
+    ("/bootcamps", "bootcamps_dashboard"),
+    ("/bootcamps/import", "bootcamps_import"),
+    ("/api/bootcamp/sessions", "bootcamps_import"),
+    ("/api/import/bootcamp/sessions/preview", "bootcamps_import"),
+    ("/api/import/bootcamp/sessions", "bootcamps_import"),
     ("/", "overview_dashboard"),
 ]
 # Portal may redirect using pageId as a single path segment (see h2s_cdi_auth._first_allowed_path).
@@ -921,6 +990,7 @@ _PW_ENDPOINT_NAV: dict[str, tuple[str, str]] = {
     "api_in_person_mdc_registration": ("in_person", "users"),
     "api_virtual_mdc_registration": ("virtual", "users"),
     "api_import_virtual_main_data_center": ("virtual", "import"),
+    "api_virtual_main_data_center_vision_uts_sync": ("virtual", "import"),
     "api_import_virtual_challenge_submissions": ("virtual", "import"),
     "admin_import_virtual_main_data_center": ("overview", "settings"),
     "admin_import_virtual_challenge_submissions": ("overview", "settings"),
@@ -933,6 +1003,14 @@ _PW_ENDPOINT_NAV: dict[str, tuple[str, str]] = {
     "virtual_users": ("virtual", "users"),
     "virtual_settings": ("virtual", "settings"),
     "virtual_import": ("virtual", "import"),
+    "bootcamps_page": ("bootcamps", "dashboard"),
+    "bootcamps_import_page": ("bootcamps", "import"),
+    "api_bootcamp_sessions_list": ("bootcamps", "import"),
+    "api_bootcamp_sessions_create": ("bootcamps", "import"),
+    "api_bootcamp_sessions_delete": ("bootcamps", "import"),
+    "api_bootcamp_sessions_metrics_update": ("bootcamps", "import"),
+    "api_import_bootcamp_sessions_preview": ("bootcamps", "import"),
+    "api_import_bootcamp_sessions": ("bootcamps", "import"),
     "virtual_challenges": ("virtual", "challenges"),
     "virtual_challenges_create": ("virtual", "challenges"),
     "virtual_challenges_update": ("virtual", "challenges"),
@@ -969,31 +1047,84 @@ def _pw_vendor_script_url(filename: str, cdn_fallback: str) -> str:
 
 
 def _pw_subnav_rows(module: str) -> list[dict[str, str]]:
+    """Subnav rows; ``page_id`` must match ``MODULE_PAGES`` / CDI ``path_page_rules``."""
     if module == "overview":
         spec = (
-            ("dashboard", "Dashboard", "main_dashboard", "dashboard"),
-            ("submission_analytics", "Crossover", "overview_submission_analytics", "compare_arrows"),
-            ("logs", "Logs", "overview_logs", "receipt_long"),
-            ("settings", "Settings", "overview_settings", "settings"),
+            ("dashboard", "Dashboard", "main_dashboard", "dashboard", "overview_dashboard"),
+            (
+                "submission_analytics",
+                "Crossover",
+                "overview_submission_analytics",
+                "compare_arrows",
+                "overview_submission_analytics",
+            ),
+            ("logs", "Logs", "overview_logs", "receipt_long", "overview_logs"),
+            ("settings", "Settings", "overview_settings", "settings", "overview_settings"),
         )
     elif module == "in_person":
         spec = (
-            ("dashboard", "Dashboard", "in_person_page", "dashboard"),
-            ("leaderboard", "Leaderboard", "in_person_leaderboard", "leaderboard"),
-            ("users", "Users", "in_person_users", "group"),
-            ("import", "Import", "in_person_import", "upload_file"),
-            ("settings", "Settings", "in_person_settings", "tune"),
+            ("dashboard", "Dashboard", "in_person_page", "dashboard", "in_person_dashboard"),
+            ("leaderboard", "Leaderboard", "in_person_leaderboard", "leaderboard", "in_person_leaderboard"),
+            ("users", "Users", "in_person_users", "group", "in_person_users"),
+            ("import", "Import", "in_person_import", "upload_file", "in_person_import"),
+            ("settings", "Settings", "in_person_settings", "tune", "in_person_settings"),
+        )
+    elif module == "bootcamps":
+        spec = (
+            ("dashboard", "Dashboard", "bootcamps_page", "dashboard", "bootcamps_dashboard"),
+            ("import", "Import", "bootcamps_import_page", "upload_file", "bootcamps_import"),
         )
     else:
+        # virtual (and any unknown module id: treat like virtual subnav)
         spec = (
-            ("dashboard", "Dashboard", "virtual_page", "dashboard"),
-            ("leaderboard", "Leaderboard", "virtual_submission_leaderboard", "leaderboard"),
-            ("challenges", "Challenges", "virtual_challenges", "flag"),
-            ("users", "Users", "virtual_users", "group"),
-            ("import", "Import", "virtual_import", "upload_file"),
-            ("settings", "Settings", "virtual_settings", "tune"),
+            ("dashboard", "Dashboard", "virtual_page", "dashboard", "virtual_dashboard"),
+            (
+                "leaderboard",
+                "Leaderboard",
+                "virtual_submission_leaderboard",
+                "leaderboard",
+                "virtual_leaderboard",
+            ),
+            ("challenges", "Challenges", "virtual_challenges", "flag", "virtual_challenges"),
+            ("users", "Users", "virtual_users", "group", "virtual_users"),
+            ("import", "Import", "virtual_import", "upload_file", "virtual_import"),
+            ("settings", "Settings", "virtual_settings", "tune", "virtual_settings"),
         )
-    return [{"key": k, "label": lab, "endpoint": ep, "icon": ic} for k, lab, ep, ic in spec]
+    return [
+        {"key": k, "label": lab, "endpoint": ep, "icon": ic, "page_id": pid} for k, lab, ep, ic, pid in spec
+    ]
+
+
+def _pw_nav_allowed_pages() -> set[str] | None:
+    """
+    CDI page allow-list for the current request, or None when the UI should not filter
+    (no JWT user yet, admin, or full module access in the token).
+    """
+    if not has_app_context():
+        return None
+    user = get_user()
+    if not user:
+        return None
+    if user.get("isAdmin"):
+        return None
+    pages = get_module_pages(user)
+    if pages is None:
+        return None
+    return set(pages)
+
+
+_PW_MODULE_TAB_ORDER: tuple[tuple[str, str], ...] = (
+    ("overview", "Overview"),
+    ("in_person", "Prompt Wars In-person"),
+    ("virtual", "Prompt Wars Virtual"),
+    ("bootcamps", "Prompt Wars Bootcamps"),
+)
+
+
+def _pw_filter_subnav_rows(rows: list[dict[str, str]], allowed: set[str] | None) -> list[dict[str, str]]:
+    if allowed is None:
+        return list(rows)
+    return [r for r in rows if r.get("page_id") in allowed]
 
 
 @app.context_processor
@@ -1001,6 +1132,10 @@ def _inject_ui_context() -> dict:
     """Event IDs + module navigation for sidebar / header."""
     ep = request.endpoint or ""
     pw_module, pw_nav_sub = _PW_ENDPOINT_NAV.get(ep, ("overview", "dashboard"))
+    allowed = _pw_nav_allowed_pages()
+    raw_rows = _pw_subnav_rows(pw_module)
+    filtered_rows = _pw_filter_subnav_rows(raw_rows, allowed)
+    subnav_source = filtered_rows if filtered_rows else []
     pw_subnav = [
         {
             "key": r["key"],
@@ -1009,13 +1144,20 @@ def _inject_ui_context() -> dict:
             "href": url_for(r["endpoint"]),
             "active": r["key"] == pw_nav_sub,
         }
-        for r in _pw_subnav_rows(pw_module)
+        for r in subnav_source
     ]
-    pw_modules = [
-        {"id": "overview", "label": "Overview", "href": url_for("main_dashboard")},
-        {"id": "in_person", "label": "Prompt Wars In-person", "href": url_for("in_person_page")},
-        {"id": "virtual", "label": "Prompt Wars Virtual", "href": url_for("virtual_page")},
-    ]
+    pw_modules: list[dict[str, str]] = []
+    for mod_id, mod_label in _PW_MODULE_TAB_ORDER:
+        mod_rows = _pw_filter_subnav_rows(_pw_subnav_rows(mod_id), allowed)
+        if not mod_rows:
+            continue
+        pw_modules.append(
+            {
+                "id": mod_id,
+                "label": mod_label,
+                "href": url_for(mod_rows[0]["endpoint"]),
+            }
+        )
     _portal = get_portal_url().rstrip("/")
     return {
         "in_person_event_id": request.args.get("inPersonEventId", type=int) or DEFAULT_IN_PERSON_EVENT_ID,
@@ -1359,7 +1501,7 @@ _MDC_UPSERT_SQL_IN_PERSON = """
       :profile_name, :full_name, :mobile, :whatsapp, :country, :state, :city, :dob, :gender, :occupation,
       :github_url, :linkedin_url, :attendance_city, :prompt_war_on, :session_label
     )
-    ON CONFLICT ON CONSTRAINT uq_ip_mdc_event_email_pw_session DO UPDATE SET
+    ON CONFLICT (event_id, email_normalized) DO UPDATE SET
       email = EXCLUDED.email,
       form_timestamp = EXCLUDED.form_timestamp,
       utm_source = EXCLUDED.utm_source,
@@ -1494,6 +1636,11 @@ def _form_truthy_auto_create_missing_registrations() -> bool:
     return v in ("1", "true", "yes", "on")
 
 
+def _form_truthy_skip_missing_mdc_emails() -> bool:
+    v = (request.form.get("skip_missing_mdc_emails") or "").strip().lower()
+    return v in ("1", "true", "yes", "on")
+
+
 def _leader_source_by_normalized_email(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     """First occurrence per normalized leader email: casing-preserved email, name, phone."""
     out: dict[str, dict[str, Any]] = {}
@@ -1573,10 +1720,11 @@ def _ipcsr_mdc_maps_from_mrows(
     """Pick best in-person MDC registration id per normalized email (same rules as Action Center import)."""
     sl_norm = session_label_imp.strip().lower()
 
-    def _match_priority(pw_on_row: date, sln_row: str) -> int:
-        if pw_on_row == pw_on and sln_row == sl_norm:
+    def _match_priority(pw_on_row: date | datetime | None, sln_row: str) -> int:
+        eff_row = _ipcsr_pw_date_effective(pw_on_row)
+        if eff_row == pw_on and sln_row == sl_norm:
             return 0
-        if pw_on_row == IPCSR_LEGACY_PROMPT_WAR_DATE and not sln_row:
+        if eff_row is None and not sln_row:
             return 1
         return 2
 
@@ -1584,8 +1732,6 @@ def _ipcsr_mdc_maps_from_mrows(
     for r in mrows:
         em = str(r["email_normalized"])
         pwd_cell = r["prompt_war_on"]
-        if isinstance(pwd_cell, datetime):
-            pwd_cell = pwd_cell.date()
         sln_cell = str(r["sln"] or "")
         cand = {
             "id": int(r["id"]),
@@ -1630,8 +1776,14 @@ def _import_in_person_main_data_center_core():
     mark_archive_status(archived.id, "parsed", engine=engine)
 
     for r in rows:
+        sl_imp = str(r.get("session_label") or "").strip()
         pwo = r.get("prompt_war_on")
         if pwo is None:
+            if sl_imp:
+                mark_archive_status(archived.id, "failed", engine=engine, error="invalid prompt_war_on")
+                return jsonify(
+                    {"error": "Prompt War date is required in the export when PW session label is set"}
+                ), 400
             continue
         if isinstance(pwo, datetime):
             pd = pwo.date()
@@ -1641,6 +1793,11 @@ def _import_in_person_main_data_center_core():
             try:
                 pd = date.fromisoformat(str(pwo)[:10])
             except ValueError:
+                if sl_imp:
+                    mark_archive_status(archived.id, "failed", engine=engine, error="invalid prompt_war_on")
+                    return jsonify(
+                        {"error": "Prompt War date is required in the export when PW session label is set"}
+                    ), 400
                 continue
         else:
             continue
@@ -1660,6 +1817,27 @@ def _import_in_person_main_data_center_core():
         if str(ev[1]) != "in_person":
             mark_archive_status(archived.id, "failed", engine=engine, error="event must be in_person kind")
             return jsonify({"error": "event must be in_person kind"}), 400
+        if not _in_person_mdc_prompt_war_on_allows_null(conn):
+            any_missing_pw = any(r.get("prompt_war_on") is None for r in rows)
+            if any_missing_pw:
+                mark_archive_status(
+                    archived.id, "failed", engine=engine, error="prompt_war_on NOT NULL in database"
+                )
+                return (
+                    jsonify(
+                        {
+                            "error": (
+                                "This database still has NOT NULL on "
+                                f"{TABLE_IN_PERSON_MDC}.prompt_war_on, but the import stores missing "
+                                "Prompt War dates as NULL. Run the migration "
+                                "database/migrate_prompt_war_on_nullable.sql on PostgreSQL, then retry."
+                            ),
+                            "migration_file": "database/migrate_prompt_war_on_nullable.sql",
+                            "parse_stats": parse_stats,
+                        }
+                    ),
+                    409,
+                )
 
     rows_created = 0
     rows_updated = 0
@@ -1675,6 +1853,24 @@ def _import_in_person_main_data_center_core():
                     rows_updated += 1
     except Exception as exc:  # noqa: BLE001
         mark_archive_status(archived.id, "failed", engine=engine, error=str(exc))
+        raw = str(getattr(exc, "orig", exc) or exc).lower()
+        if "prompt_war_on" in raw and (
+            "notnullviolation" in raw or "not null constraint" in raw or "null value in column" in raw
+        ):
+            return (
+                jsonify(
+                    {
+                        "error": str(exc),
+                        "hint": (
+                            "Allow NULL on prompt_war_on by running "
+                            "database/migrate_prompt_war_on_nullable.sql on your PostgreSQL database."
+                        ),
+                        "migration_file": "database/migrate_prompt_war_on_nullable.sql",
+                        "parse_stats": parse_stats,
+                    }
+                ),
+                409,
+            )
         return jsonify({"error": str(exc), "parse_stats": parse_stats}), 500
 
     rows_written = rows_created + rows_updated
@@ -1841,6 +2037,9 @@ def _import_virtual_challenge_submissions_core():
         return jsonify({"error": "No leader emails in parsed rows"}), 400
 
     auto_create = _form_truthy_auto_create_missing_registrations()
+    skip_missing = _form_truthy_skip_missing_mdc_emails()
+    if auto_create:
+        skip_missing = False
     leader_src = _leader_source_by_normalized_email(rows)
 
     m_stmt = text(
@@ -1867,7 +2066,7 @@ def _import_virtual_challenge_submissions_core():
         mdc_by_email = {str(r[1]): int(r[0]) for r in mrows}
 
     missing = [e for e in emails_set if e not in mdc_by_email]
-    if missing and not auto_create:
+    if missing and not auto_create and not skip_missing:
         msg = (
             "Leader email(s) not found in Virtual Main Data Center for this event "
             f"(showing up to 20 of {len(missing)}): {', '.join(missing[:20])}"
@@ -1895,6 +2094,50 @@ def _import_virtual_challenge_submissions_core():
                 "archive_path": archived.stored_path,
             }
         ), 409
+
+    rows_skipped_missing_mdc = 0
+    if skip_missing and missing:
+        missing_email_set = frozenset(missing)
+        original_row_count = len(rows)
+        rows = [
+            r
+            for r in rows
+            if (r.get("leader_email") or "").strip().lower() not in missing_email_set
+        ]
+        rows_skipped_missing_mdc = original_row_count - len(rows)
+        if not rows:
+            msg = (
+                "Every parsed row uses a leader email that is not in the virtual Main Data Center. "
+                "Create registrations first, or use create-and-import."
+            )
+            mark_archive_status(archived.id, "failed", engine=engine, error=msg)
+            id_to_title = {int(c["id"]): (c.get("title") or "") for c in challenges}
+            sheets_disp_fail: dict[str, dict] = {}
+            for sn, info in (parse_stats.get("sheets") or {}).items():
+                cid = int(info.get("challenge_id") or 0)
+                sheets_disp_fail[str(sn)] = {
+                    **dict(info),
+                    "challenge_title": id_to_title.get(cid, ""),
+                }
+            parse_for_ui_fail = {**parse_stats, "sheets": sheets_disp_fail}
+            return jsonify(
+                {
+                    "error": msg,
+                    "nothing_written": True,
+                    "missing_emails": missing,
+                    "target_table": "virtual_challenge_submission_rows",
+                    "virtual_event_id": event_id,
+                    "parse_stats": parse_for_ui_fail,
+                    "rows_ready_to_import": original_row_count,
+                    "archive_path": archived.stored_path,
+                }
+            ), 400
+        emails_set = sorted(
+            {(r.get("leader_email") or "").strip().lower() for r in rows if (r.get("leader_email") or "").strip()}
+        )
+        if not emails_set:
+            mark_archive_status(archived.id, "failed", engine=engine, error="No leader emails after skipping missing")
+            return jsonify({"error": "No leader emails after skipping missing", "nothing_written": True}), 400
 
     mark_archive_status(archived.id, "parsed", engine=engine)
 
@@ -1963,7 +2206,11 @@ def _import_virtual_challenge_submissions_core():
                 }
                 conn.execute(_VCSR_UPSERT, params)
 
-            counts = {**parse_stats, "rows_written": len(rows)}
+            counts = {
+                **parse_stats,
+                "rows_written": len(rows),
+                "rows_skipped_missing_mdc": rows_skipped_missing_mdc,
+            }
             conn.execute(
                 text(
                     """
@@ -1986,11 +2233,14 @@ def _import_virtual_challenge_submissions_core():
                 "challenge_title": id_to_title.get(cid, ""),
             }
         parse_for_ui = {**parse_stats, "sheets": sheets_disp}
+        if rows_skipped_missing_mdc:
+            parse_for_ui = {**parse_for_ui, "rows_skipped_missing_mdc": rows_skipped_missing_mdc}
         return jsonify(
             {
                 "status": "success",
                 "import_job_id": job_id,
                 "rows_written": len(rows),
+                "rows_skipped_missing_mdc": rows_skipped_missing_mdc,
                 "parse_stats": parse_for_ui,
                 "archive_path": archived.stored_path,
                 "target_table": "virtual_challenge_submission_rows",
@@ -2508,9 +2758,8 @@ def _import_in_person_action_center_core():
     auto_create = _form_truthy_auto_create_missing_registrations()
     leader_src = _leader_source_by_normalized_email(rows)
 
-    # MDC link is a participant lookup, not a PW assignment gate. Vision MDC exports do not
-    # carry per-PW dates, so most rows live under the legacy date / empty session label.
-    # Prefer the row tagged for this exact PW; otherwise legacy; otherwise any row for that email.
+    # MDC link is a participant lookup, not a PW assignment gate. Vision MDC exports often omit
+    # Prompt War dates (stored as NULL). Prefer the row for this exact PW; otherwise undated; otherwise any.
     m_stmt = text(
         f"""
         SELECT id, email_normalized, btrim(COALESCE(attendance_city, '')) AS ac,
@@ -3043,9 +3292,6 @@ def api_in_person_action_center_leaderboard():
         if rej_lb:
             return rej_lb
     lab = _normalize_ipcsr_session_label(request.args.get("session_label"))
-    if city_raw and pw_d is None:
-        pw_d = IPCSR_LEGACY_PROMPT_WAR_DATE
-        lab = ""
     payload = _in_person_submission_leaderboard(
         eid, city_raw, lim, prompt_war_on=pw_d, session_label=lab
     )
@@ -3055,6 +3301,31 @@ def api_in_person_action_center_leaderboard():
 @app.post("/api/import/virtual/main-data-center")
 def api_import_virtual_main_data_center():
     return _import_virtual_main_data_center_core()
+
+
+@app.post("/api/virtual/main-data-center/vision-uts/sync")
+def api_virtual_main_data_center_vision_uts_sync():
+    """Pull virtual Main Data Center registrations from Vision UTS (does not alter cron)."""
+    body = request.get_json(silent=True) or {}
+    raw_eid = body.get("virtual_event_id", body.get("virtualEventId"))
+    if raw_eid is None or str(raw_eid).strip() == "":
+        eid_int = DEFAULT_VIRTUAL_EVENT_ID
+    else:
+        try:
+            eid_int = int(raw_eid)
+        except (TypeError, ValueError):
+            return jsonify({"error": "virtual_event_id must be an integer"}), 400
+    out = vision_uts_sync_svc.run_virtual_mdc_vision_uts_sync(
+        engine,
+        eid_int,
+        triggered_by="manual",
+        invalidate_caches=pw_invalidate_read_caches,
+    )
+    if out.get("skipped_due_to_lock"):
+        return jsonify(out), 409
+    if out.get("status") == "error":
+        return jsonify(out), 502
+    return jsonify(out)
 
 
 @app.post("/admin/import/virtual/main-data-center")
@@ -3267,14 +3538,17 @@ def api_in_person_mdc_registration(reg_id: int):
                 pwo = pwo.date()
             city = d.get("attendance_city") or ""
             sl = d.get("session_label") or ""
-            if isinstance(pwo, date):
-                d["prompt_war_on_iso"] = pwo.isoformat()
+            pwe = _ipcsr_pw_date_effective(pwo)
+            if pwe is not None:
+                d["prompt_war_on_iso"] = pwe.isoformat()
                 d["pw_session_display"] = dn or _ipcsr_pw_session_display(
-                    city=city, prompt_war_on=pwo, session_label=sl
+                    city=city, prompt_war_on=pwe, session_label=sl
                 )
             else:
                 d["prompt_war_on_iso"] = None
-                d["pw_session_display"] = dn or (city or "—")
+                d["pw_session_display"] = dn or _ipcsr_pw_session_display(
+                    city=city or "(Unknown)", prompt_war_on=None, session_label=sl
+                )
             d.pop("prompt_war_on", None)
             team_submissions.append(d)
         base["team_submissions"] = team_submissions
@@ -3311,10 +3585,7 @@ def api_in_person_mdc_registration(reg_id: int):
             elif not isinstance(pwo, date):
                 pwo = None
             parsed_rows.append((rd, pwo))
-        has_non_legacy = any(
-            p is not None and not _ipcsr_is_legacy_unassigned_pw(p, rd.get("session_label"))
-            for rd, p in parsed_rows
-        )
+        has_non_legacy = any(_ipcsr_pw_date_effective(p) is not None for rd, p in parsed_rows)
         participated_pw: list[dict] = []
         for rd, pwo in parsed_rows:
             rid = int(rd["registration_id"])
@@ -3322,23 +3593,19 @@ def api_in_person_mdc_registration(reg_id: int):
             sl = str(rd.get("session_label") or "")
             fts = rd.get("form_timestamp")
             fts_out = _format_dt_display(fts) if fts is not None else None
-            if (
-                has_non_legacy
-                and pwo is not None
-                and _ipcsr_is_legacy_unassigned_pw(pwo, sl)
-                and rid != int(reg_id)
-            ):
+            if has_non_legacy and _ipcsr_pw_date_effective(pwo) is None and rid != int(reg_id):
                 continue
-            if isinstance(pwo, date):
-                city_disp = city or "(Unknown)"
+            pwe = _ipcsr_pw_date_effective(pwo)
+            city_disp = city or "(Unknown)"
+            if pwe is not None:
                 participated_pw.append(
                     {
                         "registration_id": rid,
                         "attendance_city": rd.get("attendance_city"),
                         "session_label": sl,
-                        "prompt_war_on_iso": pwo.isoformat(),
+                        "prompt_war_on_iso": pwe.isoformat(),
                         "pw_session_display": _ipcsr_pw_session_display(
-                            city=city_disp, prompt_war_on=pwo, session_label=sl
+                            city=city_disp, prompt_war_on=pwe, session_label=sl
                         ),
                         "form_timestamp": fts_out,
                         "is_current": rid == int(reg_id),
@@ -3351,7 +3618,9 @@ def api_in_person_mdc_registration(reg_id: int):
                         "attendance_city": rd.get("attendance_city"),
                         "session_label": sl,
                         "prompt_war_on_iso": None,
-                        "pw_session_display": "—",
+                        "pw_session_display": _ipcsr_pw_session_display(
+                            city=city_disp, prompt_war_on=None, session_label=sl
+                        ),
                         "form_timestamp": fts_out,
                         "is_current": rid == int(reg_id),
                     }
@@ -3465,18 +3734,8 @@ def _build_hawkeye_rsvp_for_registration(
 
     if not candidates:
         pwo_raw = row_d.get("prompt_war_on")
-        pwo_curr: date | None = None
-        if isinstance(pwo_raw, datetime):
-            pwo_curr = pwo_raw.date()
-        elif isinstance(pwo_raw, date):
-            pwo_curr = pwo_raw
-        if pwo_raw is None:
-            return {
-                "applicable": False,
-                "summary": "No Prompt War date on this row; Hawkeye RSVP is shown per PW session.",
-                "sessions": [],
-            }
-        if pwo_curr is not None and _ipcsr_is_legacy_unassigned_pw(pwo_curr, row_d.get("session_label")):
+        pwe_scope = _ipcsr_pw_date_effective(pwo_raw)
+        if pwe_scope is None:
             return {
                 "applicable": False,
                 "pw_session_display": base.get("pw_session_display"),
@@ -3488,7 +3747,7 @@ def _build_hawkeye_rsvp_for_registration(
                 "sessions": [],
             }
         scope_key = hawkeye_service.make_pw_session_scope_key(
-            str(row_d.get("attendance_city") or ""), pwo_raw, row_d.get("session_label")
+            str(row_d.get("attendance_city") or ""), pwe_scope, row_d.get("session_label")
         )
         sess = _build_hawkeye_session_block(
             eng,
@@ -5544,7 +5803,7 @@ def _load_mdc_stats_uncached(
                            btrim(COALESCE(session_label, '')) AS session_label_raw
                     FROM {table}
                     WHERE event_id = :eid
-                      AND prompt_war_on <> DATE '1970-01-01'
+                      AND prompt_war_on IS NOT NULL
                     ORDER BY prompt_war_on ASC, city_label ASC, session_label_raw ASC
                     LIMIT 80
                     """
@@ -5593,7 +5852,6 @@ def _load_mdc_stats_uncached(
                               AND attendance_city IS NOT NULL
                               AND btrim(attendance_city) <> ''
                               AND prompt_war_on IS NOT NULL
-                              AND prompt_war_on <> DATE '1970-01-01'
                             """
                         ),
                         {"eid": event_id},
@@ -5788,18 +6046,22 @@ def _serialize_mdc_row_json(row: dict) -> dict:
             out[k] = _format_dt_display(v)
         else:
             out[k] = v
-    if pw_cell is not None:
-        pwo = pw_cell
-        if isinstance(pwo, datetime):
-            pwo = pwo.date()
-        if isinstance(pwo, date):
-            out["prompt_war_on_iso"] = pwo.isoformat()
-            city_disp = (str(row.get("attendance_city") or row.get("city") or "").strip()) or "(Unknown)"
-            out["pw_session_display"] = _ipcsr_pw_session_display(
-                city=city_disp,
-                prompt_war_on=pwo,
-                session_label=str(sl_cell) if sl_cell is not None else "",
-            )
+    pwo_eff = _ipcsr_pw_date_effective(pw_cell)
+    city_disp = (str(row.get("attendance_city") or row.get("city") or "").strip()) or "(Unknown)"
+    if pwo_eff is not None:
+        out["prompt_war_on_iso"] = pwo_eff.isoformat()
+        out["pw_session_display"] = _ipcsr_pw_session_display(
+            city=city_disp,
+            prompt_war_on=pwo_eff,
+            session_label=str(sl_cell) if sl_cell is not None else "",
+        )
+    else:
+        out["prompt_war_on_iso"] = None
+        out["pw_session_display"] = _ipcsr_pw_session_display(
+            city=city_disp,
+            prompt_war_on=None,
+            session_label=str(sl_cell) if sl_cell is not None else "",
+        )
     return out
 
 
@@ -7400,14 +7662,14 @@ def _load_mdc_users_page(
                 pwo = d.get("prompt_war_on")
                 if isinstance(pwo, datetime):
                     pwo = pwo.date()
-                if isinstance(pwo, date):
-                    city_disp = (str(d.get("attendance_city") or d.get("city") or "").strip()) or "(Unknown)"
-                    d["pw_session_display"] = _ipcsr_pw_session_display(
-                        city=city_disp,
-                        prompt_war_on=pwo,
-                        session_label=str(d.get("session_label") or ""),
-                    )
-                    d["prompt_war_on_iso"] = pwo.isoformat()
+                pwe = _ipcsr_pw_date_effective(pwo)
+                city_disp = (str(d.get("attendance_city") or d.get("city") or "").strip()) or "(Unknown)"
+                d["pw_session_display"] = _ipcsr_pw_session_display(
+                    city=city_disp,
+                    prompt_war_on=pwe,
+                    session_label=str(d.get("session_label") or ""),
+                )
+                d["prompt_war_on_iso"] = pwe.isoformat() if pwe is not None else None
         out["rows"] = row_dicts
     except Exception as exc:  # noqa: BLE001
         out["error"] = str(exc)
@@ -7473,14 +7735,14 @@ def _fetch_mdc_users_export_rows(
                 pwo = d.get("prompt_war_on")
                 if isinstance(pwo, datetime):
                     pwo = pwo.date()
-                if isinstance(pwo, date):
-                    city_disp = (str(d.get("attendance_city") or d.get("city") or "").strip()) or "(Unknown)"
-                    d["pw_session_display"] = _ipcsr_pw_session_display(
-                        city=city_disp,
-                        prompt_war_on=pwo,
-                        session_label=str(d.get("session_label") or ""),
-                    )
-                    d["prompt_war_on_iso"] = pwo.isoformat()
+                pwe = _ipcsr_pw_date_effective(pwo)
+                city_disp = (str(d.get("attendance_city") or d.get("city") or "").strip()) or "(Unknown)"
+                d["pw_session_display"] = _ipcsr_pw_session_display(
+                    city=city_disp,
+                    prompt_war_on=pwe,
+                    session_label=str(d.get("session_label") or ""),
+                )
+                d["prompt_war_on_iso"] = pwe.isoformat() if pwe is not None else None
         return row_dicts, None
     except Exception as exc:  # noqa: BLE001
         return [], str(exc)
@@ -7901,7 +8163,7 @@ def _in_person_submission_leaderboard(
     Order: total_score DESC, export_created_at ASC, id ASC.
 
     When ``attendance_city`` is set: filter by Prompt War session. If ``prompt_war_on`` is
-    ``None``, use the legacy cohort (sentinel date + empty session label).
+    ``None``, include only submission rows with no Prompt War date (NULL) and empty session label.
 
     When ``page`` and ``per_page`` are set, returns that page of rows (``per_page`` capped at 100)
     and sets ``total_pages`` on the result. Otherwise returns the top ``limit`` rows (``limit``
@@ -7916,12 +8178,8 @@ def _in_person_submission_leaderboard(
     eff_pw: date | None = None
     eff_sl = ""
     if attendance_city and str(attendance_city).strip():
-        if prompt_war_on is None:
-            eff_pw = IPCSR_LEGACY_PROMPT_WAR_DATE
-            eff_sl = ""
-        else:
-            eff_pw = prompt_war_on
-            eff_sl = session_label or ""
+        eff_pw = _ipcsr_pw_date_effective(prompt_war_on)
+        eff_sl = (session_label or "").strip() if eff_pw is not None else ""
     out: dict = {
         "rows": [],
         "total": 0,
@@ -7940,9 +8198,16 @@ def _in_person_submission_leaderboard(
         if attendance_city and str(attendance_city).strip():
             base_where += " AND lower(btrim(attendance_city)) = lower(btrim(:acity))"
             params["acity"] = str(attendance_city).strip()
-            base_where += " AND prompt_war_on = :pwon AND session_label_normalized = lower(btrim(:slab))"
-            params["pwon"] = eff_pw
-            params["slab"] = eff_sl
+            if eff_pw is None:
+                base_where += (
+                    " AND prompt_war_on IS NULL "
+                    "AND session_label_normalized = lower(btrim(COALESCE(:slab, '')))"
+                )
+                params["slab"] = eff_sl
+            else:
+                base_where += " AND prompt_war_on = :pwon AND session_label_normalized = lower(btrim(:slab))"
+                params["pwon"] = eff_pw
+                params["slab"] = eff_sl
         total = c.execute(
             text(
                 f"""
@@ -8148,6 +8413,212 @@ def _default_in_person_pw_session_for_redirect(pws: list[dict]) -> dict | None:
         return (dd, -tc, -sid)
 
     return min(future_only, key=_key_earliest_future)
+
+
+def _bootcamp_city_title(city: str) -> str:
+    s = (city or "").strip()
+    if not s:
+        return "—"
+    return s.replace("_", " ").replace("-", " ").title()
+
+
+def _bootcamp_session_display(*, city: str, bootcamp_on: date | None, slot: str) -> str:
+    if bootcamp_on is None:
+        return f"{_bootcamp_city_title(city)} · no session date"
+    d = bootcamp_on.strftime("%d %b %Y")
+    sl = (slot or "").strip().lower()
+    slot_label = "Morning" if sl == "morning" else "Evening" if sl == "evening" else (slot or "").strip() or "—"
+    return f"{_bootcamp_city_title(city)} · {d} · {slot_label}"
+
+
+def _bootcamp_option_bootcamp_on_date(d: dict) -> date:
+    iso = str(d.get("bootcamp_on_iso") or "")[:10]
+    try:
+        return date.fromisoformat(iso)
+    except ValueError:
+        return date.min
+
+
+def _default_bootcamp_session_for_redirect(rows: list[dict]) -> dict | None:
+    """Pick a default bootcamp session when the URL has no valid ``bcCity`` / ``bcDate`` / ``bcSlot``.
+
+    Same calendar rule as in-person PW: prefer latest ``bootcamp_on`` on or before today (IST),
+    then tie-break by ``bootcamp_session_id``. If all dates are in the future, use the earliest
+    upcoming date (inverted tie-breakers).
+    """
+    if not rows:
+        return None
+    ref = _in_person_pw_default_reference_date()
+    past_or_today = [d for d in rows if _bootcamp_option_bootcamp_on_date(d) <= ref]
+
+    def _key_latest_past(d: dict) -> tuple[date, int]:
+        return (_bootcamp_option_bootcamp_on_date(d), int(d.get("bootcamp_session_id") or 0))
+
+    if past_or_today:
+        return max(past_or_today, key=_key_latest_past)
+
+    future_only = [d for d in rows if _bootcamp_option_bootcamp_on_date(d) > ref]
+    if not future_only:
+        return max(rows, key=_key_latest_past)
+
+    def _key_earliest_future(d: dict) -> tuple[date, int]:
+        dd = _bootcamp_option_bootcamp_on_date(d)
+        sid = int(d.get("bootcamp_session_id") or 0)
+        return (dd, -sid)
+
+    return min(future_only, key=_key_earliest_future)
+
+
+def _bootcamp_pw_options(event_id: int, conn: Connection | None = None) -> list[dict]:
+    """Bootcamp sessions for the dropdown (``team_count`` reserved for future imports)."""
+
+    def _query(c: Connection):
+        return c.execute(
+            text(
+                f"""
+                SELECT
+                  s.id AS bootcamp_session_id,
+                  s.city,
+                  s.bootcamp_on,
+                  s.slot,
+                  s.display_name,
+                  COALESCE(s.activations_count, 0)::bigint AS activations_count
+                FROM {TABLE_BOOTCAMP_SESSIONS} s
+                WHERE s.event_id = :eid
+                ORDER BY s.bootcamp_on DESC, s.city, s.slot
+                """
+            ),
+            {"eid": int(event_id)},
+        ).mappings().all()
+
+    try:
+        if conn is not None:
+            rows = _query(conn)
+        else:
+            with engine.connect() as c:
+                rows = _query(c)
+        out: list[dict] = []
+        for r in rows:
+            cty = str(r.get("city") or "").strip()
+            if not cty:
+                continue
+            bco = r["bootcamp_on"]
+            if isinstance(bco, datetime):
+                bcd = bco.date()
+                iso = bcd.isoformat()
+            elif isinstance(bco, date):
+                bcd = bco
+                iso = bcd.isoformat()
+            else:
+                iso = str(bco)[:10]
+                bcd = date.fromisoformat(iso[:10])
+            sl = str(r.get("slot") or "").strip().lower()
+            if sl not in ("morning", "evening"):
+                continue
+            disp = str(r.get("display_name") or "").strip() or _bootcamp_session_display(
+                city=cty, bootcamp_on=bcd, slot=sl
+            )
+            out.append(
+                {
+                    "bootcamp_session_id": int(r["bootcamp_session_id"]),
+                    "city": cty,
+                    "bootcamp_on_iso": iso,
+                    "slot": sl,
+                    "display": disp,
+                    "team_count": int(r.get("activations_count") or 0),
+                }
+            )
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _normalize_bootcamp_city(raw: str | None) -> str:
+    s = (raw or "").strip().lower()
+    s = " ".join(s.split())
+    return s.replace(" ", "_")
+
+
+def _normalize_bootcamp_slot(raw: str | None) -> str | None:
+    s = (raw or "").strip().lower()
+    if s in ("morning", "m", "am"):
+        return "morning"
+    if s in ("evening", "e", "pm"):
+        return "evening"
+    return None
+
+
+def _load_bootcamp_dashboard_stats(
+    event_id: int,
+    *,
+    city: str | None,
+    bootcamp_on: date | None,
+    slot: str | None,
+) -> dict:
+    """Per-session tiles + ``activations_by_batch`` as all-sessions history for the event."""
+    empty = {
+        "attendees": 0,
+        "activations": 0,
+        "role_split": {"students": 0, "professionals": 0},
+        "activations_by_batch": [],
+        "crossover_virtual": {"registered_count": 0, "submissions_count": 0},
+    }
+    try:
+        with engine.connect() as conn:
+            hist_rows = conn.execute(
+                text(
+                    f"""
+                    SELECT city, bootcamp_on, slot, display_name, activations_count
+                    FROM {TABLE_BOOTCAMP_SESSIONS}
+                    WHERE event_id = :eid
+                    ORDER BY bootcamp_on DESC, city, slot
+                    """
+                ),
+                {"eid": int(event_id)},
+            ).mappings().all()
+            batches: list[dict] = []
+            for hr in hist_rows:
+                bco = hr["bootcamp_on"]
+                if isinstance(bco, datetime):
+                    bco = bco.date()
+                iso = bco.isoformat() if isinstance(bco, date) else str(bco)[:10]
+                cty = str(hr.get("city") or "").strip()
+                sl = str(hr.get("slot") or "").strip().lower()
+                batches.append(
+                    {
+                        "batch_label": str(hr.get("display_name") or "").strip()
+                        or _bootcamp_session_display(
+                            city=cty, bootcamp_on=bco if isinstance(bco, date) else None, slot=sl
+                        ),
+                        "activations": int(hr.get("activations_count") or 0),
+                        "filter_city": cty,
+                        "filter_date": iso,
+                        "filter_slot": sl,
+                    }
+                )
+            out = {**empty, "activations_by_batch": batches}
+            if not city or bootcamp_on is None or slot not in ("morning", "evening"):
+                return out
+            city_n = _normalize_bootcamp_city(city)
+            row = conn.execute(
+                text(
+                    f"""
+                    SELECT attendees_count, activations_count, students_count, professionals_count
+                    FROM {TABLE_BOOTCAMP_SESSIONS}
+                    WHERE event_id = :eid AND city = :city AND bootcamp_on = :d AND slot = :slot
+                    """
+                ),
+                {"eid": int(event_id), "city": city_n, "d": bootcamp_on, "slot": slot},
+            ).mappings().first()
+            if not row:
+                return out
+            out["attendees"] = int(row.get("attendees_count") or 0)
+            out["activations"] = int(row.get("activations_count") or 0)
+            out["role_split"]["students"] = int(row.get("students_count") or 0)
+            out["role_split"]["professionals"] = int(row.get("professionals_count") or 0)
+            return out
+    except Exception:  # noqa: BLE001
+        return empty
 
 
 def _arena_submission_crossover_summary(sc: dict) -> dict:
@@ -8509,7 +8980,7 @@ def _in_person_action_center_stats(
     *,
     event_id: int,
     attendance_city: str,
-    prompt_war_on: date,
+    prompt_war_on: date | None,
     session_label: str,
 ) -> dict:
     """
@@ -8570,15 +9041,23 @@ def _in_person_action_center_stats(
         out["error"] = "no attendance city"
         return out
     slab = (session_label or "").strip()[:IPCSR_SESSION_LABEL_MAX_LEN]
+    pw_eff = _ipcsr_pw_date_effective(prompt_war_on)
     base_params = {
         "eid": int(event_id),
         "acity": city[:500],
-        "pwon": prompt_war_on,
+        "pwon": pw_eff,
         "slab": slab,
     }
 
     def _ipcsr_sess_sql(alias: str) -> str:
         """Session scope on submission rows; qualify columns for JOINs to MDC (both have ``event_id``)."""
+        if pw_eff is None:
+            return (
+                f"{alias}.event_id = :eid AND {alias}.sheet_kind = 'main' "
+                f"AND lower(btrim({alias}.attendance_city)) = lower(btrim(:acity)) "
+                f"AND {alias}.prompt_war_on IS NULL "
+                f"AND {alias}.session_label_normalized = lower(btrim(COALESCE(:slab, '')))"
+            )
         return (
             f"{alias}.event_id = :eid AND {alias}.sheet_kind = 'main' "
             f"AND lower(btrim({alias}.attendance_city)) = lower(btrim(:acity)) "
@@ -8600,7 +9079,7 @@ def _in_person_action_center_stats(
                     FROM {TABLE_IN_PERSON_MDC} m
                     WHERE m.event_id = :eid
                       AND lower(btrim(COALESCE(m.attendance_city, ''))) = lower(btrim(:acity))
-                      AND m.prompt_war_on = :pwon
+                      AND m.prompt_war_on IS NOT DISTINCT FROM :pwon
                       AND m.session_label_normalized = lower(btrim(:slab))
                     """
                 ),
@@ -8969,23 +9448,22 @@ def main_dashboard():
     focus_session_value = ""
     ip_focus_lb = None
     if ip_lb_scope == "city" and focus_city_raw:
-        if focus_pw_d is None:
-            focus_pw_d = IPCSR_LEGACY_PROMPT_WAR_DATE
-            focus_pw_lab = ""
         ip_focus_lb = _in_person_submission_leaderboard(
             in_person_event_id,
             focus_city_raw,
             10,
             prompt_war_on=focus_pw_d,
-            session_label=focus_pw_lab,
+            session_label=focus_pw_lab or "",
         )
-        focus_session_value = f"{focus_pw_d.isoformat()}|{focus_pw_lab}"
+        focus_session_value = (
+            f"{focus_pw_d.isoformat()}|{focus_pw_lab}" if focus_pw_d is not None else f"|{focus_pw_lab}"
+        )
     if ip_lb_scope == "global":
         in_person_overview_value = "global"
-    elif focus_city_raw and focus_pw_d is not None:
+    elif focus_city_raw:
         in_person_overview_value = _encode_in_person_overview_session(
             city=focus_city_raw,
-            prompt_war_on_iso=focus_pw_d.isoformat(),
+            prompt_war_on_iso=focus_pw_d.isoformat() if focus_pw_d is not None else "",
             session_label=focus_pw_lab or "",
         )
     else:
@@ -9674,9 +10152,6 @@ def in_person_page():
             )
         )
     if ip_ac_city:
-        if ip_pw_date is None:
-            ip_pw_date = IPCSR_LEGACY_PROMPT_WAR_DATE
-            ip_pw_label = ""
         in_person_action_lb = _in_person_submission_leaderboard(
             in_person_event_id,
             ip_ac_city,
@@ -9689,21 +10164,22 @@ def in_person_page():
     in_person_action_pw_options = _in_person_pw_options(in_person_event_id)
     ip_ac_session_display = (
         _ipcsr_pw_session_display(city=ip_ac_city, prompt_war_on=ip_pw_date, session_label=ip_pw_label)
-        if ip_ac_city and ip_pw_date
+        if ip_ac_city
         else None
     )
     ip_arena_stats = None
     ip_submission_session_token_analytics = ""
-    if ip_ac_city and ip_pw_date:
+    if ip_ac_city:
         ip_arena_stats = _in_person_action_center_stats(
             event_id=in_person_event_id,
             attendance_city=ip_ac_city,
             prompt_war_on=ip_pw_date,
             session_label=ip_pw_label or "",
         )
-        ip_submission_session_token_analytics = _encode_ip_submission_session_token(
-            ip_ac_city, ip_pw_date, ip_pw_label or ""
-        )
+        if ip_pw_date is not None:
+            ip_submission_session_token_analytics = _encode_ip_submission_session_token(
+                ip_ac_city, ip_pw_date, ip_pw_label or ""
+            )
     return render_template(
         "in_person.html",
         in_person_event_id=in_person_event_id,
@@ -9713,7 +10189,7 @@ def in_person_page():
         in_person_action_lb=in_person_action_lb,
         in_person_action_pw_options=in_person_action_pw_options,
         ip_action_center_city=ip_ac_city,
-        ip_ac_pw_date_iso=ip_pw_date.isoformat() if ip_ac_city and ip_pw_date else None,
+        ip_ac_pw_date_iso=ip_pw_date.isoformat() if ip_ac_city and ip_pw_date is not None else None,
         ip_ac_session_label=ip_pw_label if ip_ac_city else "",
         ip_ac_session_display=ip_ac_session_display,
         ip_arena_stats=ip_arena_stats,
@@ -9750,9 +10226,6 @@ def in_person_leaderboard():
             )
         )
     if ip_ac_city:
-        if ip_pw_date is None:
-            ip_pw_date = IPCSR_LEGACY_PROMPT_WAR_DATE
-            ip_pw_label = ""
         in_person_action_lb = _in_person_submission_leaderboard(
             in_person_event_id,
             ip_ac_city,
@@ -9773,7 +10246,7 @@ def in_person_leaderboard():
     in_person_action_pw_options = _in_person_pw_options(in_person_event_id)
     ip_ac_session_display = (
         _ipcsr_pw_session_display(city=ip_ac_city, prompt_war_on=ip_pw_date, session_label=ip_pw_label)
-        if ip_ac_city and ip_pw_date
+        if ip_ac_city
         else None
     )
     return render_template(
@@ -9785,7 +10258,7 @@ def in_person_leaderboard():
         in_person_action_lb=in_person_action_lb,
         in_person_action_pw_options=in_person_action_pw_options,
         ip_action_center_city=ip_ac_city,
-        ip_ac_pw_date_iso=ip_pw_date.isoformat() if ip_ac_city and ip_pw_date else None,
+        ip_ac_pw_date_iso=ip_pw_date.isoformat() if ip_ac_city and ip_pw_date is not None else None,
         ip_ac_session_label=ip_pw_label if ip_ac_city else "",
         ip_ac_session_display=ip_ac_session_display,
         global_leaderboards_enabled=PW_GLOBAL_LEADERBOARDS_ENABLED,
@@ -9937,6 +10410,709 @@ def virtual_page():
         standings_view_value=standings_view_value,
         arena_challenge_title=arena_challenge_title,
         global_leaderboards_enabled=PW_GLOBAL_LEADERBOARDS_ENABLED,
+    )
+
+
+def _bootcamp_event_must_exist(conn: Connection, eid: int) -> tuple[bool, str]:
+    row = conn.execute(
+        text("SELECT id, kind FROM events WHERE id = :id"),
+        {"id": int(eid)},
+    ).fetchone()
+    if not row:
+        return False, "event not found"
+    if str(row[1]) != "bootcamp":
+        return False, "event must be bootcamp"
+    return True, ""
+
+
+_BOOTCAMP_NONNEG_INT_KEYS = (
+    "audience_size",
+    "capacity",
+    "attendees",
+    "activations",
+    "students",
+    "professionals",
+)
+
+
+def _bootcamp_coerce_int_ge_zero(val: Any, *, field: str) -> tuple[int | None, str | None]:
+    """Blanks coerce to 0; reject negatives and non-numeric values."""
+    if val is None:
+        return 0, None
+    if isinstance(val, str) and not val.strip():
+        return 0, None
+    try:
+        iv = int(val)
+    except (TypeError, ValueError):
+        return None, f"{field} must be an integer"
+    if iv < 0:
+        return None, f"{field} must be >= 0"
+    return iv, None
+
+
+def _validate_bootcamp_parsed_row(r: dict[str, Any]) -> str | None:
+    city_s = (r.get("city") or "").strip()
+    if not city_s:
+        return "city is required"
+    bco = r.get("bootcamp_on")
+    if not isinstance(bco, date):
+        return "bootcamp_on must be a valid date"
+    if bco == date(1970, 1, 1):
+        return "1970-01-01 is not a valid session date"
+    slot_n = _normalize_bootcamp_slot(str(r.get("slot") or ""))
+    if not slot_n:
+        return "slot must be morning or evening"
+    for k in _BOOTCAMP_NONNEG_INT_KEYS:
+        _iv, err = _bootcamp_coerce_int_ge_zero(r.get(k), field=k)
+        if err:
+            return err
+    return None
+
+
+def _bootcamp_session_exists(
+    conn: Connection, *, event_id: int, city: str, bootcamp_on: date, slot: str
+) -> bool:
+    row = conn.execute(
+        text(
+            f"""
+            SELECT 1 FROM {TABLE_BOOTCAMP_SESSIONS}
+            WHERE event_id = :eid AND city = :city AND bootcamp_on = :d AND slot = :slot
+            """
+        ),
+        {"eid": int(event_id), "city": city, "d": bootcamp_on, "slot": slot},
+    ).scalar_one_or_none()
+    return row is not None
+
+
+def _bootcamp_session_upsert(
+    conn: Connection,
+    *,
+    event_id: int,
+    city: str,
+    bootcamp_on: date,
+    slot: str,
+    venue_status: str,
+    speaker_status: str,
+    topic: str,
+    speaker_details: str,
+    audience_size: int,
+    audience_type: str,
+    location: str,
+    complete_address: str,
+    food_beverage: str,
+    printables: str,
+    design_link: str,
+    deck_link: str,
+    capacity: int,
+    attendees: int,
+    activations: int,
+    students: int,
+    professionals: int,
+) -> str:
+    """Returns ``insert`` or ``update`` (best-effort classification before upsert)."""
+    existed = _bootcamp_session_exists(
+        conn, event_id=int(event_id), city=city, bootcamp_on=bootcamp_on, slot=slot
+    )
+    ins = text(
+        f"""
+        INSERT INTO {TABLE_BOOTCAMP_SESSIONS} (
+          event_id, city, bootcamp_on, slot,
+          venue_status, speaker_status, topic, speaker_details,
+          audience_size, audience_type, location, complete_address,
+          food_beverage, printables, design_link, deck_link, capacity,
+          attendees_count, activations_count, students_count, professionals_count, metrics_updated_at
+        ) VALUES (
+          :event_id, :city, :bootcamp_on, :slot,
+          :venue_status, :speaker_status, :topic, :speaker_details,
+          :audience_size, :audience_type, :location, :complete_address,
+          :food_beverage, :printables, :design_link, :deck_link, :capacity,
+          :attendees, :activations, :students, :professionals, now()
+        )
+        ON CONFLICT (event_id, city, bootcamp_on, slot) DO UPDATE SET
+          venue_status = EXCLUDED.venue_status,
+          speaker_status = EXCLUDED.speaker_status,
+          topic = EXCLUDED.topic,
+          speaker_details = EXCLUDED.speaker_details,
+          audience_size = EXCLUDED.audience_size,
+          audience_type = EXCLUDED.audience_type,
+          location = EXCLUDED.location,
+          complete_address = EXCLUDED.complete_address,
+          food_beverage = EXCLUDED.food_beverage,
+          printables = EXCLUDED.printables,
+          design_link = EXCLUDED.design_link,
+          deck_link = EXCLUDED.deck_link,
+          capacity = EXCLUDED.capacity,
+          attendees_count = EXCLUDED.attendees_count,
+          activations_count = EXCLUDED.activations_count,
+          students_count = EXCLUDED.students_count,
+          professionals_count = EXCLUDED.professionals_count,
+          metrics_updated_at = EXCLUDED.metrics_updated_at
+        """
+    )
+    conn.execute(
+        ins,
+        {
+            "event_id": int(event_id),
+            "city": city,
+            "bootcamp_on": bootcamp_on,
+            "slot": slot,
+            "venue_status": venue_status,
+            "speaker_status": speaker_status,
+            "topic": topic,
+            "speaker_details": speaker_details,
+            "audience_size": int(audience_size),
+            "audience_type": audience_type,
+            "location": location,
+            "complete_address": complete_address,
+            "food_beverage": food_beverage,
+            "printables": printables,
+            "design_link": design_link,
+            "deck_link": deck_link,
+            "capacity": int(capacity),
+            "attendees": int(attendees),
+            "activations": int(activations),
+            "students": int(students),
+            "professionals": int(professionals),
+        },
+    )
+    return "update" if existed else "insert"
+
+
+@app.get("/api/bootcamp/sessions")
+def api_bootcamp_sessions_list():
+    eid = request.args.get("event_id", type=int)
+    if not eid:
+        eid = DEFAULT_BOOTCAMP_EVENT_ID
+    try:
+        with engine.connect() as conn:
+            ok, err = _bootcamp_event_must_exist(conn, int(eid))
+            if not ok:
+                return jsonify({"error": err}), 400
+            rows = conn.execute(
+                text(
+                    f"""
+                    SELECT
+                      s.id,
+                      s.city,
+                      s.bootcamp_on,
+                      s.slot,
+                      s.scope_key,
+                      s.display_name,
+                      s.venue_status,
+                      s.speaker_status,
+                      s.topic,
+                      s.speaker_details,
+                      s.audience_size,
+                      s.audience_type,
+                      s.location,
+                      s.complete_address,
+                      s.food_beverage,
+                      s.printables,
+                      s.design_link,
+                      s.deck_link,
+                      s.capacity,
+                      s.attendees_count,
+                      s.activations_count,
+                      s.students_count,
+                      s.professionals_count,
+                      s.metrics_updated_at
+                    FROM {TABLE_BOOTCAMP_SESSIONS} s
+                    WHERE s.event_id = :eid
+                    ORDER BY s.bootcamp_on DESC, s.city, s.slot
+                    """
+                ),
+                {"eid": int(eid)},
+            ).mappings().all()
+    except Exception as exc:  # noqa: BLE001
+        app.logger.warning("bootcamp sessions list failed: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+    out = []
+    for r in rows:
+        bco = r["bootcamp_on"]
+        if isinstance(bco, datetime):
+            bco = bco.date()
+        out.append(
+            {
+                "id": int(r["id"]),
+                "city": str(r.get("city") or ""),
+                "bootcamp_on": bco.isoformat() if isinstance(bco, date) else str(bco)[:10],
+                "slot": str(r.get("slot") or ""),
+                "scope_key": str(r.get("scope_key") or ""),
+                "display_name": str(r.get("display_name") or ""),
+                "venue_status": str(r.get("venue_status") or ""),
+                "speaker_status": str(r.get("speaker_status") or ""),
+                "topic": str(r.get("topic") or ""),
+                "speaker_details": str(r.get("speaker_details") or ""),
+                "audience_size": int(r.get("audience_size") or 0),
+                "audience_type": str(r.get("audience_type") or ""),
+                "location": str(r.get("location") or ""),
+                "complete_address": str(r.get("complete_address") or ""),
+                "food_beverage": str(r.get("food_beverage") or ""),
+                "printables": str(r.get("printables") or ""),
+                "design_link": str(r.get("design_link") or ""),
+                "deck_link": str(r.get("deck_link") or ""),
+                "capacity": int(r.get("capacity") or 0),
+                "attendees_count": int(r.get("attendees_count") or 0),
+                "activations_count": int(r.get("activations_count") or 0),
+                "students_count": int(r.get("students_count") or 0),
+                "professionals_count": int(r.get("professionals_count") or 0),
+                "metrics_updated_at": r.get("metrics_updated_at").isoformat()
+                if r.get("metrics_updated_at")
+                else None,
+            }
+        )
+    return jsonify({"event_id": int(eid), "sessions": out})
+
+
+@app.post("/api/bootcamp/sessions")
+def api_bootcamp_sessions_create():
+    body = request.get_json(silent=True) or {}
+    eid = body.get("event_id")
+    city_raw = (body.get("city") or "").strip()
+    bco_raw = body.get("bootcamp_on")
+    slot_raw = body.get("slot")
+    if eid is None or not city_raw or not bco_raw or slot_raw is None or str(slot_raw).strip() == "":
+        return jsonify({"error": "event_id, city, bootcamp_on, and slot are required"}), 400
+    try:
+        bco = date.fromisoformat(str(bco_raw).strip()[:10])
+    except ValueError:
+        return jsonify({"error": "bootcamp_on must be YYYY-MM-DD"}), 400
+    rej = _reject_legacy_prompt_war_on_date(bco)
+    if rej:
+        return rej
+    slot_n = _normalize_bootcamp_slot(str(slot_raw))
+    if not slot_n:
+        return jsonify({"error": "slot must be morning or evening"}), 400
+    city_n = _normalize_bootcamp_city(city_raw)
+    ins_sql = text(
+        f"""
+        INSERT INTO {TABLE_BOOTCAMP_SESSIONS} (event_id, city, bootcamp_on, slot)
+        VALUES (:event_id, :city, :bootcamp_on, :slot)
+        ON CONFLICT (event_id, city, bootcamp_on, slot) DO NOTHING
+        RETURNING id, city, bootcamp_on, slot, scope_key, display_name
+        """
+    )
+    try:
+        with engine.begin() as conn:
+            ok, err = _bootcamp_event_must_exist(conn, int(eid))
+            if not ok:
+                return jsonify({"error": err}), 400
+            row = conn.execute(
+                ins_sql,
+                {
+                    "event_id": int(eid),
+                    "city": city_n,
+                    "bootcamp_on": bco,
+                    "slot": slot_n,
+                },
+            ).mappings().first()
+            if row:
+                rb = row["bootcamp_on"]
+                if isinstance(rb, datetime):
+                    rb = rb.date()
+                return (
+                    jsonify(
+                        {
+                            "id": int(row["id"]),
+                            "city": str(row.get("city") or ""),
+                            "bootcamp_on": rb.isoformat() if isinstance(rb, date) else str(rb)[:10],
+                            "slot": str(row.get("slot") or ""),
+                            "scope_key": str(row.get("scope_key") or ""),
+                            "display_name": str(row.get("display_name") or ""),
+                        }
+                    ),
+                    201,
+                )
+            ex = conn.execute(
+                text(
+                    f"""
+                    SELECT id, display_name
+                    FROM {TABLE_BOOTCAMP_SESSIONS}
+                    WHERE event_id = :event_id AND city = :city
+                      AND bootcamp_on = :bootcamp_on AND slot = :slot
+                    """
+                ),
+                {
+                    "event_id": int(eid),
+                    "city": city_n,
+                    "bootcamp_on": bco,
+                    "slot": slot_n,
+                },
+            ).mappings().first()
+            if not ex:
+                return jsonify({"error": "Session conflict but row not found"}), 500
+            return (
+                jsonify(
+                    {
+                        "error": "Session already exists",
+                        "existing": {"id": int(ex["id"]), "display_name": str(ex.get("display_name") or "")},
+                    }
+                ),
+                409,
+            )
+    except IntegrityError as exc:
+        app.logger.warning("bootcamp sessions create conflict: %s", exc)
+        return jsonify({"error": "Session already exists"}), 409
+    except Exception as exc:  # noqa: BLE001
+        app.logger.warning("bootcamp sessions create failed: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.delete("/api/bootcamp/sessions/<int:session_id>")
+def api_bootcamp_sessions_delete(session_id: int):
+    eid = request.args.get("event_id", type=int)
+    if not eid:
+        eid = DEFAULT_BOOTCAMP_EVENT_ID
+    sid = int(session_id)
+    try:
+        with engine.begin() as conn:
+            ok, err = _bootcamp_event_must_exist(conn, int(eid))
+            if not ok:
+                return jsonify({"error": err}), 400
+            res = conn.execute(
+                text(
+                    f"DELETE FROM {TABLE_BOOTCAMP_SESSIONS} WHERE id = :sid AND event_id = :eid RETURNING id"
+                ),
+                {"sid": sid, "eid": int(eid)},
+            ).scalar_one_or_none()
+            if res is None:
+                return jsonify({"error": "Session not found"}), 404
+        return jsonify({"ok": True, "id": sid}), 200
+    except Exception as exc:  # noqa: BLE001
+        app.logger.warning("bootcamp sessions delete failed: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.put("/api/bootcamp/sessions/<int:session_id>/metrics")
+def api_bootcamp_sessions_metrics_update(session_id: int):
+    eid = request.args.get("event_id", type=int)
+    if not eid:
+        eid = DEFAULT_BOOTCAMP_EVENT_ID
+    body = request.get_json(silent=True) or {}
+    sid = int(session_id)
+    ints: dict[str, int] = {}
+    for k in _BOOTCAMP_NONNEG_INT_KEYS:
+        iv, ierr = _bootcamp_coerce_int_ge_zero(body.get(k), field=k)
+        if ierr:
+            return jsonify({"error": ierr}), 400
+        ints[k] = int(iv)
+    venue_status = str(body.get("venue_status") or "").strip()
+    speaker_status = str(body.get("speaker_status") or "").strip()
+    topic = str(body.get("topic") or "").strip()
+    speaker_details = str(body.get("speaker_details") or "").strip()
+    audience_type = str(body.get("audience_type") or "").strip()
+    location = str(body.get("location") or "").strip()
+    complete_address = str(body.get("complete_address") or "").strip()
+    food_beverage = str(body.get("food_beverage") or "").strip()
+    printables = str(body.get("printables") or "").strip()
+    design_link = str(body.get("design_link") or "").strip()
+    deck_link = str(body.get("deck_link") or "").strip()
+    try:
+        with engine.begin() as conn:
+            ok, err = _bootcamp_event_must_exist(conn, int(eid))
+            if not ok:
+                return jsonify({"error": err}), 400
+            n = conn.execute(
+                text(
+                    f"""
+                    UPDATE {TABLE_BOOTCAMP_SESSIONS}
+                    SET venue_status = :venue_status,
+                        speaker_status = :speaker_status,
+                        topic = :topic,
+                        speaker_details = :speaker_details,
+                        audience_size = :audience_size,
+                        audience_type = :audience_type,
+                        location = :location,
+                        complete_address = :complete_address,
+                        food_beverage = :food_beverage,
+                        printables = :printables,
+                        design_link = :design_link,
+                        deck_link = :deck_link,
+                        capacity = :capacity,
+                        attendees_count = :a,
+                        activations_count = :ac,
+                        students_count = :s,
+                        professionals_count = :p,
+                        metrics_updated_at = now()
+                    WHERE id = :sid AND event_id = :eid
+                    """
+                ),
+                {
+                    "venue_status": venue_status,
+                    "speaker_status": speaker_status,
+                    "topic": topic,
+                    "speaker_details": speaker_details,
+                    "audience_size": ints["audience_size"],
+                    "audience_type": audience_type,
+                    "location": location,
+                    "complete_address": complete_address,
+                    "food_beverage": food_beverage,
+                    "printables": printables,
+                    "design_link": design_link,
+                    "deck_link": deck_link,
+                    "capacity": ints["capacity"],
+                    "a": ints["attendees"],
+                    "ac": ints["activations"],
+                    "s": ints["students"],
+                    "p": ints["professionals"],
+                    "sid": sid,
+                    "eid": int(eid),
+                },
+            ).rowcount
+            if not n:
+                return jsonify({"error": "Session not found"}), 404
+        return jsonify({"ok": True, "id": sid}), 200
+    except Exception as exc:  # noqa: BLE001
+        app.logger.warning("bootcamp metrics update failed: %s", exc)
+        return jsonify({"error": str(exc)}), 500
+
+
+def _import_bootcamp_sessions_core(*, preview: bool):
+    event_id = request.args.get("bootcampEventId", type=int) or DEFAULT_BOOTCAMP_EVENT_ID
+    upload = request.files.get("bootcamp_metrics") or request.files.get("file")
+    if not upload or not upload.filename:
+        return jsonify({"error": "A CSV or XLSX file is required (field bootcamp_metrics or file)"}), 400
+    fn = (upload.filename or "").lower()
+    if not (fn.endswith(".csv") or fn.endswith(".xlsx") or fn.endswith(".xls")):
+        return jsonify({"error": "File must be .csv, .xlsx, or .xls"}), 400
+
+    archived = archive_upload(
+        upload,
+        engine=engine,
+        module="bootcamp_metrics",
+        source_route=request.path,
+        event_id=int(event_id),
+    )
+    try:
+        rows, parse_stats = etl_bootcamp_sessions.parse_bootcamp_metrics_file(
+            archived.fresh_stream(), upload.filename or ""
+        )
+    except ValueError as ve:
+        mark_archive_status(archived.id, "failed", engine=engine, error=str(ve))
+        return jsonify({"error": str(ve)}), 400
+
+    mark_archive_status(archived.id, "parsed", engine=engine)
+
+    details: list[dict] = []
+    would_insert = would_update = n_err = 0
+    applied_insert = applied_update = 0
+
+    try:
+        with engine.connect() as conn_chk:
+            ok, err = _bootcamp_event_must_exist(conn_chk, int(event_id))
+            if not ok:
+                mark_archive_status(archived.id, "failed", engine=engine, error=err)
+                return jsonify({"error": err}), 400
+
+        if preview:
+            with engine.connect() as conn:
+                for r in rows:
+                    row_ix = int(r.get("row_index") or 0)
+                    err = _validate_bootcamp_parsed_row(r)
+                    if err:
+                        n_err += 1
+                        details.append({"row_index": row_ix, "status": "error", "message": err})
+                        continue
+                    city_n = _normalize_bootcamp_city(str(r["city"]))
+                    bco = r["bootcamp_on"]
+                    assert isinstance(bco, date)
+                    slot_n = _normalize_bootcamp_slot(str(r["slot"])) or ""
+                    exists = _bootcamp_session_exists(
+                        conn, event_id=int(event_id), city=city_n, bootcamp_on=bco, slot=slot_n
+                    )
+                    if exists:
+                        would_update += 1
+                        act = "update"
+                    else:
+                        would_insert += 1
+                        act = "insert"
+                    details.append(
+                        {
+                            "row_index": row_ix,
+                            "status": "ok",
+                            "action": act,
+                            "city": city_n,
+                            "bootcamp_on": bco.isoformat(),
+                            "slot": slot_n,
+                        }
+                    )
+        else:
+            with engine.begin() as conn:
+                for r in rows:
+                    row_ix = int(r.get("row_index") or 0)
+                    err = _validate_bootcamp_parsed_row(r)
+                    if err:
+                        n_err += 1
+                        details.append({"row_index": row_ix, "status": "error", "message": err})
+                        continue
+                    city_n = _normalize_bootcamp_city(str(r["city"]))
+                    bco = r["bootcamp_on"]
+                    assert isinstance(bco, date)
+                    slot_n = _normalize_bootcamp_slot(str(r["slot"])) or ""
+                    action = _bootcamp_session_upsert(
+                        conn,
+                        event_id=int(event_id),
+                        city=city_n,
+                        bootcamp_on=bco,
+                        slot=slot_n,
+                        venue_status=str(r.get("venue_status") or "").strip(),
+                        speaker_status=str(r.get("speaker_status") or "").strip(),
+                        topic=str(r.get("topic") or "").strip(),
+                        speaker_details=str(r.get("speaker_details") or "").strip(),
+                        audience_size=int(r.get("audience_size") or 0),
+                        audience_type=str(r.get("audience_type") or "").strip(),
+                        location=str(r.get("location") or "").strip(),
+                        complete_address=str(r.get("complete_address") or "").strip(),
+                        food_beverage=str(r.get("food_beverage") or "").strip(),
+                        printables=str(r.get("printables") or "").strip(),
+                        design_link=str(r.get("design_link") or "").strip(),
+                        deck_link=str(r.get("deck_link") or "").strip(),
+                        capacity=int(r.get("capacity") or 0),
+                        attendees=int(r.get("attendees") or 0),
+                        activations=int(r.get("activations") or 0),
+                        students=int(r.get("students") or 0),
+                        professionals=int(r.get("professionals") or 0),
+                    )
+                    if action == "insert":
+                        applied_insert += 1
+                    else:
+                        applied_update += 1
+                    details.append(
+                        {
+                            "row_index": row_ix,
+                            "status": "ok",
+                            "action": action,
+                            "city": city_n,
+                            "bootcamp_on": bco.isoformat(),
+                            "slot": slot_n,
+                        }
+                    )
+    except Exception as exc:  # noqa: BLE001
+        mark_archive_status(archived.id, "failed", engine=engine, error=str(exc))
+        app.logger.warning("bootcamp metrics import failed: %s", exc)
+        return jsonify({"error": str(exc), "parse_stats": parse_stats}), 500
+
+    if preview:
+        mark_archive_status(archived.id, "success", engine=engine, rows_written=0)
+        return jsonify(
+            {
+                "event_id": int(event_id),
+                "preview": True,
+                "parse_stats": parse_stats,
+                "summary": {
+                    "would_insert": would_insert,
+                    "would_update": would_update,
+                    "errors": n_err,
+                },
+                "details": details,
+            }
+        )
+
+    mark_archive_status(
+        archived.id,
+        "success",
+        engine=engine,
+        rows_written=applied_insert + applied_update,
+    )
+    return jsonify(
+        {
+            "event_id": int(event_id),
+            "preview": False,
+            "parse_stats": parse_stats,
+            "summary": {
+                "inserted": applied_insert,
+                "updated": applied_update,
+                "errors": n_err,
+            },
+            "details": details,
+        }
+    )
+
+
+@app.post("/api/import/bootcamp/sessions/preview")
+def api_import_bootcamp_sessions_preview():
+    return _import_bootcamp_sessions_core(preview=True)
+
+
+@app.post("/api/import/bootcamp/sessions")
+def api_import_bootcamp_sessions():
+    return _import_bootcamp_sessions_core(preview=False)
+
+
+@app.get("/bootcamps/import")
+def bootcamps_import_page():
+    return render_template(
+        "import_bootcamps.html",
+        title="Bootcamps · Import",
+        bootcamp_event_id=DEFAULT_BOOTCAMP_EVENT_ID,
+        in_person_event_id=DEFAULT_IN_PERSON_EVENT_ID,
+    )
+
+
+@app.get("/bootcamps")
+def bootcamps_page():
+    """Bootcamps module landing; session dropdown scopes imported metrics."""
+    bootcamp_event_id = request.args.get("bootcampEventId", type=int) or DEFAULT_BOOTCAMP_EVENT_ID
+    bc_city_raw = (request.args.get("bcCity") or "").strip()
+    bc_city_norm = bc_city_raw.lower() if bc_city_raw else None
+    bc_date = _parse_ipcsr_prompt_war_date_from_form(request.args.get("bcDate"))
+    bc_slot_raw = (request.args.get("bcSlot") or "").strip().lower()
+    bc_slot = bc_slot_raw if bc_slot_raw in ("morning", "evening") else None
+
+    opts = _bootcamp_pw_options(bootcamp_event_id)
+    selected: dict | None = None
+    if opts and bc_city_norm and bc_date is not None and bc_slot:
+        want_iso = bc_date.isoformat()
+        for o in opts:
+            if (
+                str(o.get("city") or "").strip() == bc_city_norm
+                and str(o.get("bootcamp_on_iso") or "")[:10] == want_iso
+                and str(o.get("slot") or "").strip().lower() == bc_slot
+            ):
+                selected = o
+                break
+
+    if opts:
+        if not selected:
+            pw0 = _default_bootcamp_session_for_redirect(opts) or opts[0]
+            return redirect(
+                url_for(
+                    "bootcamps_page",
+                    bootcampEventId=bootcamp_event_id,
+                    bcCity=pw0["city"],
+                    bcDate=pw0["bootcamp_on_iso"],
+                    bcSlot=pw0["slot"],
+                )
+            )
+        bc_city = str(selected["city"]).strip()
+        bc_date_eff = _parse_ipcsr_prompt_war_date_from_form(selected["bootcamp_on_iso"])
+        bc_slot_eff = str(selected.get("slot") or "").strip().lower()
+        bc_date_iso = selected["bootcamp_on_iso"]
+        bc_session_display = str(selected.get("display") or "").strip() or _bootcamp_session_display(
+            city=bc_city, bootcamp_on=bc_date_eff, slot=bc_slot_eff
+        )
+    else:
+        bc_city = None
+        bc_date_eff = None
+        bc_slot_eff = None
+        bc_date_iso = None
+        bc_session_display = None
+
+    return render_template(
+        "bootcamps.html",
+        title="Bootcamps · Dashboard",
+        bootcamp_event_id=bootcamp_event_id,
+        bootcamp_pw_options=opts,
+        bc_city=bc_city,
+        bc_date_iso=bc_date_iso,
+        bc_slot=bc_slot_eff,
+        bc_session_display=bc_session_display,
+        bootcamp_stats=_load_bootcamp_dashboard_stats(
+            bootcamp_event_id,
+            city=bc_city,
+            bootcamp_on=bc_date_eff,
+            slot=bc_slot_eff,
+        ),
     )
 
 
@@ -10666,6 +11842,65 @@ def _register_cdi_page_id_redirects() -> None:
 
 
 _register_cdi_page_id_redirects()
+
+
+def _pw_vision_uts_scheduler_should_start() -> bool:
+    if not _env_bool("VISION_UTS_SCHEDULER_ENABLED", False):
+        return False
+    if app.testing:
+        return False
+    if os.environ.get("WERKZEUG_RUN_MAIN", "true") != "true":
+        return False
+    base = (os.environ.get("VISION_UTS_BASE_URL") or "").strip()
+    eid = (os.environ.get("VISION_UTS_EVENT_ID") or "").strip()
+    if not base or not eid:
+        return False
+    try:
+        hrs = float((os.environ.get("VISION_UTS_FETCH_INTERVAL_HOURS") or "6").strip() or "6")
+    except ValueError:
+        hrs = 6.0
+    return hrs > 0
+
+
+def _pw_start_vision_uts_scheduler():
+    from apscheduler.schedulers.background import BackgroundScheduler
+    from apscheduler.triggers.interval import IntervalTrigger
+
+    try:
+        hrs = float((os.environ.get("VISION_UTS_FETCH_INTERVAL_HOURS") or "6").strip() or "6")
+    except ValueError:
+        hrs = 6.0
+    hrs = max(1.0 / 60.0, hrs)
+
+    def _vision_uts_cron_job() -> None:
+        out = vision_uts_sync_svc.run_virtual_mdc_vision_uts_sync(
+            engine,
+            DEFAULT_VIRTUAL_EVENT_ID,
+            triggered_by="cron",
+            invalidate_caches=pw_invalidate_read_caches,
+        )
+        if out.get("status") == "error":
+            app.logger.warning("Vision UTS cron sync failed: %s", out.get("error"))
+
+    sched = BackgroundScheduler(daemon=True)
+    sched.add_job(
+        _vision_uts_cron_job,
+        IntervalTrigger(hours=hrs),
+        id="prompt_wars_vision_uts_virtual_mdc",
+        max_instances=1,
+        coalesce=True,
+        replace_existing=True,
+    )
+    sched.start()
+    app.logger.info("Vision UTS scheduler started (interval %s hours)", hrs)
+    return sched
+
+
+if _pw_vision_uts_scheduler_should_start():
+    try:
+        app.extensions["vision_uts_scheduler"] = _pw_start_vision_uts_scheduler()
+    except Exception as exc:  # noqa: BLE001
+        app.logger.warning("Vision UTS scheduler failed to start: %s", exc)
 
 
 def main():

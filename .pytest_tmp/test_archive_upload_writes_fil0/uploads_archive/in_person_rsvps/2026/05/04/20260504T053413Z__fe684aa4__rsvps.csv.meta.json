@@ -1,0 +1,15 @@
+{
+  "client_ip": null,
+  "event_id": 1,
+  "id": 1,
+  "mime_type": "text/csv",
+  "module": "in_person_rsvps",
+  "original_name": "rsvps.csv",
+  "sha256": "fe684aa44345dfc351b57df05c9444210a9ab10c1433a2e54f37a35731d5170d",
+  "size_bytes": 35,
+  "source_route": "/admin/import",
+  "status": "received",
+  "stored_path": "in_person_rsvps/2026/05/04/20260504T053413Z__fe684aa4__rsvps.csv",
+  "uploaded_at": "2026-05-04T05:34:13.313646+00:00",
+  "uploaded_by": null
+}

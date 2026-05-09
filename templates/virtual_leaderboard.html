@@ -8,9 +8,6 @@
   <div class="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-sm">
     <div>
       <h1 class="font-display text-headline-lg text-slate-900">Submission leaderboard</h1>
-      <p class="font-body-md text-slate-600 max-w-3xl mt-1">
-        {% if is_global %}Top teams across all virtual arenas.{% else %}Teams for this challenge.{% endif %}
-      </p>
       <span class="sr-only">virtual_challenge_submission_rows</span>
     </div>
     <a href="{% if challenge_id and not is_global %}{{ url_for('virtual_page', virtualEventId=virtual_event_id, arenaChallengeId=challenge_id) }}{% else %}{{ url_for('virtual_page', virtualEventId=virtual_event_id) }}{% endif %}"
